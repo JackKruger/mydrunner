@@ -144,6 +144,8 @@ export class Room {
     this.world.step();
     this.tick += 1;
 
+    this.ejectOffMapPlayers();
+
     // Rut accumulation + flush. Gated on RUTS_ENABLED - currently off
     // because per-cell footprint is much wider than a tire and the
     // client prediction world doesn't receive deltas, causing periodic
@@ -197,6 +199,43 @@ export class Room {
     };
     const msg = Net.encode({ t: 'snapshot', snap });
     for (const p of this.players.values()) p.handle.send(msg);
+  }
+
+  /** MX-Unleashed-style off-map ejector. If a player gets past the
+   *  perimeter cliff wall (clipping, edge cases, fell through the
+   *  floor, etc.) they're fired into the air toward the world centre.
+   *  Cheap safety net: prevents players from escaping the world while
+   *  also being slightly entertaining when triggered. */
+  private ejectOffMapPlayers(): void {
+    const half = this.world.terrain.size / 2;
+    const margin = 6; // start ejecting once they're past the wall + a bit
+    for (const p of this.players.values()) {
+      const t = p.vehicle.body.translation();
+      const offX = Math.abs(t.x) > half - margin;
+      const offZ = Math.abs(t.z) > half - margin;
+      const fellThrough = t.y < -8;
+      if (!offX && !offZ && !fellThrough) continue;
+      // Aim at the world centre on the horizontal plane plus a strong
+      // upward component. Speed is fixed so the trajectory is
+      // predictable; the player will hopefully laugh and try not to
+      // do it again.
+      const dx = -t.x;
+      const dz = -t.z;
+      const len = Math.hypot(dx, dz) || 1;
+      const horizSpeed = 40;
+      const upSpeed = 35;
+      p.vehicle.body.setLinvel(
+        { x: (dx / len) * horizSpeed, y: upSpeed, z: (dz / len) * horizSpeed },
+        true,
+      );
+      // Reset angular velocity so they don't tumble out of control.
+      p.vehicle.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      // If they really fell through, also lift their position a bit
+      // so they aren't stuck below the heightfield.
+      if (fellThrough) {
+        p.vehicle.body.setTranslation({ x: t.x, y: 5, z: t.z }, true);
+      }
+    }
   }
 
   /** Sanitise + rate-limit + relay a chat message. Strips control chars

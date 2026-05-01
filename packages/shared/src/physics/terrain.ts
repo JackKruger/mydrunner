@@ -146,22 +146,15 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   // Concrete inside the pad so vehicles can drive on level ground.
   const pad = petrolStationPadFor(size);
 
-  // Mud bogs: a few Gaussian dips so mud isn't just the radial valleys.
-  // Positions are deterministic from the seed so client + server agree.
-  const bogs: { x: number; z: number; depth: number; sigma: number }[] = [];
-  const bogCount = 5;
-  for (let i = 0; i < bogCount; i++) {
-    // Place between 25m and (size/2 - 25m) of the centerline, on one side
-    // or the other, with x spread across the world.
-    const side = rng() < 0.5 ? -1 : 1;
-    const z = side * (25 + rng() * (size / 2 - 50));
-    const x = (rng() - 0.5) * (size - 50);
-    // Skip if too close to mountain.
-    const dxMtn = x - mtnCx;
-    const dzMtn = z - mtnCz;
-    if (Math.hypot(dxMtn, dzMtn) < mtnSigma * 1.5) continue;
-    bogs.push({ x, z, depth: 1.3 + rng() * 1.0, sigma: 6 + rng() * 5 });
-  }
+  // Mud bogs: a few Gaussian dips, hand-placed so they're never inside
+  // the pad / road and never overlap the mountain. World-space coords.
+  const bogs: ReadonlyArray<{ x: number; z: number; depth: number; sigma: number }> = [
+    { x: 30, z: -50, depth: 1.7, sigma: 8 },
+    { x: -30, z: -45, depth: 1.5, sigma: 7 },
+    { x: 110, z: 60, depth: 1.8, sigma: 9 },
+    { x: -100, z: -90, depth: 1.5, sigma: 7 },
+    { x: 50, z: -95, depth: 1.6, sigma: 8 },
+  ];
 
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {

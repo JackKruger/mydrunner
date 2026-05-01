@@ -1,12 +1,12 @@
-// Procedural obstacle placement: rocks and trees scattered across the
-// off-road areas (Dirt and Mud surfaces - never on the Road or in the
-// deepest mud where vehicles get stuck). Determined entirely by the
-// terrain seed so server and client generate identical lists without
-// any network sync.
+// Hand-placed obstacles. The map is fixed: every rock, tree, and pine
+// has explicit world coordinates so we know exactly what's where, no
+// surprise spawn-into-rock bugs and no rocks landing inside the petrol
+// station pad. Y values are sampled from the heightfield so obstacles
+// sit on the terrain regardless of which seed the heights came from.
 //
-// Each obstacle is a static rigid body (rocks = sphere, trees = capsule
-// trunk) so vehicles can collide with them, get stuck on them, climb
-// over them.
+// Coordinates are in world space (the map is 320 m square, centred on
+// the origin). Avoid placing obstacles inside the pad rectangle
+// roughly x = -78..-50, z = -2..32, or in the road core z = -8..8.
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Surface, type TerrainData, worldToTerrainIndex, mountainFor } from './terrain.js';
@@ -18,188 +18,213 @@ export interface Obstacle {
   x: number;
   y: number;
   z: number;
-  /** Sphere radius for rocks; trunk radius for trees / pines. */
   size: number;
-  /** Tree / pine trunk height (0 for rocks). */
   height: number;
-  /** Random rotation around Y for visual variety. */
   yaw: number;
 }
 
-// Mulberry32 - same generator used in terrain.ts so obstacle placement
-// is deterministic per seed.
-function mulberry32(seed: number): () => number {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) | 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+// Compact tuple format to keep the data tables readable.
+type RockSpec = readonly [x: number, z: number, size: number];
+type TreeSpec = readonly [x: number, z: number, size: number, height: number];
 
-export interface ObstacleOptions {
-  /** Offset from the terrain seed to keep obstacle randomness separate. */
-  seedOffset?: number;
-  /** Total obstacle count - mix of rocks and trees in roughly 60/40 ratio. */
-  count?: number;
-}
+// Medium rocks scattered through the open zones. Avoid road, pad,
+// mountain summit, perimeter band.
+const ROCKS_MEDIUM: readonly RockSpec[] = [
+  [-130, 30, 1.2], [-118, 48, 0.8], [-95, 38, 1.5], [-110, -28, 1.0],
+  [-50, -50, 1.1], [-30, -65, 0.9], [-15, -30, 1.3], [25, -55, 1.0],
+  [55, -25, 0.7], [80, -55, 1.3], [110, -50, 1.4], [140, -20, 1.0],
+  [130, 30, 0.9], [105, 65, 1.2], [40, 55, 0.8], [-10, 60, 1.0],
+  [-30, 80, 1.0], [-50, 110, 1.2], [60, -85, 1.5], [115, 100, 0.9],
+  [50, 120, 1.1], [-20, 130, 1.3], [-90, 100, 1.0], [-130, 100, 0.8],
+  [-130, -50, 1.1], [-65, -100, 1.2], [10, -95, 0.9], [85, -110, 1.3],
+  [125, -90, 0.8], [55, 90, 1.0], [80, 130, 1.2], [-95, -130, 1.0],
+];
 
-export function generateObstacles(
-  terrain: TerrainData,
-  opts: ObstacleOptions = {},
-): Obstacle[] {
-  const seed = terrain.seed + (opts.seedOffset ?? 7919);
-  const count = opts.count ?? 100;
-  const rng = mulberry32(seed);
+// Smaller decorative rocks. Same constraints; denser.
+const ROCKS_SMALL: readonly RockSpec[] = [
+  [-128, 22, 0.3], [-122, 36, 0.25], [-105, 26, 0.35], [-100, 50, 0.28],
+  [-86, 46, 0.32], [-78, 60, 0.25], [-60, 35, 0.3], [-44, 55, 0.28],
+  [-22, 38, 0.25], [-10, 50, 0.3], [8, 35, 0.32], [22, 50, 0.28],
+  [40, 38, 0.25], [62, 55, 0.3], [78, 38, 0.25], [95, 55, 0.32],
+  [110, 38, 0.28], [125, 55, 0.25], [140, 30, 0.3],
+  [-128, -22, 0.28], [-110, -36, 0.3], [-95, -22, 0.25], [-80, -45, 0.32],
+  [-65, -25, 0.3], [-48, -42, 0.28], [-30, -25, 0.25], [-12, -42, 0.3],
+  [5, -25, 0.32], [22, -42, 0.28], [40, -25, 0.3], [55, -42, 0.25],
+  [72, -25, 0.32], [88, -42, 0.3], [105, -25, 0.28], [120, -42, 0.25],
+  [-130, 70, 0.3], [-100, 80, 0.28], [-60, 90, 0.25], [-20, 100, 0.3],
+  [25, 95, 0.32], [60, 105, 0.28], [100, 110, 0.3], [130, 95, 0.25],
+  [-130, -75, 0.3], [-90, -90, 0.28], [-50, -85, 0.25], [-10, -100, 0.3],
+  [30, -95, 0.32], [70, -105, 0.28], [110, -85, 0.3], [135, -100, 0.25],
+];
+
+// Standalone trees - smaller than the forest pines, scattered.
+const TREES: readonly TreeSpec[] = [
+  [-120, 38, 0.22, 4.2], [-100, 60, 0.20, 3.6], [-58, 48, 0.24, 4.5],
+  [-25, 45, 0.18, 3.4], [12, 52, 0.22, 4.1], [45, 40, 0.20, 3.8],
+  [85, 50, 0.24, 4.4], [120, 42, 0.21, 3.9], [-115, -60, 0.22, 4.0],
+  [-75, -55, 0.20, 3.6], [-30, -75, 0.22, 4.2], [20, -65, 0.20, 3.8],
+  [60, -75, 0.24, 4.4], [105, -65, 0.21, 4.0], [135, 65, 0.22, 4.2],
+];
+
+// Pine forest centred around (-90, 60). Hand-placed cluster in a
+// rough disc of radius ~32m, denser at the centre.
+const FOREST_PINES: readonly TreeSpec[] = [
+  [-90, 60, 1.0, 18], [-86, 64, 0.9, 16], [-94, 56, 1.1, 19],
+  [-82, 58, 1.0, 17], [-98, 64, 0.95, 18], [-88, 70, 0.9, 16],
+  [-92, 50, 1.0, 17], [-78, 64, 1.05, 19], [-102, 58, 0.9, 16],
+  [-84, 50, 1.0, 18], [-100, 70, 1.0, 17], [-76, 56, 0.9, 16],
+  [-106, 52, 0.95, 17], [-72, 70, 1.0, 18], [-110, 64, 0.9, 16],
+  [-68, 50, 1.0, 17], [-110, 76, 0.95, 18], [-96, 78, 1.0, 17],
+  [-82, 78, 0.9, 16], [-66, 62, 1.0, 18], [-80, 44, 1.0, 17],
+  [-100, 44, 0.9, 16], [-114, 44, 1.0, 18], [-114, 88, 0.95, 17],
+  [-90, 84, 1.0, 18], [-66, 76, 0.9, 16], [-118, 56, 1.0, 17],
+  [-118, 70, 0.95, 18], [-72, 84, 0.9, 16], [-60, 56, 1.0, 17],
+  [-58, 70, 1.0, 18], [-100, 90, 0.9, 16], [-86, 88, 1.0, 17],
+  [-122, 60, 0.95, 18], [-104, 80, 1.0, 17],
+];
+
+// Hill-climb boulders: two parallel tracks ascending the south slope
+// of the mountain, hand-placed so the corridor between them stays
+// drivable. baseX/baseZ live near the road; the path heads toward
+// the mountain summit at (mtn.x, mtn.z).
+function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
   const out: Obstacle[] = [];
-  const half = terrain.size / 2 - 4;
-
-  // Pass 1: medium rocks + trees scattered across all driveable surfaces.
-  for (let i = 0; i < count; i++) {
-    const x = (rng() - 0.5) * 2 * half;
-    const z = (rng() - 0.5) * 2 * half;
-    const idx = worldToTerrainIndex(terrain, x, z);
-    if (idx < 0) continue;
-    const surf = terrain.surfaces[idx];
-    // Skip road and deep mud - we don't want trees in the way of spawn
-    // or in the swamp where players are already getting stuck.
-    if (surf === Surface.Road || surf === Surface.DeepMud) continue;
-    const y = terrain.heights[idx] ?? 0;
-    const isTree = rng() < 0.4;
-    if (isTree) {
-      const height = 2.5 + rng() * 2.5;
-      const trunkRadius = 0.18 + rng() * 0.12;
-      out.push({ kind: 'tree', x, y, z, size: trunkRadius, height, yaw: rng() * Math.PI * 2 });
-    } else {
-      const radius = 0.5 + rng() * 1.0;
-      out.push({ kind: 'rock', x, y, z, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
-    }
-  }
-
-  // Pass 2: small rocks scattered everywhere off the road. Density-style
-  // detail - too small to stop the truck (radius < wheel radius) but
-  // adds visual chunk and occasional bumps to drive over.
-  const smallCount = Math.floor(count * 1.6);
-  for (let i = 0; i < smallCount; i++) {
-    const x = (rng() - 0.5) * 2 * half;
-    const z = (rng() - 0.5) * 2 * half;
-    const idx = worldToTerrainIndex(terrain, x, z);
-    if (idx < 0) continue;
-    const surf = terrain.surfaces[idx];
-    if (surf === Surface.Road) continue;
-    const y = terrain.heights[idx] ?? 0;
-    const radius = 0.15 + rng() * 0.25;
-    out.push({ kind: 'rock', x, y, z, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
-  }
-
-  // Pass 3: rocky hill climb. A path of progressively-larger rocks runs
-  // from the south side of the mountain up its flank, framing a route
-  // a determined truck can climb. Boulders are placed in two parallel
-  // tracks (slight zigzag) so there's a corridor between them rather
-  // than a wall.
   const mtn = mountainFor(terrain.size);
-  // Approach direction: from the road (south) up to the summit. Vector
-  // from a base point to the summit.
-  const baseX = mtn.x + (rng() - 0.5) * 6;
-  const baseZ = mtn.z - mtn.sigma * 1.6; // start ~1.6 sigma south of summit
+  const baseX = mtn.x;
+  const baseZ = mtn.z - mtn.sigma * 1.6;
   const dx = mtn.x - baseX;
   const dz = mtn.z - baseZ;
   const len = Math.hypot(dx, dz);
   const nx = dx / len;
   const nz = dz / len;
-  // Perpendicular for the corridor offset.
   const px = -nz;
   const pz = nx;
   const climbSteps = 14;
   for (let i = 0; i < climbSteps; i++) {
     const t = i / (climbSteps - 1);
     const along = t * len;
-    // Two parallel tracks ~3.5m apart so a truck (1.7m wide) fits between.
-    for (const side of [-1, 1]) {
-      const cx = baseX + nx * along + px * side * (3.5 + rng() * 1.2);
-      const cz = baseZ + nz * along + pz * side * (3.5 + rng() * 1.2);
+    // Two parallel tracks 4m apart so a 1.7m truck has clearance
+    // between them. Side spacing widens slightly with height for a
+    // funnel feel.
+    const side = 4 + t * 1.5;
+    for (const s of [-1, 1] as const) {
+      const cx = baseX + nx * along + px * s * side;
+      const cz = baseZ + nz * along + pz * s * side;
       const idx = worldToTerrainIndex(terrain, cx, cz);
       if (idx < 0) continue;
       const cy = terrain.heights[idx] ?? 0;
-      // Boulders get larger near the top - more dramatic / harder to climb.
-      const radius = 0.55 + t * 0.7 + rng() * 0.4;
-      out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
+      const radius = 0.55 + t * 0.7;
+      out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: t * Math.PI });
     }
-    // Occasional boulder in the corridor itself for chunkier feel.
-    if (rng() < 0.25 && i > 1 && i < climbSteps - 1) {
-      const cx = baseX + nx * along + px * (rng() - 0.5) * 2;
-      const cz = baseZ + nz * along + pz * (rng() - 0.5) * 2;
+    // Sparse corridor boulder every third step.
+    if (i % 3 === 1) {
+      const cx = baseX + nx * along;
+      const cz = baseZ + nz * along;
       const idx = worldToTerrainIndex(terrain, cx, cz);
-      if (idx < 0) continue;
-      const cy = terrain.heights[idx] ?? 0;
-      const radius = 0.3 + rng() * 0.4;
-      out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
-    }
-  }
-  // Pass 4: pine forest. A circular cluster of large pines on the
-  // opposite side of the map from the mountain, far enough from the
-  // road that a player has to deliberately drive into it.
-  const worldSize = terrain.size;
-  const forestCx = -worldSize * 0.28;
-  const forestCz = worldSize * 0.18;
-  const forestR = 36;
-  const pineCount = 50;
-  for (let i = 0; i < pineCount; i++) {
-    // Disc-distribute via sqrt(u) for uniform density.
-    const a = rng() * Math.PI * 2;
-    const r = Math.sqrt(rng()) * forestR;
-    const px = forestCx + Math.cos(a) * r;
-    const pz = forestCz + Math.sin(a) * r;
-    const idx = worldToTerrainIndex(terrain, px, pz);
-    if (idx < 0) continue;
-    const surf = terrain.surfaces[idx];
-    if (surf === Surface.Road) continue;
-    if (surf === Surface.DeepMud) continue;
-    const py = terrain.heights[idx] ?? 0;
-    const trunkRadius = 0.8 + rng() * 0.6; // 0.8..1.4m
-    const height = 14 + rng() * 8;          // 14..22m
-    out.push({ kind: 'pine', x: px, y: py, z: pz, size: trunkRadius, height, yaw: rng() * Math.PI * 2 });
-  }
-
-  // Pass 5: perimeter rocks + pines along the world edges. The
-  // heightfield already ramps up at the edges (see terrain.ts) so the
-  // wall is impassable; this pass dresses the cliff base with rocks
-  // and the occasional pine so the boundary reads as a treeline /
-  // rockline rather than an arbitrary world cap. Last pass so it
-  // doesn't shift RNG state for earlier passes (test stability).
-  // The cliff bump in the heightfield IS the wall; perimeter obstacles
-  // are decoration. Sparse spacing keeps the obstacle/collider count
-  // reasonable while still reading as a treeline / rockline.
-  const perimSpacing = 8;
-  const perimInset = 4;
-  const perimSize = terrain.size;
-  const perimHalf = perimSize / 2;
-  for (let side = 0; side < 4; side++) {
-    const along = perimSize - 2 * perimInset;
-    const steps = Math.floor(along / perimSpacing);
-    for (let i = 0; i <= steps; i++) {
-      const along_t = (i / steps) * along - along / 2;
-      const jitter = (rng() - 0.5) * 3;
-      let px: number, pz: number;
-      if (side === 0) { px = along_t; pz = perimHalf - perimInset - jitter; }
-      else if (side === 1) { px = along_t; pz = -perimHalf + perimInset + jitter; }
-      else if (side === 2) { px = perimHalf - perimInset - jitter; pz = along_t; }
-      else                 { px = -perimHalf + perimInset + jitter; pz = along_t; }
-      const idx = worldToTerrainIndex(terrain, px, pz);
-      if (idx < 0) continue;
-      const py = terrain.heights[idx] ?? 0;
-      if (rng() < 0.20) {
-        const trunkRadius = 0.7 + rng() * 0.5;
-        const height = 12 + rng() * 6;
-        out.push({ kind: 'pine', x: px, y: py, z: pz, size: trunkRadius, height, yaw: rng() * Math.PI * 2 });
-      } else {
-        const radius = 1.5 + rng() * 1.5;
-        out.push({ kind: 'rock', x: px, y: py, z: pz, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
+      if (idx >= 0) {
+        const cy = terrain.heights[idx] ?? 0;
+        out.push({
+          kind: 'rock',
+          x: cx, y: cy, z: cz,
+          size: 0.4,
+          height: 0,
+          yaw: t * 1.7,
+        });
       }
     }
   }
+  return out;
+}
+
+// Perimeter wall dressing. The cliff (terrain heightfield ramp) is the
+// real wall; this scatters rocks and pines along the cliff base on
+// each edge so the boundary reads as a treeline / rockline. Fixed
+// spacing, no jitter.
+function perimeterObstacles(terrain: TerrainData): Obstacle[] {
+  const out: Obstacle[] = [];
+  const half = terrain.size / 2;
+  const inset = 4;
+  const spacing = 8;
+  const along = terrain.size - 2 * inset;
+  const steps = Math.floor(along / spacing);
+  for (let side = 0; side < 4; side++) {
+    for (let i = 0; i <= steps; i++) {
+      const tAlong = (i / steps) * along - along / 2;
+      let px: number, pz: number;
+      if (side === 0)      { px = tAlong; pz = half - inset; }
+      else if (side === 1) { px = tAlong; pz = -half + inset; }
+      else if (side === 2) { px = half - inset; pz = tAlong; }
+      else                 { px = -half + inset; pz = tAlong; }
+      const idx = worldToTerrainIndex(terrain, px, pz);
+      if (idx < 0) continue;
+      const py = terrain.heights[idx] ?? 0;
+      // Every 5th obstacle along the perimeter is a pine; rest are big
+      // boulders. Yaw cycles for visual variety without RNG.
+      if (i % 5 === 2) {
+        out.push({
+          kind: 'pine',
+          x: px, y: py, z: pz,
+          size: 0.95,
+          height: 16,
+          yaw: (i + side) * 0.31,
+        });
+      } else {
+        out.push({
+          kind: 'rock',
+          x: px, y: py, z: pz,
+          size: 1.8 + (i % 3) * 0.5,
+          height: 0,
+          yaw: (i + side) * 0.41,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+export function generateObstacles(terrain: TerrainData): Obstacle[] {
+  const out: Obstacle[] = [];
+
+  const sampleY = (x: number, z: number): number | null => {
+    const idx = worldToTerrainIndex(terrain, x, z);
+    if (idx < 0) return null;
+    const surf = terrain.surfaces[idx];
+    // Skip placements on road / concrete pad / deep mud so obstacles
+    // never block spawn or land in the petrol station forecourt.
+    if (surf === Surface.Road || surf === Surface.Concrete || surf === Surface.DeepMud) return null;
+    return terrain.heights[idx] ?? 0;
+  };
+
+  // Scatter rocks (medium + small).
+  for (let i = 0; i < ROCKS_MEDIUM.length; i++) {
+    const [x, z, size] = ROCKS_MEDIUM[i]!;
+    const y = sampleY(x, z);
+    if (y === null) continue;
+    out.push({ kind: 'rock', x, y, z, size, height: 0, yaw: i * 0.37 });
+  }
+  for (let i = 0; i < ROCKS_SMALL.length; i++) {
+    const [x, z, size] = ROCKS_SMALL[i]!;
+    const y = sampleY(x, z);
+    if (y === null) continue;
+    out.push({ kind: 'rock', x, y, z, size, height: 0, yaw: i * 0.43 });
+  }
+  for (let i = 0; i < TREES.length; i++) {
+    const [x, z, size, height] = TREES[i]!;
+    const y = sampleY(x, z);
+    if (y === null) continue;
+    out.push({ kind: 'tree', x, y, z, size, height, yaw: i * 0.51 });
+  }
+  for (let i = 0; i < FOREST_PINES.length; i++) {
+    const [x, z, size, height] = FOREST_PINES[i]!;
+    const y = sampleY(x, z);
+    if (y === null) continue;
+    out.push({ kind: 'pine', x, y, z, size, height, yaw: i * 0.29 });
+  }
+
+  // Programmatic-but-fixed passes that depend on terrain layout.
+  out.push(...hillClimbBoulders(terrain));
+  out.push(...perimeterObstacles(terrain));
+
   return out;
 }
 
@@ -216,11 +241,8 @@ export function spawnObstacleColliders(
     let colDesc: RAPIER.ColliderDesc;
     if (o.kind === 'rock') {
       colDesc = RAPIER.ColliderDesc.ball(o.size).setFriction(0.9);
-      // Rocks sit half-buried for a chunkier look.
       body.setTranslation({ x: o.x, y: o.y + o.size * 0.6, z: o.z }, true);
     } else {
-      // Tree / pine trunk: capsule. Same collider shape; pines just
-      // happen to be larger.
       const halfHeight = Math.max(0.1, (o.height - 2 * o.size) / 2);
       colDesc = RAPIER.ColliderDesc.capsule(halfHeight, o.size).setFriction(0.6);
       body.setTranslation(
