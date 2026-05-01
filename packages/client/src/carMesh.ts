@@ -226,6 +226,12 @@ export function buildCarMesh(color: number): CarMesh {
   const hubMat = new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.8 });
   for (let i = 0; i < 4; i++) {
     const wheelGroup = new THREE.Group();
+    // YXZ rotation order so the renderer composes turn-then-roll
+    // correctly: rotation.y is applied AFTER rotation.x, meaning the
+    // wheel rolls around its own axle FIRST, then turns. With the
+    // default XYZ order, a spinning wheel that's also steered tumbles
+    // around the world X axis (visibly shaking when driving + turning).
+    wheelGroup.rotation.order = 'YXZ';
     const tire = new THREE.Mesh(tireGeo, tireMat);
     tire.castShadow = true;
     wheelGroup.add(tire);
