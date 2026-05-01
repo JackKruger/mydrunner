@@ -158,8 +158,13 @@ export class ChaseCamera {
     this.camera.position.copy(_desired);
     // Project the lookAt point ahead of the car along its yawed heading
     // and lift/drop its height by tan(pitch) * lookAhead - the view
-    // angles up driving uphill and down driving downhill.
-    const lookAhead = 7;
+    // angles up driving uphill and down driving downhill. While the
+    // user is dragging the camera, collapse the forward projection
+    // toward zero so the camera orbits around the CAR rather than
+    // around a point 7m down the road. Without this collapse the
+    // drag rotation feels like the axis is in front of the truck.
+    const userMag = Math.min(1, Math.hypot(this.userYaw, this.userPitch) * 2);
+    const lookAhead = 7 * (1 - userMag);
     const clampedPitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, this.pitch));
     _lookTarget.set(
       this.target.x + Math.sin(this.yaw) * lookAhead,
