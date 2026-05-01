@@ -92,6 +92,18 @@ export const SURFACE_FRICTION = {
   deepMud: 0.25,
 } as const;
 
+// Chase camera. Lives shared-side because the constants describe the
+// game's feel, not anything client-internal. The chase yaw uses an
+// under-damped spring (overshoots a touch through corners) plus a
+// lateral push proportional to yaw velocity so the camera swings to
+// the outside of the turn instead of locking rigidly behind the car.
+export const CAMERA = {
+  chaseYawStiffness: 14,    // rad/s^2 per rad of error - higher = tracks faster
+  chaseYawDamping: 4,       // critical damping at 2*sqrt(stiffness) ~7.48; below that = under-damped (swing)
+  chaseSwingLateral: 0.45,  // metres of side offset per rad/s of camera yaw rate
+  chaseSwingMax: 1.5,       // clamp on lateral swing offset (m)
+} as const;
+
 // Networking
 export const DEFAULT_PORT = 2567;
 export const MAX_INPUT_QUEUE = 64;
