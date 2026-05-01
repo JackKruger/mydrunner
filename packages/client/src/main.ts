@@ -58,17 +58,18 @@ chat.open = (): void => {
   wrappedOpen();
 };
 
-// Browsers block AudioContext until a user gesture - start audio on the
-// first keypress.
-const startAudioOnce = (): void => {
-  engineAudio.start();
-  window.removeEventListener('keydown', startAudioOnce);
-  window.removeEventListener('mousedown', startAudioOnce);
-  window.removeEventListener('touchstart', startAudioOnce);
-};
-window.addEventListener('keydown', startAudioOnce);
-window.addEventListener('mousedown', startAudioOnce);
-window.addEventListener('touchstart', startAudioOnce);
+// Browsers block AudioContext until a user gesture - start audio on
+// any pointer / key event. We don't unbind: iOS Safari can re-suspend
+// the context whenever the tab loses focus, the screen sleeps, or
+// headphones are unplugged, and `start()` is idempotent + cheap, so
+// every subsequent gesture also acts as a resume. `pointerdown` covers
+// mouse + touch + pen on every modern browser; `touchstart` is kept
+// for older mobile Safari that doesn't dispatch pointer events for
+// every input path.
+const resumeAudio = (): void => engineAudio.start();
+window.addEventListener('keydown', resumeAudio);
+window.addEventListener('pointerdown', resumeAudio);
+window.addEventListener('touchstart', resumeAudio, { passive: true });
 
 // Mute toggle on M (or the on-screen mute button on touch).
 window.addEventListener('keydown', (e) => {

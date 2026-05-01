@@ -20,13 +20,27 @@ export class EngineAudio {
   // yet. Toggle on with M (or whatever key the main loop binds).
   private muted = true;
 
-  /** Lazy-start - call from any user-gesture handler. Safe to call again. */
+  /** Lazy-start - call from any user-gesture handler. Safe to call again;
+   *  on re-entry it resumes the context if iOS / Android suspended it
+   *  (tab backgrounded, screen sleep, headphones unplugged). */
   start(): void {
-    if (this.ctx) return;
+    if (this.ctx) {
+      // iOS Safari can revoke the running state at any time. Each new
+      // gesture is an opportunity to revive it.
+      if (this.ctx.state === 'suspended') void this.ctx.resume();
+      return;
+    }
     const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctx) return;
     const ctx = new Ctx();
     this.ctx = ctx;
+    // Mobile browsers (notably iOS Safari) construct AudioContexts in the
+    // 'suspended' state even when `new Ctx()` runs inside a gesture
+    // handler. Without this resume() call no audio ever plays on iOS:
+    // currentTime never advances, so all the setTargetAtTime writes
+    // queue against a frozen clock. Must be called synchronously in the
+    // same gesture-handler call stack as the constructor.
+    if (ctx.state === 'suspended') void ctx.resume();
 
     // Master volume + final lowpass for warmth.
     const master = ctx.createGain();
