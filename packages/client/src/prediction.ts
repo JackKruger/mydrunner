@@ -38,6 +38,14 @@ export class Prediction {
    *  this offset so state() can return a smoothly-converging visual
    *  position. Hides 30Hz reconcile stutter when divergence is small. */
   private visualOffset = { x: 0, y: 0, z: 0 };
+  /** Body pose at the start of the most recent physics step. Together
+   *  with the body's current pose, lets state(alpha) return an
+   *  interpolated state - smooth motion when the rAF accumulator runs
+   *  0/1/2 steps per frame instead of an exact 1-per-frame cadence. */
+  private prev = {
+    pos: { x: 0, y: 0, z: 0 },
+    rot: { x: 0, y: 0, z: 0, w: 1 },
+  };
 
   constructor(seed: number, size: number, resolution: number, spawn: { position: { x: number; y: number; z: number }; yaw?: number }) {
     const terrain = Physics.generateTerrain({ seed, size, resolution });
@@ -55,6 +63,7 @@ export class Prediction {
     if ((input.buttons & 1) !== 0) {
       this.vehicle.resetTo(this.spawn);
     }
+    this.capturePrev();
     this.vehicle.setInput(input);
     this.world.step();
     this.lastSteppedSeq = input.seq;
@@ -64,6 +73,14 @@ export class Prediction {
     this.visualOffset.x *= 0.82;
     this.visualOffset.y *= 0.82;
     this.visualOffset.z *= 0.82;
+  }
+
+  private capturePrev(): void {
+    const t = this.vehicle.body.translation();
+    this.prev.pos.x = t.x; this.prev.pos.y = t.y; this.prev.pos.z = t.z;
+    const r = this.vehicle.body.rotation();
+    this.prev.rot.x = r.x; this.prev.rot.y = r.y;
+    this.prev.rot.z = r.z; this.prev.rot.w = r.w;
   }
 
   /** Frame-time advance is a NO-OP. Prediction steps exactly once per
@@ -104,6 +121,7 @@ export class Prediction {
 
     // Replay remaining queue to fast-forward to prediction time.
     for (const q of this.queue) {
+      this.capturePrev();
       this.vehicle.setInput(q.input);
       this.world.step();
     }
@@ -123,22 +141,39 @@ export class Prediction {
     this.visualOffset.z = Math.max(-CAP, Math.min(CAP, this.visualOffset.z + dz));
   }
 
-  /** Read the predicted vehicle state for rendering. The position
-   *  includes the visual reconcile offset (decaying toward zero) so
-   *  small server corrections don't pop the car. */
-  state(): {
+  /** Read the predicted vehicle state for rendering. `alpha` in [0, 1]
+   *  interpolates between the start-of-step pose and the end-of-step
+   *  pose - smooths the motion when the render rate isn't exactly the
+   *  same as the physics rate (0/1/2 steps per frame). The position
+   *  also includes the visual reconcile offset (decaying toward zero)
+   *  so small server corrections don't pop the car. */
+  state(alpha = 1): {
     position: { x: number; y: number; z: number };
     rotation: { x: number; y: number; z: number; w: number };
     wheels: { steer: number; spin: number; suspensionLength: number }[];
   } {
     const s = this.vehicle.getState();
+    const a = Math.max(0, Math.min(1, alpha));
+    const p = this.prev.pos;
+    const pr = this.prev.rot;
+    // Normalised lerp for rotation: cheap, fine for the small per-step
+    // angle change at 60Hz. Negate one quaternion if the dot is
+    // negative to take the short way around.
+    const dot = pr.x * s.rotation.x + pr.y * s.rotation.y + pr.z * s.rotation.z + pr.w * s.rotation.w;
+    const sgn = dot < 0 ? -1 : 1;
+    let rx = pr.x + (s.rotation.x * sgn - pr.x) * a;
+    let ry = pr.y + (s.rotation.y * sgn - pr.y) * a;
+    let rz = pr.z + (s.rotation.z * sgn - pr.z) * a;
+    let rw = pr.w + (s.rotation.w * sgn - pr.w) * a;
+    const rl = Math.hypot(rx, ry, rz, rw) || 1;
+    rx /= rl; ry /= rl; rz /= rl; rw /= rl;
     return {
       position: {
-        x: s.position.x + this.visualOffset.x,
-        y: s.position.y + this.visualOffset.y,
-        z: s.position.z + this.visualOffset.z,
+        x: p.x + (s.position.x - p.x) * a + this.visualOffset.x,
+        y: p.y + (s.position.y - p.y) * a + this.visualOffset.y,
+        z: p.z + (s.position.z - p.z) * a + this.visualOffset.z,
       },
-      rotation: s.rotation,
+      rotation: { x: rx, y: ry, z: rz, w: rw },
       wheels: s.wheels.map((w) => ({ steer: w.steer, spin: w.spin, suspensionLength: w.suspensionLength })),
     };
   }

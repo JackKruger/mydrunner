@@ -260,11 +260,16 @@ async function start(): Promise<void> {
       }
       if (steps >= MAX_STEPS_PER_FRAME) predictAcc = 0;
     }
+    // Fractional time left over in the accumulator becomes the alpha
+    // for state interpolation - smooths the visual motion when the
+    // render rate doesn't perfectly match the physics rate.
+    const alpha = Math.min(1, predictAcc / FIXED_DT);
 
     // Override the local vehicle pose with the predicted state so the local
-    // car is responsive instead of 100ms behind.
+    // car is responsive instead of 100ms behind. alpha lerps between
+    // the start-of-step and end-of-step body poses for smoothness.
     if (prediction) {
-      const s = prediction.state();
+      const s = prediction.state(alpha);
       scene.setLocalVehiclePose(s.position, s.rotation, s.wheels);
     }
 
