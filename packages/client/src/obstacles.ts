@@ -11,6 +11,34 @@ const TRUNK_COLOR = 0x4a3826;
 const FOLIAGE_COLORS = [0x33502a, 0x3e6033, 0x2a4a25, 0x4d6b3a];
 const PINE_COLORS = [0x1f3d1f, 0x2c4a2a, 0x365434, 0x274023];
 
+/** Diagonal yellow/black caution stripes painted on a CanvasTexture.
+ *  Used for the flex-ramp top so it pops against the brown terrain. */
+function makeCautionStripeTexture(): THREE.CanvasTexture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#f5b820';
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#1a1a1a';
+  const stripe = 22;
+  for (let i = -size; i < size * 2; i += stripe * 2) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i + stripe, 0);
+    ctx.lineTo(i + stripe + size, size);
+    ctx.lineTo(i + size, size);
+    ctx.closePath();
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 export class Obstacles {
   readonly group = new THREE.Group();
 
@@ -23,7 +51,18 @@ export class Obstacles {
   private build(list: Obstacle[]): void {
     const trunkMat = new THREE.MeshStandardMaterial({ color: TRUNK_COLOR, roughness: 0.95 });
     const pineTrunkMat = new THREE.MeshStandardMaterial({ color: 0x3c2a18, roughness: 0.95 });
-    const rampMat = new THREE.MeshStandardMaterial({ color: 0x6b4f2a, roughness: 0.85 });
+    // Caution-striped texture for the ramp top so it's unmistakable as a
+    // test fixture against the brown terrain. Side faces stay plain wood.
+    const rampStripeTex = makeCautionStripeTexture();
+    const rampTopMat = new THREE.MeshStandardMaterial({ map: rampStripeTex, roughness: 0.7 });
+    const rampSideMat = new THREE.MeshStandardMaterial({ color: 0x6b4f2a, roughness: 0.85 });
+    const rampMats = [
+      rampSideMat, rampSideMat, // +X, -X (ends)
+      rampTopMat,  rampSideMat, // +Y top, -Y bottom
+      rampSideMat, rampSideMat, // +Z, -Z (long sides)
+    ];
+    const flagPostMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 });
+    const flagMat = new THREE.MeshStandardMaterial({ color: 0xff5a1f, roughness: 0.7, side: THREE.DoubleSide });
     for (const o of list) {
       if (o.kind === 'pine') {
         this.buildPine(o, pineTrunkMat);
@@ -32,12 +71,25 @@ export class Obstacles {
       if (o.kind === 'ramp') {
         const t = Physics.rampTransform(o);
         const geo = new THREE.BoxGeometry(t.halfLength * 2, t.halfThick * 2, t.halfWidth * 2);
-        const mesh = new THREE.Mesh(geo, rampMat);
+        const mesh = new THREE.Mesh(geo, rampMats);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.position.set(t.cx, t.cy, t.cz);
         mesh.quaternion.set(t.qx, t.qy, t.qz, t.qw);
         this.group.add(mesh);
+
+        // Tall flagpole next to the ramp so it's findable from anywhere
+        // on the map. Visual only - no collider.
+        const postH = 5;
+        const postGeo = new THREE.CylinderGeometry(0.08, 0.08, postH, 6);
+        const post = new THREE.Mesh(postGeo, flagPostMat);
+        post.castShadow = true;
+        post.position.set(o.x, o.y + postH / 2, o.z + o.size + 0.5);
+        this.group.add(post);
+        const flagGeo = new THREE.PlaneGeometry(1.2, 0.7);
+        const flag = new THREE.Mesh(flagGeo, flagMat);
+        flag.position.set(o.x + 0.6, o.y + postH - 0.4, o.z + o.size + 0.5);
+        this.group.add(flag);
         continue;
       }
       if (o.kind === 'rock') {
