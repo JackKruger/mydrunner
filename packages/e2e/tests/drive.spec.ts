@@ -165,6 +165,55 @@ test.describe('driving', () => {
     expect(Math.abs(end!.rotation.w), `quaternion w was ${end!.rotation.w.toFixed(3)} (car upside down?)`).toBeGreaterThan(0.5);
   });
 
+  test('rendered wheel rotations are stable while driving + turning', async ({ page }) => {
+    // The previous "stable steer" test only checked prediction state;
+    // it missed a bug where the rendered wheel rotation order made the
+    // wheel tumble around a world axis when both rolling (spin) and
+    // turning (steer) were active. This test reads the actual mesh's
+    // world quaternion and watches for jitter while driving + steering.
+    await page.goto('/');
+    await waitConnected(page);
+    await page.waitForTimeout(800);
+
+    // Drive forward + turn left.
+    await page.keyboard.down('KeyW');
+    await page.keyboard.down('KeyA');
+    await page.waitForTimeout(1500);
+
+    const samples: { y: number; x: number }[] = await page.evaluate(async () => {
+      const w = window as unknown as { __scene?: any };
+      const s = w.__scene!;
+      const ids = [...s.vehicles.keys()];
+      const v = s.vehicles.get(ids[0])!;
+      const wheel = v.wheels[0]!;
+      const out: { y: number; x: number }[] = [];
+      for (let i = 0; i < 30; i++) {
+        out.push({ x: wheel.rotation.x, y: wheel.rotation.y });
+        await new Promise<void>((r) => setTimeout(r, 25));
+      }
+      return out;
+    });
+
+    await page.keyboard.up('KeyA');
+    await page.keyboard.up('KeyW');
+
+    // wheel.rotation.x (spin) should be smoothly increasing.
+    const xDiffs: number[] = [];
+    for (let i = 1; i < samples.length; i++) {
+      xDiffs.push(samples[i]!.x - samples[i - 1]!.x);
+    }
+    const xMean = xDiffs.reduce((a, b) => a + b, 0) / xDiffs.length;
+    // All diffs should have the same sign as the mean (no reversals).
+    const reversals = xDiffs.filter((d) => Math.sign(d) !== Math.sign(xMean) && Math.abs(d) > 0.01).length;
+    expect(reversals, `wheel spin reversed direction ${reversals} times in 30 samples (mean dx=${xMean.toFixed(3)})`).toBeLessThan(3);
+
+    // wheel.rotation.y (steer) should be near constant once at lock.
+    const yMean = samples.reduce((a, b) => a + b.y, 0) / samples.length;
+    const yVar = samples.reduce((a, b) => a + (b.y - yMean) ** 2, 0) / samples.length;
+    const yStdev = Math.sqrt(yVar);
+    expect(yStdev, `wheel steer stdev was ${yStdev.toFixed(4)}`).toBeLessThan(0.03);
+  });
+
   test('holding A produces a stable left steer angle (no flicker)', async ({ page }) => {
     await page.goto('/');
     await waitConnected(page);
