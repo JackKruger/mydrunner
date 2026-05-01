@@ -65,6 +65,18 @@ function bindHoldButton(el: HTMLElement, key: 'throttle' | 'brake' | 'handbrake'
   el.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
+/** Toggle button: each press flips state[key] between 0 and 1. Used for
+ *  the handbrake so the player doesn't have to hold the on-screen
+ *  button while driving. */
+function bindToggleButton(el: HTMLElement, key: 'handbrake'): void {
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    state[key] = state[key] === 1 ? 0 : 1;
+    el.classList.toggle('pressed', state[key] === 1);
+  });
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
 function bindEdgeButton(el: HTMLElement, name: Edge): void {
   el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -133,7 +145,7 @@ export function initTouchInput(): void {
   if (pad && knob) bindSteerPad(pad, knob);
   if (throttle) bindHoldButton(throttle, 'throttle');
   if (brake) bindHoldButton(brake, 'brake');
-  if (handbrake) bindHoldButton(handbrake, 'handbrake');
+  if (handbrake) bindToggleButton(handbrake, 'handbrake');
   if (reset) bindHoldButton(reset, 'reset');
   if (cam) bindEdgeButton(cam, 'cam');
   if (mute) bindEdgeButton(mute, 'mute');

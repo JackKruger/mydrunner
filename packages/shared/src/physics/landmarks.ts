@@ -74,6 +74,22 @@ export const STATION = {
   },
   // Tall sign on a pole near the road edge of the lot.
   sign: { x: 11, z: 11 },
+  // Parked Hilux in the middle parking bay. Position is the chassis
+  // centre; halfW/H/D match VEHICLE.chassisHalfExtents (1.7m wide x
+  // 0.9m tall x 3.8m long). Yaw 0 means the parked car faces away
+  // from the road. The yawLocal is in radians within the station's
+  // local frame.
+  parkedCar: {
+    x: 9,           // middle of the parking strip (parking.cx)
+    y: 1.5,         // chassis centre at rest height
+    z: -6.5,        // parking.cz (back row)
+    halfW: 0.85,
+    halfH: 0.45,
+    halfD: 1.9,
+    yawLocal: Math.PI, // facing -Z (toward the back wall)
+    /** Hash seed for the visual colour pick. */
+    visualHashSeed: 'parked-hilux',
+  },
 } as const;
 
 export function spawnLandmarkColliders(
@@ -145,6 +161,17 @@ export function spawnLandmarkColliders(
   const sign = STATION.sign;
   const poleH = 6.5;
   cylinder(place(sign.x, poleH / 2, sign.z), poleH / 2, 0.12);
+
+  // Parked car in the second bay - just a chassis-sized cuboid for
+  // collision. The visual mesh is added on the client side by reusing
+  // the same buildCarMesh() the live vehicles use.
+  const pk = STATION.parkedCar;
+  cuboid(
+    place(pk.x, pk.y, pk.z),
+    pk.halfW,
+    pk.halfH,
+    pk.halfD,
+  );
 
   return bodies;
 }

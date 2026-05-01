@@ -1,7 +1,7 @@
 // Client entry point. Owns the net client, the scene, the input loop, and
 // the local prediction sim.
 
-import { Physics, TICK_RATE, type PlayerId } from '@mydrunner/shared';
+import { Physics, FIXED_DT, type PlayerId } from '@mydrunner/shared';
 
 import { EngineAudio } from './engineAudio.js';
 import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './joinScreen.js';
@@ -231,24 +231,35 @@ async function start(): Promise<void> {
   });
   onTouchEdge('chat', () => chat.open());
 
-  // Input + prediction loop. Sample at TICK_RATE; each sample also drives
-  // exactly one local physics step so prediction and server stay locked.
-  const inputIntervalMs = 1000 / TICK_RATE;
-  setInterval(() => {
-    if (!connected) return;
-    const input = sampleInput();
-    net.sendInput(input);
-    if (prediction) prediction.pushAndStep(input);
-  }, inputIntervalMs);
+  // Input + prediction stepping is driven from the render loop with a
+  // fixed-step accumulator. Earlier this lived on a setInterval timer
+  // independent of requestAnimationFrame; the two ran at the same rate
+  // but drifted in phase, which made the visual sometimes a tick stale
+  // (visible as stutter when driving). Now each render frame catches
+  // up the prediction sim by however many fixed steps fit.
+  let predictAcc = 0;
+  // Cap the steps run per frame so a single pause (tab switch / GC)
+  // doesn't trigger a spiral-of-death.
+  const MAX_STEPS_PER_FRAME = 5;
 
   // Render loop.
   function frame(): void {
     const now = performance.now();
-    const frameDt = (now - lastFrameTimeMs) / 1000;
+    const frameDt = Math.min(0.25, (now - lastFrameTimeMs) / 1000);
     lastFrameTimeMs = now;
-    // Keep the local sim alive between input samples (mostly redundant at
-    // 60Hz input but matters under tab throttling).
-    if (prediction) prediction.advance(frameDt);
+
+    if (connected && prediction) {
+      predictAcc += frameDt;
+      let steps = 0;
+      while (predictAcc >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
+        const input = sampleInput();
+        net.sendInput(input);
+        prediction.pushAndStep(input);
+        predictAcc -= FIXED_DT;
+        steps += 1;
+      }
+      if (steps >= MAX_STEPS_PER_FRAME) predictAcc = 0;
+    }
 
     // Override the local vehicle pose with the predicted state so the local
     // car is responsive instead of 100ms behind.

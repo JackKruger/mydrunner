@@ -159,16 +159,17 @@ vec3 surfaceColor(int s, vec2 p) {
     return base * (0.50 + pebble * 0.95);
   }
   if (s == 6) {
-    // Concrete: light grey with very fine grain + occasional darker
-    // patches and a thin "expansion joint" line every few metres.
+    // Concrete: dark asphalt-ish grey with very fine grain + slight
+    // patch variation and a thin "expansion joint" line every few
+    // metres so the eye reads it as paving rather than flat colour.
     float grain = vnoise(p * 18.0);
     float patches = fbm(p * 0.5);
-    vec3 base = mix(vec3(0.62, 0.62, 0.60), vec3(0.74, 0.73, 0.70), patches);
-    base *= (0.92 + grain * 0.16);
+    vec3 base = mix(vec3(0.22, 0.22, 0.22), vec3(0.32, 0.31, 0.30), patches);
+    base *= (0.88 + grain * 0.18);
     float jointX = step(0.92, abs(fract(p.x / 4.0) - 0.5) * 2.0);
     float jointZ = step(0.92, abs(fract(p.y / 4.0) - 0.5) * 2.0);
     float joint = max(jointX, jointZ);
-    return mix(base, base * 0.65, joint);
+    return mix(base, base * 0.55, joint);
   }
   return vec3(1.0, 0.0, 1.0);
 }

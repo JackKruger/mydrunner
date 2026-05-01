@@ -67,6 +67,10 @@ export interface PetrolStationPad {
   cz: number;
   halfW: number;
   halfD: number;
+  /** Extra half-width added at the road-facing edge (+Z in pad-local
+   *  coords) so the pad is trapezoidal - wider at the road, narrower
+   *  at the back. Reads as turn-in lanes flaring toward the road. */
+  wingDelta: number;
   /** Soft outer fade (m) where the flat pad blends back into natural
    *  terrain so there's no vertical cliff at the edge. */
   fade: number;
@@ -81,6 +85,7 @@ export function petrolStationPadFor(size: number): PetrolStationPad {
     cz: 14,
     halfW: 14,
     halfD: 13,
+    wingDelta: 6,
     fade: 4,
     yaw: 0,
   };
@@ -184,15 +189,20 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
       // Pad-blend: smoothstep that reaches 1 inside the pad and fades
       // to 0 over `pad.fade` metres outside. We rotate the world point
       // into pad-local coordinates so non-axis-aligned pads still work.
+      // The pad is trapezoidal: halfW grows linearly with +lz so the
+      // road-facing edge is wider than the back, reading as turn-in
+      // lanes flaring out to the road.
       const cosY = Math.cos(pad.yaw);
       const sinY = Math.sin(pad.yaw);
       const dx = x - pad.cx;
       const dz = z - pad.cz;
       const lx = cosY * dx + sinY * dz;
       const lz = -sinY * dx + cosY * dz;
-      const padX = smoothFalloff(Math.abs(lx), pad.halfW, pad.fade);
+      const wingT = Math.max(0, lz / pad.halfD); // 0 at back, 1 at road side
+      const effHalfW = pad.halfW + wingT * pad.wingDelta;
+      const padX = smoothFalloff(Math.abs(lx), effHalfW, pad.fade);
       const padZ = smoothFalloff(Math.abs(lz), pad.halfD, pad.fade);
-      const padW = padX * padZ; // 1 inside, smoothly to 0 outside
+      const padW = padX * padZ;
 
       let h: number;
       if (az < roadCore) {
