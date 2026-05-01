@@ -3,7 +3,7 @@
 // terrain surface beneath the wheel, giving us the mud feel.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { VEHICLE, SURFACE_FRICTION, TIRE_BASE_GRIP } from '../constants.js';
+import { VEHICLE, SURFACE_FRICTION, TIRE_BASE_GRIP, INCLINE_ASSIST_MAX } from '../constants.js';
 import { EMPTY_INPUT, type PlayerInput, type VehicleState, type WheelState } from '../types.js';
 import { Surface, sampleSurface } from './terrain.js';
 import { createEngineState, stepEngine, type EngineState } from './engine.js';
@@ -143,8 +143,13 @@ export class Vehicle {
     const fwdLin = this.body.linvel();
     const yaw = this.body.rotation();
     const forwardX = 2 * (yaw.x * yaw.z + yaw.w * yaw.y);
+    const forwardY = 2 * (yaw.y * yaw.z - yaw.w * yaw.x);
     const forwardZ = 1 - 2 * (yaw.x * yaw.x + yaw.y * yaw.y);
     const longitudinal = fwdLin.x * forwardX + fwdLin.z * forwardZ;
+    // Incline assist: forwardY > 0 means the nose is pitched up (climbing).
+    // Linear boost up to forwardY=0.5 (~30 deg slope), capped there.
+    const climb = Math.min(0.5, Math.max(0, forwardY));
+    const inclineMult = 1 + (climb / 0.5) * INCLINE_ASSIST_MAX;
 
     for (let i = 0; i < 4; i++) {
       const wp = this.wheelWorldPos(i);
@@ -154,7 +159,10 @@ export class Vehicle {
       const axleMult = i < 2 ? VEHICLE.frontGripMult : VEHICLE.rearGripMult;
       const slip = slipRatio(wheelAngVels[i] ?? 0, VEHICLE.wheelRadius, longitudinal);
       const slipMult = gripFromSlip(slip);
-      this.controller.setWheelFrictionSlip(i, TIRE_BASE_GRIP * surfMult * axleMult * slipMult);
+      this.controller.setWheelFrictionSlip(
+        i,
+        TIRE_BASE_GRIP * surfMult * axleMult * slipMult * inclineMult,
+      );
     }
 
     // Engine + gearbox: signed average wheel angular velocity. wheelAngVels

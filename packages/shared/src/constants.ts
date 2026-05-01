@@ -103,6 +103,15 @@ export const SURFACE_FRICTION = {
 // planted while leaving headroom for surfaceMult to bite hard on mud.
 export const TIRE_BASE_GRIP = 2.8;
 
+// Hill-climb traction assist. Real 4x4s lose grip on slopes because
+// gravity peels the tyre's contact away; in our model it manifests as
+// chronic spin-out partway up. Boost per-wheel grip linearly with the
+// chassis "nose up" component (forward.y, =sin(pitch)). At flat ground
+// the multiplier is 1; at forward.y=0.5 (~30 degree climb) it's
+// (1 + INCLINE_ASSIST_MAX). Negative pitch (nose down, descending)
+// gets no boost - going downhill grip isn't the problem.
+export const INCLINE_ASSIST_MAX = 0.6;
+
 // Chase camera. Lives shared-side because the constants describe the
 // game's feel, not anything client-internal. The chase yaw uses an
 // under-damped spring (overshoots a touch through corners) plus a
