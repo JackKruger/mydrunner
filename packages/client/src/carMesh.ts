@@ -59,15 +59,23 @@ function makeMaterials(bodyColor: number): Materials {
 
 function buildWheels(group: THREE.Group): THREE.Object3D[] {
   const wheels: THREE.Object3D[] = [];
-  const tireGeo = new THREE.CylinderGeometry(VEHICLE.wheelRadius, VEHICLE.wheelRadius, VEHICLE.wheelWidth, 20);
+  const r = VEHICLE.wheelRadius;
+  const w = VEHICLE.wheelWidth;
+  const tireGeo = new THREE.CylinderGeometry(r, r, w, 20);
   tireGeo.rotateZ(Math.PI / 2);
   const tireMat = new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness: 0.95 });
-  const rimGeo = new THREE.CylinderGeometry(VEHICLE.wheelRadius * 0.6, VEHICLE.wheelRadius * 0.6, VEHICLE.wheelWidth + 0.02, 14);
+  const rimGeo = new THREE.CylinderGeometry(r * 0.6, r * 0.6, w + 0.02, 14);
   rimGeo.rotateZ(Math.PI / 2);
   const rimMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.4, metalness: 0.7 });
-  const hubGeo = new THREE.CylinderGeometry(VEHICLE.wheelRadius * 0.18, VEHICLE.wheelRadius * 0.18, VEHICLE.wheelWidth + 0.04, 8);
+  const hubGeo = new THREE.CylinderGeometry(r * 0.18, r * 0.18, w + 0.04, 8);
   hubGeo.rotateZ(Math.PI / 2);
   const hubMat = new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.8 });
+  // Spokes + tread lugs make rotation visible. Without them the wheels
+  // are smooth cylinders and you can't tell which way they're spinning.
+  const spokeGeo = new THREE.BoxGeometry(w + 0.005, r * 0.55, 0.05);
+  const spokeMat = rimMat;
+  const treadGeo = new THREE.BoxGeometry(w * 0.85, 0.04, 0.08);
+  const treadMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.95 });
   for (let i = 0; i < 4; i++) {
     const wheelGroup = new THREE.Group();
     // YXZ rotation order so the renderer composes turn-then-roll correctly:
@@ -81,6 +89,25 @@ function buildWheels(group: THREE.Group): THREE.Object3D[] {
     wheelGroup.add(tire);
     wheelGroup.add(new THREE.Mesh(rimGeo, rimMat));
     wheelGroup.add(new THREE.Mesh(hubGeo, hubMat));
+    // Five spokes equally spaced. Spoke is a thin radial box centred on
+    // the axle, length r*0.55 along Y so it crosses the rim diameter.
+    const spokeCount = 5;
+    for (let s = 0; s < spokeCount; s++) {
+      const spoke = new THREE.Mesh(spokeGeo, spokeMat);
+      spoke.rotation.x = (s / spokeCount) * Math.PI * 2;
+      wheelGroup.add(spoke);
+    }
+    // Eight tread lugs around the tire circumference. Each lug sits at
+    // angle θ on the outer surface, position = (0, r*cos θ, r*sin θ),
+    // rotated around X by θ so it lies tangent to the tire.
+    const lugCount = 8;
+    for (let l = 0; l < lugCount; l++) {
+      const lug = new THREE.Mesh(treadGeo, treadMat);
+      const a = (l / lugCount) * Math.PI * 2;
+      lug.position.set(0, r * Math.cos(a) * 1.02, r * Math.sin(a) * 1.02);
+      lug.rotation.x = a;
+      wheelGroup.add(lug);
+    }
     group.add(wheelGroup);
     wheels.push(wheelGroup);
   }

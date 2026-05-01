@@ -9,7 +9,7 @@
 // over them.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { Surface, type TerrainData, worldToTerrainIndex } from './terrain.js';
+import { Surface, type TerrainData, worldToTerrainIndex, mountainFor } from './terrain.js';
 
 export type ObstacleKind = 'rock' | 'tree';
 
@@ -51,11 +51,12 @@ export function generateObstacles(
   opts: ObstacleOptions = {},
 ): Obstacle[] {
   const seed = terrain.seed + (opts.seedOffset ?? 7919);
-  const count = opts.count ?? 60;
+  const count = opts.count ?? 100;
   const rng = mulberry32(seed);
   const out: Obstacle[] = [];
   const half = terrain.size / 2 - 4;
 
+  // Pass 1: medium rocks + trees scattered across all driveable surfaces.
   for (let i = 0; i < count; i++) {
     const x = (rng() - 0.5) * 2 * half;
     const z = (rng() - 0.5) * 2 * half;
@@ -74,6 +75,67 @@ export function generateObstacles(
     } else {
       const radius = 0.5 + rng() * 1.0;
       out.push({ kind: 'rock', x, y, z, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
+    }
+  }
+
+  // Pass 2: small rocks scattered everywhere off the road. Density-style
+  // detail - too small to stop the truck (radius < wheel radius) but
+  // adds visual chunk and occasional bumps to drive over.
+  const smallCount = Math.floor(count * 1.6);
+  for (let i = 0; i < smallCount; i++) {
+    const x = (rng() - 0.5) * 2 * half;
+    const z = (rng() - 0.5) * 2 * half;
+    const idx = worldToTerrainIndex(terrain, x, z);
+    if (idx < 0) continue;
+    const surf = terrain.surfaces[idx];
+    if (surf === Surface.Road) continue;
+    const y = terrain.heights[idx] ?? 0;
+    const radius = 0.15 + rng() * 0.25;
+    out.push({ kind: 'rock', x, y, z, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
+  }
+
+  // Pass 3: rocky hill climb. A path of progressively-larger rocks runs
+  // from the south side of the mountain up its flank, framing a route
+  // a determined truck can climb. Boulders are placed in two parallel
+  // tracks (slight zigzag) so there's a corridor between them rather
+  // than a wall.
+  const mtn = mountainFor(terrain.size);
+  // Approach direction: from the road (south) up to the summit. Vector
+  // from a base point to the summit.
+  const baseX = mtn.x + (rng() - 0.5) * 6;
+  const baseZ = mtn.z - mtn.sigma * 1.6; // start ~1.6 sigma south of summit
+  const dx = mtn.x - baseX;
+  const dz = mtn.z - baseZ;
+  const len = Math.hypot(dx, dz);
+  const nx = dx / len;
+  const nz = dz / len;
+  // Perpendicular for the corridor offset.
+  const px = -nz;
+  const pz = nx;
+  const climbSteps = 14;
+  for (let i = 0; i < climbSteps; i++) {
+    const t = i / (climbSteps - 1);
+    const along = t * len;
+    // Two parallel tracks ~3.5m apart so a truck (1.7m wide) fits between.
+    for (const side of [-1, 1]) {
+      const cx = baseX + nx * along + px * side * (3.5 + rng() * 1.2);
+      const cz = baseZ + nz * along + pz * side * (3.5 + rng() * 1.2);
+      const idx = worldToTerrainIndex(terrain, cx, cz);
+      if (idx < 0) continue;
+      const cy = terrain.heights[idx] ?? 0;
+      // Boulders get larger near the top - more dramatic / harder to climb.
+      const radius = 0.55 + t * 0.7 + rng() * 0.4;
+      out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
+    }
+    // Occasional boulder in the corridor itself for chunkier feel.
+    if (rng() < 0.25 && i > 1 && i < climbSteps - 1) {
+      const cx = baseX + nx * along + px * (rng() - 0.5) * 2;
+      const cz = baseZ + nz * along + pz * (rng() - 0.5) * 2;
+      const idx = worldToTerrainIndex(terrain, cx, cz);
+      if (idx < 0) continue;
+      const cy = terrain.heights[idx] ?? 0;
+      const radius = 0.3 + rng() * 0.4;
+      out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
     }
   }
   return out;

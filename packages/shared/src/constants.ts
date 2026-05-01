@@ -13,14 +13,14 @@ export const GRAVITY_Y = -9.81;
 export const VEHICLE = {
   mass: 1500,
   chassisHalfExtents: { x: 0.85, y: 0.45, z: 1.9 }, // ~1.7m wide, 3.8m long
-  wheelRadius: 0.36,
-  wheelWidth: 0.25,
+  wheelRadius: 0.46,
+  wheelWidth: 0.32,
   // Suspension geometry. Chassis-connection points (wp.y) sit at the
-  // chassis bottom edge; wheels hang below at restLength. With chassis
-  // half-y = 0.45 and wheel radius 0.36, the chassis bottom rests
-  // roughly (restLength - wheelRadius) above ground at equilibrium -
-  // a typical SUV ground clearance.
-  suspensionRestLength: 0.4,
+  // chassis bottom edge; wheels hang below at restLength. Lifted ride
+  // height + chunky tyres for that off-road look: chassis-bottom rests
+  // roughly (restLength + wheelRadius - chassisHalfY) ~= 0.55m above
+  // ground at equilibrium, more than a stock SUV.
+  suspensionRestLength: 0.55,
   suspensionStiffness: 35,
   suspensionDamping: 4.5,
   suspensionCompression: 0.83,

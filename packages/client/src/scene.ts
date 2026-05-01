@@ -50,6 +50,11 @@ export class Scene {
    *  and the lateral "swing" offset in chase mode. */
   private cameraYawVel = 0;
   private lastCamUpdateMs = 0;
+  /** Smoothed chassis pitch (rad). Positive = nose up. Drives the chase
+   *  camera's lookAt height so the view angles up driving uphill / down
+   *  driving downhill. Lerped (not spring) - we want it to lag the car
+   *  smoothly, not overshoot. */
+  private cameraPitch = 0;
   private terrain: TerrainMesh | null = null;
   private terrainPlaceholder: THREE.Mesh | null = null;
   private obstacles: Obstacles | null = null;
@@ -245,8 +250,15 @@ export class Scene {
     // of locking rigidly to heading; the resulting cameraYawVel feeds
     // a lateral offset in updateCamera() that pushes outside the turn.
     this.cameraTarget.lerp(v.group.position, 0.4);
+    // Forward vector (local +Z) rotated by quaternion gives the chassis
+    // facing direction in world space. Yaw is atan2(fX, fZ); pitch is
+    // asin(fY) (positive = nose up). Pitch is lerped, not sprung -
+    // overshoot would be queasy here, unlike the corner swing.
     const fX = 2 * (rot.x * rot.z + rot.w * rot.y);
+    const fY = 2 * (rot.y * rot.z - rot.w * rot.x);
     const fZ = 1 - 2 * (rot.x * rot.x + rot.y * rot.y);
+    const targetPitch = Math.asin(Math.max(-1, Math.min(1, fY)));
+    this.cameraPitch += (targetPitch - this.cameraPitch) * 0.18;
     const targetYaw = Math.atan2(fX, fZ);
     let dy = targetYaw - this.cameraYaw;
     if (dy > Math.PI) dy -= 2 * Math.PI;
@@ -411,8 +423,19 @@ export class Scene {
       const minY = (this.terrain ? this.terrainHeightAt(desired.x, desired.z) : 0) + 1.5;
       if (desired.y < minY) desired.y = minY;
       this.camera.position.copy(desired);
-      const lookTarget = target.clone();
-      lookTarget.y += 0.5;
+      // Project the lookAt point ahead of the car along its (yawed) heading,
+      // and lift/drop its height by tan(pitch) * lookAhead so the view
+      // angles up driving uphill and down driving downhill. Pitch is
+      // clamped because tan blows up near vertical.
+      const lookAhead = 7;
+      const clampedPitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, this.cameraPitch));
+      const fwdX = Math.sin(this.cameraYaw);
+      const fwdZ = Math.cos(this.cameraYaw);
+      const lookTarget = new THREE.Vector3(
+        target.x + fwdX * lookAhead,
+        target.y + 0.5 + lookAhead * Math.tan(clampedPitch),
+        target.z + fwdZ * lookAhead,
+      );
       this.camera.lookAt(lookTarget);
     } else if (this.cameraMode === 'hood') {
       // Sit just above the chassis roof, looking forward in the car's heading.
@@ -421,9 +444,18 @@ export class Scene {
       const lookAt = target.clone().add(new THREE.Vector3(fwd.x * 10, 1.0, fwd.z * 10));
       this.camera.lookAt(lookAt);
     } else {
-      // free: stationary high overview
-      this.camera.position.set(0, 60, 60);
-      this.camera.lookAt(0, 0, 0);
+      // free: high "sky cam" trailing the local player. Sits well above
+      // and behind so the camera stays steady while the car drives -
+      // useful for spotting routes and seeing the car relative to the
+      // landscape.
+      const fwdX = Math.sin(this.cameraYaw);
+      const fwdZ = Math.cos(this.cameraYaw);
+      this.camera.position.set(
+        target.x - fwdX * 30,
+        target.y + 40,
+        target.z - fwdZ * 30,
+      );
+      this.camera.lookAt(target);
     }
   }
 

@@ -42,6 +42,19 @@ export interface TerrainOptions {
   seed?: number;
 }
 
+/** The single landmark mountain. Exposed so the obstacle generator can
+ *  place rocks on its slope without duplicating the placement formula. */
+export interface MountainSpec {
+  x: number;
+  z: number;
+  peak: number;
+  sigma: number;
+}
+
+export function mountainFor(size: number): MountainSpec {
+  return { x: size * 0.22, z: size * 0.28, peak: 32, sigma: size * 0.11 };
+}
+
 /** Generates a heightmap and matching surface map.
  *
  *  Layout:
@@ -80,10 +93,11 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
 
   // Mountain: single big landmark. Centered off-road in the upper quadrant
   // so it reads as a destination from the road.
-  const mtnCx = size * 0.22;
-  const mtnCz = size * 0.28;
-  const mtnPeak = 32;
-  const mtnSigma = size * 0.11; // ~35m at 320m world - steeper than rolling hills
+  const mtn = mountainFor(size);
+  const mtnCx = mtn.x;
+  const mtnCz = mtn.z;
+  const mtnPeak = mtn.peak;
+  const mtnSigma = mtn.sigma;
 
   // Mud bogs: a few Gaussian dips so mud isn't just the radial valleys.
   // Positions are deterministic from the seed so client + server agree.
