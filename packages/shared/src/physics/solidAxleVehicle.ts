@@ -216,37 +216,66 @@ export class SolidAxleVehicle implements VehicleLike {
       wL.surface = sampleSurface(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
       wR.surface = sampleSurface(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
 
-      // Chassis vertical velocity at the axle anchor (world frame).
-      const anchorWorld = addVec(t, rotateVecByQuat(
-        { x: 0, y: ag.centerLocalY, z: ag.centerLocalZ },
-        r,
-      ));
-      const armX = anchorWorld.x - t.x;
-      const armY = anchorWorld.y - t.y;
-      const armZ = anchorWorld.z - t.z;
-      const vpX = lv.x + av.y * armZ - av.z * armY;
-      const vpY = lv.y + av.z * armX - av.x * armZ;
-      const vpZ = lv.z + av.x * armY - av.y * armX;
-      const vertVel = vpX * up.x + vpY * up.y + vpZ * up.z;
-
+      // Update axle state (rideY tracks avgComp, rollAngle tracks slope).
+      // We still use stepAxle for the kinematic axle bookkeeping that
+      // feeds visuals + snapshots, but we IGNORE its chassisRideForce
+      // and instead apply per-wheel-end ride forces below. The reason:
+      // applying a single ride force at the axle CENTER (chassis-local
+      // x=0) gives no roll-restoring torque when the chassis tips - both
+      // wheels' contributions sum at x=0 and just push the chassis
+      // straight up regardless of tilt, so any small roll perturbation
+      // grows unchecked. Splitting the ride force into per-wheel-end
+      // components at +/- trackHalf naturally creates the righting
+      // moment that solid-axle vehicles get from their leaf-spring or
+      // coilover mounts being attached at the axle ends, not the diff.
       const result = stepAxle(axle, {
         leftDepth: wL.contactDepth,
         rightDepth: wR.contactDepth,
         leftContact: wL.contact,
         rightContact: wR.contact,
-        chassisVertVelAtAnchor: vertVel,
+        chassisVertVelAtAnchor: 0, // unused now; per-wheel damping below
         dt,
       });
 
-      // Apply ride force at axle anchor along chassis-up.
-      const F = result.chassisRideForce;
-      this.body.addForceAtPoint(
-        { x: up.x * F, y: up.y * F, z: up.z * F },
-        anchorWorld,
-        true,
-      );
+      // Per-wheel-end ride forces. Compression is read directly from
+      // each wheel's raycast (capped at bumpMax to mirror the axle's
+      // travel limit). Damping scales with engagement so a wheel just
+      // kissing ground doesn't apply a parachute force.
+      const sides: Array<{ wheel: WheelKinematic; localX: number; world: Vec3 }> = [
+        { wheel: wL, localX: -ag.trackHalf, world: leftWorld },
+        { wheel: wR, localX: +ag.trackHalf, world: rightWorld },
+      ];
+      for (const side of sides) {
+        const w = side.wheel;
+        if (!w.contact) continue;
+        const comp = Math.min(ag.bumpMax, Math.max(0, w.contactDepth));
+        if (comp <= 0) continue;
+        // Chassis vertical velocity AT this wheel-end (world frame).
+        const armX = side.world.x - t.x;
+        const armY = side.world.y - t.y;
+        const armZ = side.world.z - t.z;
+        const vpX = lv.x + av.y * armZ - av.z * armY;
+        const vpY = lv.y + av.z * armX - av.x * armZ;
+        const vpZ = lv.z + av.x * armY - av.y * armX;
+        const vertVel = vpX * up.x + vpY * up.y + vpZ * up.z;
+        const engagement = Math.min(1, comp / ag.suspensionRestLength);
+        // Per-wheel-end stiffness is HALF the axle's total because both
+        // wheels share the load (parallel springs sum to k_total).
+        const F = 0.5 * ag.rideStiffness * comp
+                - 0.5 * ag.rideDamping * engagement * vertVel;
+        this.body.addForceAtPoint(
+          { x: up.x * F, y: up.y * F, z: up.z * F },
+          side.world,
+          true,
+        );
+      }
 
-      // Roll torque dump when articulation is clamped.
+      // Roll torque dump when terrain demands more articulation than the
+      // axle can absorb. Below the cap the per-wheel-end forces above
+      // already provide the correct chassis-axle coupling; past the cap
+      // the axle has bottomed against its mechanical stop and the
+      // surplus has to lever the chassis itself - that's the body-lean-
+      // over-a-rock behaviour.
       if (Math.abs(result.chassisRollTorque) > 1e-6) {
         const tq = result.chassisRollTorque;
         this.body.addTorque(
