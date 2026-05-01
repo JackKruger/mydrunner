@@ -60,6 +60,27 @@ describe('solid-axle vehicle: settling', () => {
     world.dispose();
   });
 
+  it('does not slowly tip over on flat ground (rollover stability)', () => {
+    // Regression test: previously, ride force was applied at the axle
+    // CENTER (chassis x=0), which gave no roll-restoring torque when
+    // the chassis tipped. Any small roll perturbation grew without
+    // bound. The fix is to apply ride force at each wheel-end (+/-
+    // trackHalf) so the loaded side produces a righting moment.
+    const { world, vehicle } = makeWorld();
+    settle(world, 480);
+    // After 8s of just sitting on flat road, the chassis quaternion's
+    // roll component (rotation about chassis-forward) should be tiny.
+    const r = vehicle.getState().rotation;
+    // Extract roll from quaternion (rotation about world Z when
+    // chassis-forward maps to world +X via initial yaw=0).
+    const roll = Math.atan2(2 * (r.w * r.x + r.y * r.z), 1 - 2 * (r.x * r.x + r.y * r.y));
+    expect(Math.abs(roll)).toBeLessThan(0.1);
+    // And angular velocity is small - chassis isn't actively tipping.
+    const av = vehicle.getState().angVel;
+    expect(Math.hypot(av.x, av.y, av.z)).toBeLessThan(0.2);
+    world.dispose();
+  });
+
   it('reports both axles touching ground after settling on flat-ish terrain', () => {
     const { world, vehicle } = makeWorld();
     settle(world, 240);
