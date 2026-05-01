@@ -64,25 +64,35 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const freq = 1 / 40;
   const detailFreq = 1 / 12;
 
+  // Road geometry. The "core" is strictly flat at y=0 so vehicles spawn
+  // and drive on a solid plane regardless of orientation. Outside the
+  // shoulder we ease back into natural terrain.
+  const roadCore = 5;       // |z| < roadCore is exactly flat at y=0
+  const roadShoulder = 8;   // roadCore <= |z| < roadShoulder eases into terrain
+
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
       const x = (c / (n - 1) - 0.5) * size;
       const z = (r / (n - 1) - 0.5) * size;
+      const az = Math.abs(z);
 
       // Base hills.
-      let h = noise(x * freq, z * freq) * 4;
-      // Small detail.
-      h += noiseDetail(x * detailFreq, z * detailFreq) * 0.6;
-      // Gentle valley along z = 0 so there's a low strip with mud.
-      const valley = Math.exp(-(z * z) / (15 * 15)) * 1.2;
-      h -= valley;
+      let hNat = noise(x * freq, z * freq) * 4;
+      hNat += noiseDetail(x * detailFreq, z * detailFreq) * 0.6;
+      // Mud valley further from the road.
+      const valley = Math.exp(-((az - roadShoulder) ** 2) / (12 * 12)) * 1.4;
+      if (az > roadShoulder) hNat -= valley;
 
-      // Flatten the road strip along x.
-      const roadHalfWidth = 3;
-      const onRoadX = Math.abs(z) < roadHalfWidth + 1;
-      if (onRoadX) {
-        const t = Math.max(0, 1 - Math.abs(z) / (roadHalfWidth + 1));
-        h = h * (1 - t) + 0 * t; // flatten toward 0 height
+      let h: number;
+      if (az < roadCore) {
+        h = 0;
+      } else if (az < roadShoulder) {
+        // Smooth ease from 0 to natural over the shoulder band.
+        const t = (az - roadCore) / (roadShoulder - roadCore);
+        const ease = t * t * (3 - 2 * t); // smoothstep
+        h = hNat * ease;
+      } else {
+        h = hNat;
       }
 
       const idx = r * n + c;
@@ -90,11 +100,13 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
 
       // Surface assignment.
       let surf: Surface = Surface.Dirt;
-      if (Math.abs(z) < roadHalfWidth) {
+      if (az < roadCore) {
         surf = Surface.Road;
-      } else if (h < -0.6) {
+      } else if (az < roadShoulder) {
+        surf = Surface.Dirt;
+      } else if (h < -0.8) {
         surf = Surface.DeepMud;
-      } else if (h < -0.1) {
+      } else if (h < -0.2) {
         surf = Surface.Mud;
       }
       surfaces[idx] = surf;

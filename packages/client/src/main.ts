@@ -19,6 +19,8 @@ const app = document.getElementById('app')!;
 
 initInput();
 const scene = new Scene(app);
+// Expose scene + prediction for E2E diagnostics.
+(window as unknown as { __scene: unknown }).__scene = scene;
 
 let localId: PlayerId | null = null;
 let connected = false;
@@ -42,6 +44,7 @@ async function start(): Promise<void> {
       // Build local prediction world with the same seed + spawn.
       prediction?.dispose();
       prediction = new Prediction(terrain.seed, terrain.size, terrain.resolution, spawn);
+      (window as unknown as { __prediction: unknown }).__prediction = prediction;
       scene.markLocalOverridden();
     },
     onSnapshot(snap, recvAtMs) {

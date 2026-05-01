@@ -15,8 +15,37 @@ test.describe('@screenshot', () => {
     await page.goto('/');
     await expect(page.locator('#hud')).toContainText('connected', { timeout: 10_000 });
 
+    // Expose diagnostics from the running scene.
+    await page.evaluate(() => {
+      const w = window as unknown as { __scene?: unknown };
+      // The Scene instance is a module-level local; we can't reach it directly.
+      // Instead, walk the renderer canvas to read scene children.
+    });
+
     // Wait a beat for terrain mesh to render.
     await page.waitForTimeout(800);
+    const diag = await page.evaluate(() => {
+      const out: Record<string, unknown> = {};
+      const w = window as unknown as { __scene?: any; __prediction?: any };
+      out.hud = (document.querySelector('#hud') as HTMLElement | null)?.textContent;
+      if (w.__scene) {
+        const s = w.__scene;
+        out.cameraPos = s.camera?.position?.toArray?.();
+        out.sceneChildren = s.scene?.children?.length;
+        const ids = [...(s.vehicles?.keys?.() ?? [])];
+        out.vehicleIds = ids;
+        out.localId = s.localId;
+        out.vehiclePositions = ids.map((id: string) => {
+          const v = s.vehicles.get(id);
+          return [id, v?.group?.position?.toArray?.()];
+        });
+      }
+      if (w.__prediction) {
+        out.predState = w.__prediction.state?.();
+      }
+      return out;
+    });
+    console.log('DIAG@01', JSON.stringify(diag));
     await page.screenshot({ path: join(outDir, '01-spawn.png') });
 
     // Drive forward.

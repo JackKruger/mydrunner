@@ -42,10 +42,19 @@ export class World {
   private buildTerrain(t: TerrainData): { body: RAPIER.RigidBody; collider: RAPIER.Collider } {
     const n = t.resolution;
     const scale = { x: t.size, y: 1, z: t.size };
+    // Rapier's heightfield expects a column-major (i.e. transposed) matrix:
+    // index = col * nrows + row, where row indexes Z and col indexes X.
+    // Our generator stores row-major, so transpose here.
+    const transposed = new Float32Array(n * n);
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        transposed[c * n + r] = t.heights[r * n + c]!;
+      }
+    }
     const colliderDesc = RAPIER.ColliderDesc.heightfield(
       n - 1,
       n - 1,
-      t.heights,
+      transposed,
       scale,
     ).setFriction(1.0);
     const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0);

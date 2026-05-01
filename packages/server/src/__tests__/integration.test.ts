@@ -74,8 +74,10 @@ describe('server integration', () => {
     // Ticks should be advancing.
     expect(snaps[snaps.length - 1]!.tick).toBeGreaterThan(snaps[0]!.tick);
 
-    // Send some throttle inputs and verify the vehicle's z changes.
-    const z0 = snaps[snaps.length - 1]!.players[0]!.vehicle.position.z;
+    // Send throttle inputs and verify the vehicle moves. Cars now spawn
+    // facing +X (along the road), so check overall horizontal displacement
+    // rather than a specific axis.
+    const p0 = snaps[snaps.length - 1]!.players[0]!.vehicle.position;
     for (let s = 1; s <= 60; s++) {
       client.send(Net.encode({ t: 'input', input: { ...EMPTY_INPUT, seq: s, throttle: 1 } }));
       await sleep(16);
@@ -83,7 +85,9 @@ describe('server integration', () => {
     await sleep(200);
     const last = snaps[snaps.length - 1]!.players[0]!;
     expect(last.lastAckSeq).toBeGreaterThan(0);
-    expect(Math.abs(last.vehicle.position.z - z0)).toBeGreaterThan(0.1);
+    const dx = last.vehicle.position.x - p0.x;
+    const dz = last.vehicle.position.z - p0.z;
+    expect(Math.hypot(dx, dz)).toBeGreaterThan(0.1);
 
     client.close();
     await sleep(50);
