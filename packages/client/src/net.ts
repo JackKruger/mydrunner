@@ -16,10 +16,12 @@ export class NetClient {
   private events: NetEvents;
   private url: string;
   private name: string;
+  private color: number;
 
-  constructor(url: string, name: string, events: NetEvents) {
+  constructor(url: string, name: string, color: number, events: NetEvents) {
     this.url = url;
     this.name = name;
+    this.color = color;
     this.events = events;
   }
 
@@ -27,7 +29,7 @@ export class NetClient {
     const ws = new WebSocket(this.url);
     this.ws = ws;
     ws.addEventListener('open', () => {
-      ws.send(Net.encode({ t: 'hello', name: this.name }));
+      ws.send(Net.encode({ t: 'hello', name: this.name, color: this.color }));
       this.events.onOpen();
     });
     ws.addEventListener('message', (ev) => {

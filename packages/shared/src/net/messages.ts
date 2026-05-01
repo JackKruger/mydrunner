@@ -2,7 +2,7 @@ import type { PlayerId, PlayerInput, WorldSnapshot } from '../types.js';
 
 // Client -> Server
 export type ClientMessage =
-  | { t: 'hello'; name: string }
+  | { t: 'hello'; name: string; color?: number }
   | { t: 'input'; input: PlayerInput }
   | { t: 'ping'; clientTimeMs: number };
 

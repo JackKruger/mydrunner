@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { VEHICLE, Physics, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
 import { RENDER_DELAY_MS } from './net.js';
 import { TerrainMesh } from './terrain.js';
-import { buildCarMesh, colorHash } from './carMesh.js';
+import { buildCarMesh } from './carMesh.js';
 import { createNameplate, disposeNameplate } from './nameplate.js';
 import { ParticleSystem } from './particles.js';
 import { Obstacles } from './obstacles.js';
@@ -34,6 +34,7 @@ export class Scene {
   private buffer: SnapshotEntry[] = [];
   private vehicles = new Map<PlayerId, VehicleVisual>();
   private localId: PlayerId | null = null;
+  private localColor: number = 0xd9531e;
   private cameraTarget = new THREE.Vector3();
   private cameraYaw = 0;
   private terrain: TerrainMesh | null = null;
@@ -92,8 +93,9 @@ export class Scene {
     });
   }
 
-  setLocalPlayer(id: PlayerId): void {
+  setLocalPlayer(id: PlayerId, color: number): void {
     this.localId = id;
+    this.localColor = color;
   }
 
   setTerrain(seed: number, size: number, resolution: number): void {
@@ -147,10 +149,10 @@ export class Scene {
     return null;
   }
 
-  private ensureVehicle(id: PlayerId, isLocal: boolean): VehicleVisual {
+  private ensureVehicle(id: PlayerId, color: number): VehicleVisual {
     let v = this.vehicles.get(id);
     if (v) return v;
-    const built = buildCarMesh(isLocal, colorHash(id));
+    const built = buildCarMesh(color);
     this.scene.add(built.group);
     v = {
       group: built.group,
@@ -196,7 +198,7 @@ export class Scene {
    *  prediction so the local truck doesn't lag the snapshot buffer. */
   setLocalVehiclePose(pos: { x: number; y: number; z: number }, rot: { x: number; y: number; z: number; w: number }, wheels: { steer: number; spin: number; suspensionLength: number }[]): void {
     if (!this.localId) return;
-    const v = this.ensureVehicle(this.localId, true);
+    const v = this.ensureVehicle(this.localId, this.localColor);
     v.group.position.set(pos.x, pos.y, pos.z);
     v.group.quaternion.set(rot.x, rot.y, rot.z, rot.w);
     for (let i = 0; i < 4; i++) {
@@ -240,7 +242,8 @@ export class Scene {
         const pb = bMap.get(pa.id) ?? pa;
         present.add(pa.id);
         const isLocal = pa.id === this.localId;
-        const vis = this.ensureVehicle(pa.id, isLocal);
+        const color = isLocal ? this.localColor : pa.color;
+        const vis = this.ensureVehicle(pa.id, color);
         this.setNameplate(vis, pa.name, isLocal);
 
         // Local vehicle is overridden by setLocalVehiclePose() once prediction
