@@ -44,6 +44,17 @@ export class Vehicle {
       .setDensity(VEHICLE.mass / (8 * ext.x * ext.y * ext.z))
       .setFriction(0.3);
     this.chassis = world.world.createCollider(colDesc, this.body);
+    // Pull the principal moments toward a low CoM so the chassis feels
+    // bottom-heavy and resists rollovers even with a tall visual cabin.
+    // Mass is preserved; we just override the inertia tensor to be more
+    // resistant to roll.
+    this.body.setAdditionalMassProperties(
+      0,
+      { x: 0, y: -ext.y * 0.6, z: 0 },
+      { x: VEHICLE.mass * 0.6, y: VEHICLE.mass * 0.5, z: VEHICLE.mass * 0.6 },
+      { x: 0, y: 0, z: 0, w: 1 },
+      true,
+    );
 
     this.controller = world.world.createVehicleController(this.body);
     const suspDir = { x: 0, y: -1, z: 0 };
@@ -104,8 +115,9 @@ export class Vehicle {
     this.controller.setWheelSteering(0, this.currentSteer);
     this.controller.setWheelSteering(1, this.currentSteer);
 
-    // Per-wheel surface lookup. The rear wheels are driven, so mud on the
-    // rear axle slows acceleration; mud on the fronts mostly affects turning.
+    // Per-wheel surface lookup. Front wheels intentionally have less grip
+    // (frontGripMult) so the car understeers and slides under hard turns
+    // rather than pivoting fast enough to roll over.
     for (let i = 0; i < 4; i++) {
       const wp = this.wheelWorldPos(i);
       const surf = sampleSurface(this.world.terrain, wp.x, wp.z);
@@ -118,9 +130,9 @@ export class Vehicle {
             : surf === Surface.Mud
               ? SURFACE_FRICTION.mud
               : SURFACE_FRICTION.deepMud;
-      // Friction slip is the Pacejka-style peak grip in Rapier's vehicle.
-      // Lower = slips more = less torque transfer.
-      this.controller.setWheelFrictionSlip(i, 2.0 * grip);
+      const isFront = i < 2;
+      const axleMult = isFront ? VEHICLE.frontGripMult : VEHICLE.rearGripMult;
+      this.controller.setWheelFrictionSlip(i, 2.0 * grip * axleMult);
     }
 
     // 4x4 / AWD. Each wheel gets its share of engine torque, scaled by that

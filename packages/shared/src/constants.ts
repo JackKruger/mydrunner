@@ -21,19 +21,29 @@ export const VEHICLE = {
   suspensionCompression: 0.85,
   maxSuspensionForce: 6000,
   maxSuspensionTravel: 0.4,
-  // Wheel positions relative to chassis center.
+  // Wheel positions relative to chassis center. Track widened slightly
+  // for stability; wheels sit further below the chassis to lower the
+  // effective CoM.
   wheelPositions: [
-    { x: -0.78, y: -0.25, z: 1.3 },  // FL
-    { x: 0.78, y: -0.25, z: 1.3 },   // FR
-    { x: -0.78, y: -0.25, z: -1.3 }, // RL
-    { x: 0.78, y: -0.25, z: -1.3 },  // RR
+    { x: -0.92, y: -0.4, z: 1.3 },  // FL
+    { x: 0.92, y: -0.4, z: 1.3 },   // FR
+    { x: -0.92, y: -0.4, z: -1.3 }, // RL
+    { x: 0.92, y: -0.4, z: -1.3 },  // RR
   ],
   // AWD torque split front:rear. 0.5/0.5 for symmetric 4x4 feel.
-  engineForce: 4200,
+  engineForce: 3200,
   driveSplit: { front: 0.5, rear: 0.5 },
-  brakeForce: 2800,
-  maxSteer: 0.55, // radians
-  steerSpeed: 3.0, // rad/s response
+  brakeForce: 2500,
+  // Slightly less aggressive steering: harder to flip at speed, still
+  // tight enough to navigate. Steer ramp-time also slowed.
+  maxSteer: 0.42,
+  steerSpeed: 2.2,
+  // Wheel friction multipliers - front slightly less grippy than rear so
+  // the car understeers (slides front-end-out) instead of pivoting hard
+  // enough to flip on most turns. Rollover is still possible if you take
+  // a slope at speed or hit a rut sideways - which is the point.
+  frontGripMult: 0.9,
+  rearGripMult: 1.0,
 } as const;
 
 // Mud / surface friction. Higher = more grip.
