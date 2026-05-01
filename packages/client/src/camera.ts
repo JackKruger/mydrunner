@@ -30,6 +30,13 @@ export class ChaseCamera {
   yaw = 0;
   pitch = 0;
   private yawVel = 0;
+  /** User-input camera offsets (touch / mouse drag). Add to chassis-derived
+   *  yaw / pitch when the chase camera is rendered, then spring back to
+   *  zero after the user releases. Negative pitch = look up. */
+  private userYaw = 0;
+  private userPitch = 0;
+  /** Set while a drag is active so spring-back doesn't fight the drag. */
+  private dragging = false;
   private lastUpdateMs = 0;
   private terrain: TerrainSampler | null = null;
 
@@ -49,6 +56,26 @@ export class ChaseCamera {
 
   cycleMode(): void {
     this.mode = this.mode === 'chase' ? 'hood' : this.mode === 'hood' ? 'free' : 'chase';
+  }
+
+  /** Begin a user drag - while active, drag offsets accumulate without
+   *  decaying. */
+  beginDrag(): void {
+    this.dragging = true;
+  }
+
+  /** Add to the user-driven yaw / pitch offsets. dx and dy are normalised
+   *  to radian deltas inside the caller. */
+  drag(dyaw: number, dpitch: number): void {
+    this.userYaw += dyaw;
+    this.userPitch += dpitch;
+    // Clamp pitch so the player can't flip the camera fully upside down.
+    this.userPitch = Math.max(-Math.PI / 2.4, Math.min(Math.PI / 2.4, this.userPitch));
+  }
+
+  /** Release the drag - spring-back kicks in next apply(). */
+  endDrag(): void {
+    this.dragging = false;
   }
 
   /** Soft-track a chassis pose. Position is lerped; yaw uses an
@@ -89,16 +116,33 @@ export class ChaseCamera {
   /** Apply the chosen mode to the underlying THREE camera. Call once per
    *  render frame before THREE.WebGLRenderer.render. */
   apply(): void {
+    // Spring-back user offsets toward zero unless a drag is in flight.
+    // Exponential decay - simple and robust against frame-time variance.
+    if (!this.dragging) {
+      this.userYaw *= 0.88;
+      this.userPitch *= 0.88;
+      if (Math.abs(this.userYaw) < 0.001) this.userYaw = 0;
+      if (Math.abs(this.userPitch) < 0.001) this.userPitch = 0;
+    }
     if (this.mode === 'chase') this.applyChase();
     else if (this.mode === 'hood') this.applyHood();
     else this.applyFree();
   }
 
   private applyChase(): void {
-    // Behind-and-above offset, yawed with the chassis.
-    const sinY = Math.sin(this.yaw);
-    const cosY = Math.cos(this.yaw);
-    _desired.set(this.target.x - sinY * 8, this.target.y + 3, this.target.z - cosY * 8);
+    // Behind-and-above offset, yawed with the chassis + the user's
+    // drag-yaw. User pitch tilts the camera vertically by raising or
+    // lowering its Y above the target.
+    const effYaw = this.yaw + this.userYaw;
+    const sinY = Math.sin(effYaw);
+    const cosY = Math.cos(effYaw);
+    const distance = 8;
+    const heightLift = distance * Math.sin(-this.userPitch);
+    _desired.set(
+      this.target.x - sinY * distance * Math.cos(this.userPitch),
+      this.target.y + 3 + heightLift,
+      this.target.z - cosY * distance * Math.cos(this.userPitch),
+    );
     // Lateral swing: when yaw is sweeping (cornering), push sideways
     // opposite the sweep so the camera ends up on the outside of the
     // turn. Negative sign because positive yawVel = turning right and
@@ -114,14 +158,13 @@ export class ChaseCamera {
     this.camera.position.copy(_desired);
     // Project the lookAt point ahead of the car along its yawed heading
     // and lift/drop its height by tan(pitch) * lookAhead - the view
-    // angles up driving uphill and down driving downhill. Pitch is
-    // clamped because tan blows up near vertical.
+    // angles up driving uphill and down driving downhill.
     const lookAhead = 7;
     const clampedPitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, this.pitch));
     _lookTarget.set(
-      this.target.x + sinY * lookAhead,
+      this.target.x + Math.sin(this.yaw) * lookAhead,
       this.target.y + 0.5 + lookAhead * Math.tan(clampedPitch),
-      this.target.z + cosY * lookAhead,
+      this.target.z + Math.cos(this.yaw) * lookAhead,
     );
     this.camera.lookAt(_lookTarget);
   }

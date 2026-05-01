@@ -175,6 +175,44 @@ async function start(): Promise<void> {
   });
   onTouchEdge('cam', () => scene.cycleCameraMode());
 
+  // Pointer-drag camera: drag anywhere on the canvas (i.e. not on a UI
+  // element) to orbit yaw / pitch around the car. Releasing springs the
+  // camera back to the chase pose. Works for both touch and mouse via
+  // pointer events.
+  const canvas = scene.renderer.domElement;
+  let dragId: number | null = null;
+  let lastX = 0;
+  let lastY = 0;
+  // Tunable: pixels of drag → radians of camera motion.
+  const PX_PER_RAD = 220;
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.target !== canvas) return;
+    e.preventDefault();
+    dragId = e.pointerId;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    canvas.setPointerCapture(e.pointerId);
+    scene.cameraDragBegin();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== dragId) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    // Drag right → camera orbits right (yaw +); drag down → camera
+    // looks down (pitch -, since negative userPitch = look up in our
+    // convention).
+    scene.cameraDrag(dx / PX_PER_RAD, -dy / PX_PER_RAD);
+  });
+  const endDrag = (e: PointerEvent): void => {
+    if (e.pointerId !== dragId) return;
+    dragId = null;
+    scene.cameraDragEnd();
+  };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+
   // T opens the chat input. The chat module's own keydown handler
   // catches Enter / Escape to submit / cancel. Mobile users use the
   // on-screen "chat" button which lives in the touch UI aux row.

@@ -141,6 +141,12 @@ export class Scene {
     this.cam.cycleMode();
   }
 
+  /** Forward pointer-drag input to the chase camera. Drag accumulates
+   *  yaw/pitch offsets; on release the camera springs back. */
+  cameraDragBegin(): void { this.cam.beginDrag(); }
+  cameraDrag(dyaw: number, dpitch: number): void { this.cam.drag(dyaw, dpitch); }
+  cameraDragEnd(): void { this.cam.endDrag(); }
+
   pushSnapshot(snap: WorldSnapshot, recvAtMs: number): void {
     this.buffer.push({ snap, recvAtMs });
     const cutoff = recvAtMs - 1000;
