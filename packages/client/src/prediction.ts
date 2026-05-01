@@ -45,6 +45,12 @@ export class Prediction {
   private prev = {
     pos: { x: 0, y: 0, z: 0 },
     rot: { x: 0, y: 0, z: 0, w: 1 },
+    wheels: [
+      { steer: 0, spin: 0, suspensionLength: 0 },
+      { steer: 0, spin: 0, suspensionLength: 0 },
+      { steer: 0, spin: 0, suspensionLength: 0 },
+      { steer: 0, spin: 0, suspensionLength: 0 },
+    ],
   };
 
   constructor(seed: number, size: number, resolution: number, spawn: { position: { x: number; y: number; z: number }; yaw?: number }) {
@@ -81,6 +87,19 @@ export class Prediction {
     const r = this.vehicle.body.rotation();
     this.prev.rot.x = r.x; this.prev.rot.y = r.y;
     this.prev.rot.z = r.z; this.prev.rot.w = r.w;
+    // Wheel state too - without this, wheel spin / suspension advance
+    // only on step boundaries, which makes the wheels visibly tick at
+    // the physics rate instead of moving smoothly with the chassis.
+    const s = this.vehicle.getState();
+    for (let i = 0; i < 4; i++) {
+      const w = s.wheels[i];
+      const pw = this.prev.wheels[i]!;
+      if (w) {
+        pw.steer = w.steer;
+        pw.spin = w.spin;
+        pw.suspensionLength = w.suspensionLength;
+      }
+    }
   }
 
   /** Frame-time advance is a NO-OP. Prediction steps exactly once per
@@ -174,7 +193,14 @@ export class Prediction {
         z: p.z + (s.position.z - p.z) * a + this.visualOffset.z,
       },
       rotation: { x: rx, y: ry, z: rz, w: rw },
-      wheels: s.wheels.map((w) => ({ steer: w.steer, spin: w.spin, suspensionLength: w.suspensionLength })),
+      wheels: s.wheels.map((w, i) => {
+        const pw = this.prev.wheels[i]!;
+        return {
+          steer: pw.steer + (w.steer - pw.steer) * a,
+          spin: pw.spin + (w.spin - pw.spin) * a,
+          suspensionLength: pw.suspensionLength + (w.suspensionLength - pw.suspensionLength) * a,
+        };
+      }),
     };
   }
 

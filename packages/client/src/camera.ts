@@ -85,20 +85,30 @@ export class ChaseCamera {
     pos: { x: number; y: number; z: number },
     rot: { x: number; y: number; z: number; w: number },
   ): void {
-    this.target.lerp(_vec.set(pos.x, pos.y, pos.z), 0.4);
+    const nowMs = performance.now();
+    const dt = this.lastUpdateMs ? Math.min(0.05, (nowMs - this.lastUpdateMs) / 1000) : 1 / 60;
+    this.lastUpdateMs = nowMs;
+    // dt-aware smoothing on the camera target. The fixed-0.4-per-frame
+    // version was frame-rate dependent: at variable fps the chassis
+    // micro-bobs would translate into visible camera bounce. Now uses
+    // 1 - exp(-rate * dt) so the smoothing constant is the same in
+    // real time regardless of how often this is called.
+    const POS_RATE = 24; // half-life ~29ms
+    const tPos = 1 - Math.exp(-POS_RATE * dt);
+    this.target.lerp(_vec.set(pos.x, pos.y, pos.z), tPos);
     // Forward vector (local +Z) rotated by the chassis quaternion.
     const fX = 2 * (rot.x * rot.z + rot.w * rot.y);
     const fY = 2 * (rot.y * rot.z - rot.w * rot.x);
     const fZ = 1 - 2 * (rot.x * rot.x + rot.y * rot.y);
     const targetPitch = Math.asin(Math.max(-1, Math.min(1, fY)));
-    this.pitch += (targetPitch - this.pitch) * 0.18;
+    // Pitch lerp: same dt-aware treatment.
+    const PITCH_RATE = 12;
+    const tPitch = 1 - Math.exp(-PITCH_RATE * dt);
+    this.pitch += (targetPitch - this.pitch) * tPitch;
     const targetYaw = Math.atan2(fX, fZ);
     let dy = targetYaw - this.yaw;
     if (dy > Math.PI) dy -= 2 * Math.PI;
     if (dy < -Math.PI) dy += 2 * Math.PI;
-    const nowMs = performance.now();
-    const dt = this.lastUpdateMs ? Math.min(0.05, (nowMs - this.lastUpdateMs) / 1000) : 1 / 60;
-    this.lastUpdateMs = nowMs;
     const accel = CAMERA.chaseYawStiffness * dy - CAMERA.chaseYawDamping * this.yawVel;
     this.yawVel += accel * dt;
     this.yaw += this.yawVel * dt;
