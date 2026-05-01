@@ -1,8 +1,8 @@
-import type { PlayerId, PlayerInput, WorldSnapshot } from '../types.js';
+import type { CarKind, PlayerId, PlayerInput, WorldSnapshot } from '../types.js';
 
 // Client -> Server
 export type ClientMessage =
-  | { t: 'hello'; name: string }
+  | { t: 'hello'; name: string; carKind?: CarKind }
   | { t: 'input'; input: PlayerInput }
   | { t: 'ping'; clientTimeMs: number };
 

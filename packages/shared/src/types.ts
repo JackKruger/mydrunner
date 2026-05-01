@@ -13,6 +13,19 @@ export interface Quat {
 
 export type PlayerId = string;
 
+/** Vehicle visual variant. Physics is identical across kinds (chassis
+ *  extents, mass, drivetrain are shared) - this only switches the mesh
+ *  rendered for the player. Add a kind by extending the union here, the
+ *  hello/snapshot wire, the server normaliser, and the client mesh
+ *  registry in carMesh/. */
+export type CarKind = 'patrol' | 'hilux';
+
+export const DEFAULT_CAR_KIND: CarKind = 'patrol';
+
+export function normalizeCarKind(v: unknown): CarKind {
+  return v === 'hilux' ? 'hilux' : 'patrol';
+}
+
 export interface PlayerInput {
   // Sequence number - lets the server ack inputs for client reconciliation.
   seq: number;
@@ -59,6 +72,7 @@ export interface WheelState {
 export interface PlayerSnapshot {
   id: PlayerId;
   name: string;
+  carKind: CarKind;
   vehicle: VehicleState;
   // Last input seq the server has consumed for this player.
   lastAckSeq: number;

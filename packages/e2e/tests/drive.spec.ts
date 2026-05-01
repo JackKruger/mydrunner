@@ -46,7 +46,7 @@ function dot(a: { x: number; z: number }, b: { x: number; z: number }): number {
 
 test.describe('driving', () => {
   test('W drives the car forward', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?auto=1');
     await waitConnected(page);
     await page.waitForTimeout(800);
     const start = await readDiag(page);
@@ -66,7 +66,7 @@ test.describe('driving', () => {
   });
 
   test('S drives the car backward', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?auto=1');
     await waitConnected(page);
     await page.waitForTimeout(800);
     const start = await readDiag(page);
@@ -84,7 +84,7 @@ test.describe('driving', () => {
   });
 
   test('W after rolling backward eventually moves forward again', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?auto=1');
     await waitConnected(page);
     await page.waitForTimeout(800);
     const start = await readDiag(page);
@@ -117,7 +117,7 @@ test.describe('driving', () => {
   });
 
   test('drives at least 30m down the road in 8s (A->B navigation)', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?auto=1');
     await waitConnected(page);
     await page.waitForTimeout(800);
     const start = await readDiag(page);
@@ -139,7 +139,7 @@ test.describe('driving', () => {
   });
 
   test('drives up a moderate hill (climb test)', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?auto=1');
     await waitConnected(page);
     await page.waitForTimeout(800);
 
@@ -171,7 +171,7 @@ test.describe('driving', () => {
     // wheel tumble around a world axis when both rolling (spin) and
     // turning (steer) were active. This test reads the actual mesh's
     // world quaternion and watches for jitter while driving + steering.
-    await page.goto('/');
+    await page.goto('/?auto=1');
     await waitConnected(page);
     await page.waitForTimeout(800);
 
@@ -215,7 +215,7 @@ test.describe('driving', () => {
   });
 
   test('holding A produces a stable left steer angle (no flicker)', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?auto=1');
     await waitConnected(page);
     await page.waitForTimeout(800);
 

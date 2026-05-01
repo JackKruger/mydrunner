@@ -14,11 +14,13 @@ import {
   type PlayerInput,
   type PlayerSnapshot,
   type WorldSnapshot,
+  type CarKind,
 } from '@mydrunner/shared';
 
 export interface PlayerHandle {
   id: PlayerId;
   name: string;
+  carKind: CarKind;
   send(msg: string): void;
 }
 
@@ -179,6 +181,7 @@ export class Room {
       players.push({
         id: p.handle.id,
         name: p.handle.name,
+        carKind: p.handle.carKind,
         vehicle: p.vehicle.getState(),
         lastAckSeq: p.lastAckSeq,
       });

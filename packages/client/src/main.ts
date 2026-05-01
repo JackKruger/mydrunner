@@ -4,6 +4,7 @@
 import { Physics, TICK_RATE, type PlayerId } from '@mydrunner/shared';
 
 import { EngineAudio } from './engineAudio.js';
+import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './joinScreen.js';
 
 const SURFACE_LABELS: Record<number, string> = {
   [Physics.Surface.Road]: 'road',
@@ -69,13 +70,32 @@ async function start(): Promise<void> {
   // Rapier WASM init - prediction depends on the same physics as the server.
   await Physics.initRapier();
 
-  const net = new NetClient(getServerUrl(), `player-${Math.floor(Math.random() * 1000)}`, {
+  // First-load name + car picker. Skipped on subsequent visits via
+  // localStorage. URL param ?auto=1 skips the picker too (used by e2e
+  // tests; harmless in normal use).
+  const params = new URLSearchParams(location.search);
+  const auto = params.get('auto') === '1';
+  const saved = loadSavedJoin();
+  let choice: JoinChoice;
+  if (saved) {
+    choice = saved;
+  } else if (auto) {
+    choice = {
+      name: params.get('name') || `player-${Math.floor(Math.random() * 1000)}`,
+      carKind: params.get('car') === 'hilux' ? 'hilux' : 'patrol',
+    };
+  } else {
+    choice = await showJoinScreen({});
+    saveJoin(choice);
+  }
+
+  const net = new NetClient(getServerUrl(), choice.name, choice.carKind, {
     onOpen() {
       connected = true;
     },
     onWelcome(id, _serverTimeMs, terrain, spawn) {
       localId = id;
-      scene.setLocalPlayer(id);
+      scene.setLocalPlayer(id, choice.carKind);
       scene.setTerrain(terrain.seed, terrain.size, terrain.resolution);
       // Cache terrain data for surface HUD lookups (cheap - we already
       // generate it for the prediction sim).

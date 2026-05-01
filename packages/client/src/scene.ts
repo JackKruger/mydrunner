@@ -3,7 +3,15 @@
 // the past so we always have two snapshots to interpolate between.
 
 import * as THREE from 'three';
-import { VEHICLE, CAMERA, Physics, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
+import {
+  VEHICLE,
+  CAMERA,
+  Physics,
+  DEFAULT_CAR_KIND,
+  type CarKind,
+  type WorldSnapshot,
+  type PlayerId,
+} from '@mydrunner/shared';
 import { RENDER_DELAY_MS } from './net.js';
 import { TerrainMesh } from './terrain.js';
 import { buildCarMesh, colorHash } from './carMesh.js';
@@ -21,6 +29,7 @@ interface VehicleVisual {
   wheels: THREE.Object3D[];
   nameplate: THREE.Sprite | null;
   nameplateText: string;
+  carKind: CarKind;
   /** Last known wheel spin per wheel - used to derive spin rate. */
   lastSpin: number[];
   /** Tracking time of the previous snapshot used to compute spin rate. */
@@ -34,6 +43,7 @@ export class Scene {
   private buffer: SnapshotEntry[] = [];
   private vehicles = new Map<PlayerId, VehicleVisual>();
   private localId: PlayerId | null = null;
+  private localCarKind: CarKind = DEFAULT_CAR_KIND;
   private cameraTarget = new THREE.Vector3();
   private cameraYaw = 0;
   /** Spring-damper velocity of cameraYaw - drives both the catch-up motion
@@ -96,8 +106,9 @@ export class Scene {
     });
   }
 
-  setLocalPlayer(id: PlayerId): void {
+  setLocalPlayer(id: PlayerId, carKind: CarKind = DEFAULT_CAR_KIND): void {
     this.localId = id;
+    this.localCarKind = carKind;
   }
 
   setTerrain(seed: number, size: number, resolution: number): void {
@@ -151,16 +162,27 @@ export class Scene {
     return null;
   }
 
-  private ensureVehicle(id: PlayerId, isLocal: boolean): VehicleVisual {
+  private ensureVehicle(id: PlayerId, isLocal: boolean, kind: CarKind): VehicleVisual {
     let v = this.vehicles.get(id);
-    if (v) return v;
-    const built = buildCarMesh(isLocal, colorHash(id));
+    if (v && v.carKind === kind) return v;
+    if (v) {
+      // Player swapped car kind mid-session - rebuild the mesh under the
+      // same id so the visual matches snapshot state. Keep nameplate state.
+      this.scene.remove(v.group);
+      if (v.nameplate) {
+        v.group.remove(v.nameplate);
+        disposeNameplate(v.nameplate);
+      }
+      this.vehicles.delete(id);
+    }
+    const built = buildCarMesh(kind, isLocal, colorHash(id));
     this.scene.add(built.group);
     v = {
       group: built.group,
       wheels: built.wheels,
       nameplate: null,
       nameplateText: '',
+      carKind: kind,
       lastSpin: [0, 0, 0, 0],
       lastSpinAtMs: 0,
     };
@@ -200,7 +222,7 @@ export class Scene {
    *  prediction so the local truck doesn't lag the snapshot buffer. */
   setLocalVehiclePose(pos: { x: number; y: number; z: number }, rot: { x: number; y: number; z: number; w: number }, wheels: { steer: number; spin: number; suspensionLength: number }[]): void {
     if (!this.localId) return;
-    const v = this.ensureVehicle(this.localId, true);
+    const v = this.ensureVehicle(this.localId, true, this.localCarKind);
     v.group.position.set(pos.x, pos.y, pos.z);
     v.group.quaternion.set(rot.x, rot.y, rot.z, rot.w);
     for (let i = 0; i < 4; i++) {
@@ -252,7 +274,7 @@ export class Scene {
         const pb = bMap.get(pa.id) ?? pa;
         present.add(pa.id);
         const isLocal = pa.id === this.localId;
-        const vis = this.ensureVehicle(pa.id, isLocal);
+        const vis = this.ensureVehicle(pa.id, isLocal, pa.carKind);
         this.setNameplate(vis, pa.name, isLocal);
 
         // Local vehicle is overridden by setLocalVehiclePose() once prediction

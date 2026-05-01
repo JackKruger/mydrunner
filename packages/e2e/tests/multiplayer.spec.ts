@@ -64,8 +64,8 @@ test('two clients see each other in snapshots', async ({ browser }) => {
 
   const a = await ctxA.newPage();
   const b = await ctxB.newPage();
-  await a.goto('/');
-  await b.goto('/');
+  await a.goto('/?auto=1&name=alice');
+  await b.goto('/?auto=1&name=bob&car=hilux');
 
   // Both connect.
   await expect(a.locator('#hud')).toContainText('connected', { timeout: 10_000 });

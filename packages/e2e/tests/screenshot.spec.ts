@@ -12,7 +12,7 @@ test.describe('@screenshot', () => {
     mkdirSync(outDir, { recursive: true });
 
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.goto('/');
+    await page.goto('/?auto=1');
     await expect(page.locator('#hud')).toContainText('connected', { timeout: 10_000 });
 
     // Expose diagnostics from the running scene.
