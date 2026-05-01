@@ -17,6 +17,7 @@ import { buildCarMesh, colorHash } from './carMesh.js';
 import { createNameplate, disposeNameplate } from './nameplate.js';
 import { ParticleSystem } from './particles.js';
 import { Obstacles } from './obstacles.js';
+import { LandmarkMeshes } from './landmarks.js';
 import { ChaseCamera } from './camera.js';
 import { Sky } from './sky.js';
 
@@ -49,6 +50,7 @@ export class Scene {
   private terrain: TerrainMesh | null = null;
   private terrainPlaceholder: THREE.Mesh | null = null;
   private obstacles: Obstacles | null = null;
+  private landmarks: LandmarkMeshes | null = null;
   private particles: ParticleSystem;
   private sky: Sky;
   private lastFrameTimeMs = 0;
@@ -129,6 +131,12 @@ export class Scene {
     if (this.obstacles) this.scene.remove(this.obstacles.group);
     this.obstacles = new Obstacles(seed, size, resolution);
     this.scene.add(this.obstacles.group);
+    if (this.landmarks) this.scene.remove(this.landmarks.group);
+    // Re-derive the landmark spec deterministically from the same seed
+    // the server used; saves a wire round-trip for static structures.
+    const t = Physics.generateTerrain({ seed, size, resolution });
+    this.landmarks = new LandmarkMeshes(Physics.landmarksFor(t));
+    this.scene.add(this.landmarks.group);
   }
 
   applyRuts(cells: { i: number; dy: number }[]): void {

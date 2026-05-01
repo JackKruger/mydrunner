@@ -6,3 +6,4 @@ export * from './ruts.js';
 export * from './engine.js';
 export * from './tire.js';
 export * from './obstacles.js';
+export * from './landmarks.js';

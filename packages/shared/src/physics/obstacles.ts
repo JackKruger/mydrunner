@@ -11,16 +11,16 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Surface, type TerrainData, worldToTerrainIndex, mountainFor } from './terrain.js';
 
-export type ObstacleKind = 'rock' | 'tree';
+export type ObstacleKind = 'rock' | 'tree' | 'pine';
 
 export interface Obstacle {
   kind: ObstacleKind;
   x: number;
   y: number;
   z: number;
-  /** Sphere radius for rocks; trunk radius for trees. */
+  /** Sphere radius for rocks; trunk radius for trees / pines. */
   size: number;
-  /** Tree trunk height (0 for rocks). */
+  /** Tree / pine trunk height (0 for rocks). */
   height: number;
   /** Random rotation around Y for visual variety. */
   yaw: number;
@@ -138,6 +138,30 @@ export function generateObstacles(
       out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
     }
   }
+  // Pass 4: pine forest. A circular cluster of large pines on the
+  // opposite side of the map from the mountain, far enough from the
+  // road that a player has to deliberately drive into it.
+  const worldSize = terrain.size;
+  const forestCx = -worldSize * 0.28;
+  const forestCz = worldSize * 0.18;
+  const forestR = 36;
+  const pineCount = 50;
+  for (let i = 0; i < pineCount; i++) {
+    // Disc-distribute via sqrt(u) for uniform density.
+    const a = rng() * Math.PI * 2;
+    const r = Math.sqrt(rng()) * forestR;
+    const px = forestCx + Math.cos(a) * r;
+    const pz = forestCz + Math.sin(a) * r;
+    const idx = worldToTerrainIndex(terrain, px, pz);
+    if (idx < 0) continue;
+    const surf = terrain.surfaces[idx];
+    if (surf === Surface.Road) continue;
+    if (surf === Surface.DeepMud) continue;
+    const py = terrain.heights[idx] ?? 0;
+    const trunkRadius = 0.8 + rng() * 0.6; // 0.8..1.4m
+    const height = 14 + rng() * 8;          // 14..22m
+    out.push({ kind: 'pine', x: px, y: py, z: pz, size: trunkRadius, height, yaw: rng() * Math.PI * 2 });
+  }
   return out;
 }
 
@@ -157,7 +181,8 @@ export function spawnObstacleColliders(
       // Rocks sit half-buried for a chunkier look.
       body.setTranslation({ x: o.x, y: o.y + o.size * 0.6, z: o.z }, true);
     } else {
-      // Tree trunk: capsule slightly above ground, half-height = (height - 2*radius) / 2.
+      // Tree / pine trunk: capsule. Same collider shape; pines just
+      // happen to be larger.
       const halfHeight = Math.max(0.1, (o.height - 2 * o.size) / 2);
       colDesc = RAPIER.ColliderDesc.capsule(halfHeight, o.size).setFriction(0.6);
       body.setTranslation(

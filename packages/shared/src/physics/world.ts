@@ -9,6 +9,7 @@ import { GRAVITY_Y } from '../constants.js';
 import { Vehicle, type VehicleSpawn } from './vehicle.js';
 import { generateTerrain, type TerrainData, type TerrainOptions } from './terrain.js';
 import { generateObstacles, spawnObstacleColliders, type Obstacle } from './obstacles.js';
+import { landmarksFor, spawnLandmarkColliders, type Landmarks } from './landmarks.js';
 
 let rapierReady: Promise<void> | null = null;
 export function initRapier(): Promise<void> {
@@ -29,9 +30,11 @@ export class World {
   readonly vehicles = new Map<string, Vehicle>();
   readonly terrain: TerrainData;
   readonly obstacles: Obstacle[];
+  readonly landmarks: Landmarks;
   private terrainBody: RAPIER.RigidBody;
   private terrainCollider: RAPIER.Collider;
   private obstacleBodies: RAPIER.RigidBody[] = [];
+  private landmarkBodies: RAPIER.RigidBody[] = [];
 
   constructor(opts: WorldOptions = {}) {
     this.rapier = RAPIER;
@@ -44,6 +47,8 @@ export class World {
     // server generate identical lists, no network sync needed.
     this.obstacles = generateObstacles(this.terrain);
     this.obstacleBodies = spawnObstacleColliders(this.world, this.obstacles);
+    this.landmarks = landmarksFor(this.terrain);
+    this.landmarkBodies = spawnLandmarkColliders(this.world, this.landmarks);
   }
 
   private buildTerrain(t: TerrainData): { body: RAPIER.RigidBody; collider: RAPIER.Collider } {
@@ -105,6 +110,8 @@ export class World {
     this.vehicles.clear();
     for (const b of this.obstacleBodies) this.world.removeRigidBody(b);
     this.obstacleBodies = [];
+    for (const b of this.landmarkBodies) this.world.removeRigidBody(b);
+    this.landmarkBodies = [];
     this.world.free();
   }
 }
