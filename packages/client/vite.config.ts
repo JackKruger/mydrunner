@@ -4,8 +4,16 @@ import { defineConfig } from 'vite';
 // Configurable via env so a custom-domain deploy can use base=/.
 const base = process.env.VITE_BASE ?? '/';
 
+// Build-time version string baked into the bundle. The deploy workflow
+// sets APP_VERSION to "<commit-count>.<short-sha>" so the number ticks
+// up monotonically with every push to main, and dev builds show "dev".
+const appVersion = process.env.APP_VERSION ?? 'dev';
+
 export default defineConfig({
   base,
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   server: {
     port: 5173,
     strictPort: false,

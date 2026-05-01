@@ -32,6 +32,12 @@ function getServerUrl(): string {
 
 const hud = document.getElementById('hud')!;
 const app = document.getElementById('app')!;
+// Stamp the build version into the bottom-right badge. Vite's `define`
+// inlines the literal at build time; the deploy workflow sets
+// APP_VERSION to "<commit-count>.<sha>" so the number ticks up each
+// push to main. Local dev builds show "dev".
+const versionEl = document.getElementById('version');
+if (versionEl) versionEl.textContent = __APP_VERSION__;
 
 initInput();
 initTouchInput();

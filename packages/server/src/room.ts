@@ -75,7 +75,11 @@ export class Room {
     const col = slot % 8;
     const row = Math.floor(slot / 8);
     const startX = -this.world.terrain.size / 2 + 24; // 24m in from the world edge
-    const x = startX + col * 3;                       // 24..45 along the road
+    // 5m spacing between slots: trucks are 3.8m long, so anything tighter
+    // means two players in adjacent slots spawn overlapping each other,
+    // which can push one through the heightfield and trip the off-map
+    // ejector. 5m gives about 1m of clearance.
+    const x = startX + col * 5;
     const z = row === 0 ? -1.2 : 1.2;                 // two lanes
     // yaw = pi/2 rotates local +Z (vehicle forward) to world +X.
     const yaw = Math.PI / 2;
