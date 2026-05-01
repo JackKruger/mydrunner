@@ -7,6 +7,7 @@ export interface NetEvents {
   onWelcome(id: PlayerId, serverTimeMs: number, terrain: TerrainHandshake, spawn: SpawnHandshake): void;
   onSnapshot(snap: WorldSnapshot, recvAtMs: number): void;
   onRut(version: number, cells: { i: number; dy: number }[]): void;
+  onChat(from: PlayerId, fromName: string, text: string, serverTimeMs: number): void;
   onClose(reason: string): void;
   onOpen(): void;
 }
@@ -49,6 +50,9 @@ export class NetClient {
         case 'rut':
           this.events.onRut(msg.version, msg.cells);
           break;
+        case 'chat':
+          this.events.onChat(msg.from, msg.fromName, msg.text, msg.serverTimeMs);
+          break;
         case 'bye':
           this.events.onClose(msg.reason);
           break;
@@ -61,6 +65,11 @@ export class NetClient {
   sendInput(input: PlayerInput): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(Net.encode({ t: 'input', input }));
+  }
+
+  sendChat(text: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(Net.encode({ t: 'chat', text }));
   }
 
   close(): void {

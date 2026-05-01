@@ -65,6 +65,10 @@ async function main(): Promise<void> {
             }),
           );
           break;
+        case 'chat':
+          if (!joined) return;
+          room.broadcastChat(handle, msg.text);
+          break;
       }
     });
 

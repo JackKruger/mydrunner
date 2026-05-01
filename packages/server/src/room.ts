@@ -30,6 +30,8 @@ interface InternalPlayer {
   pendingInput: PlayerInput;
   lastAckSeq: number;
   spawn: { position: { x: number; y: number; z: number }; yaw: number };
+  /** Last chat broadcast time (server clock ms). Used for rate-limiting. */
+  lastChatAtMs: number;
 }
 
 export class Room {
@@ -90,6 +92,7 @@ export class Room {
       pendingInput: { ...EMPTY_INPUT },
       lastAckSeq: 0,
       spawn,
+      lastChatAtMs: 0,
     });
     handle.send(
       Net.encode({
@@ -195,10 +198,38 @@ export class Room {
     for (const p of this.players.values()) p.handle.send(msg);
   }
 
+  /** Sanitise + rate-limit + relay a chat message. Strips control chars
+   *  and clamps length; drops messages from a sender that chatted within
+   *  CHAT_MIN_INTERVAL_MS of their last broadcast. */
+  broadcastChat(handle: PlayerHandle, raw: string): void {
+    const p = this.players.get(handle.id);
+    if (!p) return;
+    const now = this.nowMs();
+    if (now - p.lastChatAtMs < CHAT_MIN_INTERVAL_MS) return;
+    const text = raw
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1f\x7f]/g, '')
+      .trim()
+      .slice(0, CHAT_MAX_LEN);
+    if (!text) return;
+    p.lastChatAtMs = now;
+    const msg = Net.encode({
+      t: 'chat',
+      from: handle.id,
+      fromName: handle.name,
+      text,
+      serverTimeMs: now,
+    });
+    for (const peer of this.players.values()) peer.handle.send(msg);
+  }
+
   get playerCount(): number {
     return this.players.size;
   }
 }
+
+const CHAT_MAX_LEN = 200;
+const CHAT_MIN_INTERVAL_MS = 800;
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;

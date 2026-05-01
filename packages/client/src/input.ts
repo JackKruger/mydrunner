@@ -22,6 +22,13 @@ export function initInput(): void {
   window.addEventListener('blur', () => KEYS.clear());
 }
 
+/** Drop any held keys. Called when the chat input opens so the truck
+ *  doesn't keep moving from a key the player was holding before they
+ *  started typing. */
+export function clearKeys(): void {
+  KEYS.clear();
+}
+
 let seq = 0;
 
 export function sampleInput(): PlayerInput {

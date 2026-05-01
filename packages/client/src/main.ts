@@ -5,6 +5,7 @@ import { Physics, TICK_RATE, type PlayerId } from '@mydrunner/shared';
 
 import { EngineAudio } from './engineAudio.js';
 import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './joinScreen.js';
+import { initChat } from './chat.js';
 
 const SURFACE_LABELS: Record<number, string> = {
   [Physics.Surface.Road]: 'road',
@@ -12,7 +13,7 @@ const SURFACE_LABELS: Record<number, string> = {
   [Physics.Surface.Mud]: 'mud',
   [Physics.Surface.DeepMud]: 'deep mud',
 };
-import { initInput, sampleInput } from './input.js';
+import { initInput, sampleInput, clearKeys } from './input.js';
 import { initTouchInput, onTouchEdge } from './touchInput.js';
 import { NetClient } from './net.js';
 import { Scene } from './scene.js';
@@ -32,6 +33,20 @@ initInput();
 initTouchInput();
 const scene = new Scene(app);
 const engineAudio = new EngineAudio();
+// Chat module is created up-front; the onSubmit closure references the
+// NetClient via `currentNet` which is reassigned after start() builds
+// the connection. Messages typed before the connection is up are no-ops.
+let currentNet: NetClient | null = null;
+const chat = initChat({ onSubmit: (text) => currentNet?.sendChat(text) });
+
+// Wrap chat.open so any held game keys are dropped when the player
+// starts typing - otherwise they keep the truck moving / steering
+// while they compose a message.
+const wrappedOpen = chat.open;
+chat.open = (): void => {
+  clearKeys();
+  wrappedOpen();
+};
 
 // Browsers block AudioContext until a user gesture - start audio on the
 // first keypress.
@@ -94,6 +109,7 @@ async function start(): Promise<void> {
   const net = new NetClient(getServerUrl(), choice.name, choice.carKind, {
     onOpen() {
       connected = true;
+      chat.pushSystem('connected — press T to chat');
     },
     onWelcome(id, _serverTimeMs, terrain, spawn) {
       localId = id;
@@ -132,16 +148,21 @@ async function start(): Promise<void> {
     onRut(_version, cells) {
       scene.applyRuts(cells);
     },
+    onChat(from, fromName, text) {
+      chat.push(fromName, text, from === localId);
+    },
     onClose(reason) {
       connected = false;
       hud.textContent = `disconnected: ${reason}`;
     },
   });
+  currentNet = net;
   net.connect();
 
   // Camera-cycle hotkey (C) or on-screen "cam" button. Edge-triggered.
   let cPrev = false;
   window.addEventListener('keydown', (e) => {
+    if (chat.isOpen()) return; // don't steal input while typing
     if (e.code === 'KeyC' && !cPrev) {
       scene.cycleCameraMode();
       cPrev = true;
@@ -151,6 +172,18 @@ async function start(): Promise<void> {
     if (e.code === 'KeyC') cPrev = false;
   });
   onTouchEdge('cam', () => scene.cycleCameraMode());
+
+  // T opens the chat input. The chat module's own keydown handler
+  // catches Enter / Escape to submit / cancel. Mobile users use the
+  // on-screen "chat" button which lives in the touch UI aux row.
+  window.addEventListener('keydown', (e) => {
+    if (chat.isOpen()) return;
+    if (e.code === 'KeyT') {
+      e.preventDefault();
+      chat.open();
+    }
+  });
+  onTouchEdge('chat', () => chat.open());
 
   // Input + prediction loop. Sample at TICK_RATE; each sample also drives
   // exactly one local physics step so prediction and server stay locked.

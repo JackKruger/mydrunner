@@ -4,7 +4,8 @@ import type { CarKind, PlayerId, PlayerInput, WorldSnapshot } from '../types.js'
 export type ClientMessage =
   | { t: 'hello'; name: string; carKind?: CarKind }
   | { t: 'input'; input: PlayerInput }
-  | { t: 'ping'; clientTimeMs: number };
+  | { t: 'ping'; clientTimeMs: number }
+  | { t: 'chat'; text: string };
 
 export interface TerrainHandshake {
   seed: number;
@@ -33,6 +34,9 @@ export type ServerMessage =
   | { t: 'pong'; clientTimeMs: number; serverTimeMs: number }
   /** Broadcast when the heightmap mutates (ruts deepen). Coalesced by version. */
   | { t: 'rut'; version: number; cells: { i: number; dy: number }[] }
+  /** Chat relay - includes the sender's id and display name plus the
+   *  server's monotonic time so clients can show "X seconds ago". */
+  | { t: 'chat'; from: PlayerId; fromName: string; text: string; serverTimeMs: number }
   | { t: 'bye'; reason: string };
 
 // Wire format: JSON for now (simple, debuggable). Can swap to msgpack later by

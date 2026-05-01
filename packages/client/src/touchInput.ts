@@ -7,7 +7,7 @@
 //   - dedicated handbrake button
 //   - aux buttons: cam, reset, mute (edge-triggered events)
 
-type Edge = 'cam' | 'reset' | 'mute';
+type Edge = 'cam' | 'reset' | 'mute' | 'chat';
 
 const state = {
   steer: 0,
@@ -21,6 +21,7 @@ const edgeListeners: Record<Edge, Array<() => void>> = {
   cam: [],
   reset: [],
   mute: [],
+  chat: [],
 };
 
 function fireEdge(name: Edge): void {
@@ -127,6 +128,7 @@ export function initTouchInput(): void {
   const reset = document.getElementById('reset-btn');
   const cam = document.getElementById('cam-btn');
   const mute = document.getElementById('mute-btn');
+  const chat = document.getElementById('chat-btn');
 
   if (pad && knob) bindSteerPad(pad, knob);
   if (throttle) bindHoldButton(throttle, 'throttle');
@@ -135,6 +137,7 @@ export function initTouchInput(): void {
   if (reset) bindHoldButton(reset, 'reset');
   if (cam) bindEdgeButton(cam, 'cam');
   if (mute) bindEdgeButton(mute, 'mute');
+  if (chat) bindEdgeButton(chat, 'chat');
 
   // Stop the page from rubber-banding when the player drags on the controls.
   document.getElementById('touch-controls')?.addEventListener(
