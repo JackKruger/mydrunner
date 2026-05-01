@@ -13,7 +13,7 @@ beforeAll(async () => {
   await Physics.initRapier();
 });
 
-function makeWorld(): { world: Physics.World; vehicle: Physics.Vehicle } {
+function makeWorld(): { world: Physics.World; vehicle: Physics.VehicleLike } {
   const world = new Physics.World({ generate: { size: 100, resolution: 32, seed: 42 } });
   const vehicle = world.spawnVehicle('p', { position: { x: 0, y: 1.5, z: 0 } });
   return { world, vehicle };

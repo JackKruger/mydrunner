@@ -108,6 +108,83 @@ export const SURFACE_FRICTION = {
 // planted while leaving headroom for surfaceMult to bite hard on mud.
 export const TIRE_BASE_GRIP = 2.8;
 
+// Per-axle geometry + spring rates for the solid-axle vehicle model
+// (see physics/solidAxleVehicle.ts). Each axle is a software state with
+// its own ride spring (vertical compression) and roll spring (rotation
+// of the beam about the chassis-forward axis - the articulation that
+// makes solid-axle rock-crawlers look twisted over a rock).
+//
+// rideStiffness scales the chassis-restoring force per metre of average
+// wheel compression; rollStiffness is intentionally an order of
+// magnitude softer so the axle articulates freely until it hits its
+// mechanical stop at maxArticulation, at which point the surplus torque
+// dumps into the chassis (the body leans over).
+export const AXLE = {
+  front: {
+    centerLocalY: -0.45,
+    centerLocalZ: 1.3,
+    trackHalf: 0.92,
+    suspensionRestLength: 0.55,
+    droopMax: 0.30,
+    bumpMax: 0.20,
+    rideStiffness: 80_000,
+    rideDamping: 6_500,
+    rollStiffness: 35_000,
+    rollDamping: 1_800,
+    maxArticulation: 0.45,
+    axleMass: 110,
+    axleRollInertia: 24,
+    hasDrive: true,
+    hasSteering: true,
+    diffLocked: false,
+  },
+  rear: {
+    centerLocalY: -0.45,
+    centerLocalZ: -1.3,
+    trackHalf: 0.92,
+    suspensionRestLength: 0.55,
+    droopMax: 0.32,
+    bumpMax: 0.20,
+    rideStiffness: 90_000,
+    rideDamping: 7_200,
+    rollStiffness: 28_000,
+    rollDamping: 1_500,
+    maxArticulation: 0.50,
+    axleMass: 130,
+    axleRollInertia: 28,
+    hasDrive: true,
+    hasSteering: false,
+    diffLocked: false,
+  },
+} as const;
+
+// Lateral tyre-grip parameters used by the solid-axle model. Lateral
+// force = -clamp(stiffness * latSlipSpeed, +/- longGripMax * longRatio).
+// stiffness governs how fast the tyre develops cornering force; longRatio
+// caps it as a fraction of the longitudinal grip available so the tyre
+// stays inside the friction circle.
+export const TIRE_LATERAL = {
+  stiffness: 14_000,
+  longRatio: 0.95,
+} as const;
+
+// Wheel spin physics for the solid-axle model. inertia governs how fast
+// a wheel spins up under torque (kg*m^2 of a tyre + rim + brake disc).
+// rollingResistance is a small proportional drag torque that bleeds spin
+// when the throttle is off, so the truck doesn't coast forever.
+export const WHEEL = {
+  inertia: 1.6,
+  rollingResistance: 0.015,
+} as const;
+
+// Vehicle physics model. Phase 1 of the suspension overhaul lands the
+// custom solid-axle vehicle alongside the existing Rapier raycast vehicle
+// behind this flag; with 'raycast' (default) the game runs the legacy
+// model, with 'solidAxle' it runs the new model with axle articulation.
+// Default flips to 'solidAxle' in Phase 2 once the new path is validated.
+export type VehicleModel = 'raycast' | 'solidAxle';
+export const VEHICLE_MODEL: VehicleModel = 'raycast';
+
 // Hill-climb traction assist. Real 4x4s lose grip on slopes because
 // gravity peels the tyre's contact away; in our model it manifests as
 // chronic spin-out partway up. Boost per-wheel grip linearly with the

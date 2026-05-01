@@ -10,12 +10,22 @@
 // values can be baked into constants.ts as new defaults.
 
 import {
-  VEHICLE,
-  TIRE,
-  SURFACE_FRICTION,
-  TIRE_BASE_GRIP,
+  AXLE,
   INCLINE_ASSIST_MAX,
+  SURFACE_FRICTION,
+  TIRE,
+  TIRE_BASE_GRIP,
+  TIRE_LATERAL,
+  VEHICLE,
 } from './constants.js';
+
+export interface AxleTuning {
+  rideStiffness: number;
+  rideDamping: number;
+  rollStiffness: number;
+  rollDamping: number;
+  maxArticulation: number;
+}
 
 export interface Tuning {
   tireBaseGrip: number;
@@ -29,6 +39,9 @@ export interface Tuning {
     gravel: number;
     concrete: number;
   };
+  // Legacy raycast vehicle suspension knobs. Kept in Phase 1 - 3 so the
+  // debug panel can still tune the old model when VEHICLE_MODEL is
+  // 'raycast'. Stripped in Phase 4 once the legacy path is deleted.
   suspensionStiffness: number;
   suspensionDamping: number;
   suspensionCompression: number;
@@ -42,6 +55,18 @@ export interface Tuning {
   slipPeak: number;
   slipFalloff: number;
   slipFloor: number;
+  // Solid-axle vehicle knobs. Per-axle tuning so the front and rear can
+  // diverge (front stiffer for nose-up climbs, rear softer for cargo
+  // articulation). diffLock* toggles the per-axle differential lock
+  // (both wheels rotate together) - the rock-crawler trick that lets
+  // you keep moving when one wheel lifts off the ground.
+  axleFront: AxleTuning;
+  axleRear: AxleTuning;
+  diffLockFront: boolean;
+  diffLockRear: boolean;
+  // Lateral grip stiffness for the new model (N per m/s of lateral
+  // velocity, before friction-circle clamp).
+  tireLatStiffness: number;
 }
 
 export const TUNING: Tuning = {
@@ -61,4 +86,21 @@ export const TUNING: Tuning = {
   slipPeak: TIRE.slipPeak,
   slipFalloff: TIRE.slipFalloff,
   slipFloor: TIRE.slipFloor,
+  axleFront: {
+    rideStiffness: AXLE.front.rideStiffness,
+    rideDamping: AXLE.front.rideDamping,
+    rollStiffness: AXLE.front.rollStiffness,
+    rollDamping: AXLE.front.rollDamping,
+    maxArticulation: AXLE.front.maxArticulation,
+  },
+  axleRear: {
+    rideStiffness: AXLE.rear.rideStiffness,
+    rideDamping: AXLE.rear.rideDamping,
+    rollStiffness: AXLE.rear.rollStiffness,
+    rollDamping: AXLE.rear.rollDamping,
+    maxArticulation: AXLE.rear.maxArticulation,
+  },
+  diffLockFront: AXLE.front.diffLocked,
+  diffLockRear: AXLE.rear.diffLocked,
+  tireLatStiffness: TIRE_LATERAL.stiffness,
 };
