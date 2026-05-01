@@ -3,11 +3,12 @@
 // the past so we always have two snapshots to interpolate between.
 
 import * as THREE from 'three';
-import { VEHICLE, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
+import { VEHICLE, Physics, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
 import { RENDER_DELAY_MS } from './net.js';
 import { TerrainMesh } from './terrain.js';
 import { buildCarMesh, colorHash } from './carMesh.js';
 import { createNameplate, disposeNameplate } from './nameplate.js';
+import { ParticleSystem } from './particles.js';
 
 interface SnapshotEntry {
   recvAtMs: number;
@@ -19,6 +20,10 @@ interface VehicleVisual {
   wheels: THREE.Object3D[];
   nameplate: THREE.Sprite | null;
   nameplateText: string;
+  /** Last known wheel spin per wheel - used to derive spin rate. */
+  lastSpin: number[];
+  /** Tracking time of the previous snapshot used to compute spin rate. */
+  lastSpinAtMs: number;
 }
 
 export class Scene {
@@ -33,6 +38,8 @@ export class Scene {
   private terrain: TerrainMesh | null = null;
   private terrainPlaceholder: THREE.Mesh | null = null;
   private cameraMode: 'chase' | 'hood' | 'free' = 'chase';
+  private particles: ParticleSystem;
+  private lastFrameTimeMs = 0;
 
   constructor(canvasParent: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -72,6 +79,9 @@ export class Scene {
     placeholder.receiveShadow = true;
     this.scene.add(placeholder);
     this.terrainPlaceholder = placeholder;
+
+    this.particles = new ParticleSystem();
+    this.scene.add(this.particles.group);
 
     window.addEventListener('resize', () => {
       this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -137,7 +147,14 @@ export class Scene {
     if (v) return v;
     const built = buildCarMesh(isLocal, colorHash(id));
     this.scene.add(built.group);
-    v = { group: built.group, wheels: built.wheels, nameplate: null, nameplateText: '' };
+    v = {
+      group: built.group,
+      wheels: built.wheels,
+      nameplate: null,
+      nameplateText: '',
+      lastSpin: [0, 0, 0, 0],
+      lastSpinAtMs: 0,
+    };
     this.vehicles.set(id, v);
     return v;
   }
@@ -252,7 +269,66 @@ export class Scene {
     }
 
     this.removeMissing(present);
+
+    // Mud splatter: for each visible vehicle, look at the latest snapshot
+    // pair to estimate per-wheel spin rate. If a wheel is spinning faster
+    // than the chassis is moving and the surface beneath it is muddy,
+    // throw particles. Pure visual; no networking impact.
+    const frameDt = this.lastFrameTimeMs > 0 ? nowMs - this.lastFrameTimeMs : 16;
+    this.lastFrameTimeMs = nowMs;
+    if (pair && this.terrain) {
+      this.spawnMudParticles(pair.b.snap, pair.b.recvAtMs);
+    }
+    this.particles.update(frameDt);
+
     this.renderer.render(this.scene, this.camera);
+  }
+
+  private spawnMudParticles(snap: WorldSnapshot, recvAtMs: number): void {
+    const terrainData = this.terrain!.terrain;
+    for (const p of snap.players) {
+      const vis = this.vehicles.get(p.id);
+      if (!vis) continue;
+      // Vehicle ground speed (horizontal magnitude).
+      const groundSpeed = Math.hypot(p.vehicle.linVel.x, p.vehicle.linVel.z);
+      const dtMs = recvAtMs - vis.lastSpinAtMs;
+      if (vis.lastSpinAtMs === 0 || dtMs <= 0) {
+        for (let i = 0; i < 4; i++) vis.lastSpin[i] = p.vehicle.wheels[i]?.spin ?? 0;
+        vis.lastSpinAtMs = recvAtMs;
+        continue;
+      }
+      for (let i = 0; i < 4; i++) {
+        const wheelSnap = p.vehicle.wheels[i];
+        if (!wheelSnap || !wheelSnap.contact) continue;
+        const lastSpin = vis.lastSpin[i] ?? 0;
+        const spinRate = (wheelSnap.spin - lastSpin) / (dtMs / 1000); // rad/s
+        vis.lastSpin[i] = wheelSnap.spin;
+        const wheelLin = Math.abs(spinRate) * VEHICLE.wheelRadius;
+        if (wheelLin <= groundSpeed + 1.5) continue; // not really slipping
+        // Compute world-space wheel position.
+        const wp = VEHICLE.wheelPositions[i]!;
+        const t = vis.group.position;
+        const q = vis.group.quaternion;
+        // Rotate local (wp.x, wp.y, wp.z) by q.
+        const x = wp.x, y = wp.y - VEHICLE.wheelRadius * 0.6, z = wp.z;
+        const ix = q.w * x + q.y * z - q.z * y;
+        const iy = q.w * y + q.z * x - q.x * z;
+        const iz = q.w * z + q.x * y - q.y * x;
+        const iw = -q.x * x - q.y * y - q.z * z;
+        const wx = t.x + ix * q.w + iw * -q.x + iy * -q.z - iz * -q.y;
+        const wy = t.y + iy * q.w + iw * -q.y + iz * -q.x - ix * -q.z;
+        const wz = t.z + iz * q.w + iw * -q.z + ix * -q.y - iy * -q.x;
+
+        const surf = Physics.sampleSurface(terrainData, wx, wz);
+        if (surf !== Physics.Surface.Mud && surf !== Physics.Surface.DeepMud) continue;
+        const color = surf === Physics.Surface.DeepMud ? 0x1a0d05 : 0x3a2618;
+        // Spawn intensity scales with how much faster the wheel is than the ground.
+        const excess = wheelLin - groundSpeed;
+        const count = Math.min(3, Math.max(1, Math.floor(excess / 4)));
+        for (let n = 0; n < count; n++) this.particles.emit(wx, wy, wz, color);
+      }
+      vis.lastSpinAtMs = recvAtMs;
+    }
   }
 
   private localOverridden = false;
