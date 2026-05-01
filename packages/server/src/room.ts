@@ -60,15 +60,22 @@ export class Room {
     return Date.now() - this.startedAtMs;
   }
 
+  /** Spawn on the flat road strip (z near 0), facing along the road (+X)
+   *  so the chase camera looks down the road instead of into a hill.
+   *  Y clearance is generous: chassis-center must clear chassis half-extent
+   *  + suspension + wheel radius. */
   private nextSpawn(): { position: { x: number; y: number; z: number }; yaw: number } {
     const n = this.players.size;
-    const lane = (n % 4) - 1.5;
-    const back = -20 - Math.floor(n / 4) * 6;
-    const x = lane * 2.5;
-    const z = back;
+    const slot = n % 16;
+    const col = slot % 8;
+    const row = Math.floor(slot / 8);
+    const x = (col - 3.5) * 4; // -14 .. +14 along the road
+    const z = row === 0 ? -1.2 : 1.2; // two lanes
+    // yaw = pi/2 rotates local +Z (vehicle forward) to world +X (road direction).
+    const yaw = Math.PI / 2;
     const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);
     const ground = idx >= 0 ? (this.world.terrain.heights[idx] ?? 0) : 0;
-    return { position: { x, y: ground + 1.5, z }, yaw: 0 };
+    return { position: { x, y: ground + 1.5, z }, yaw };
   }
 
   addPlayer(handle: PlayerHandle): void {

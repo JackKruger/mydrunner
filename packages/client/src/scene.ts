@@ -37,8 +37,8 @@ export class Scene {
     this.renderer.shadowMap.enabled = true;
     canvasParent.appendChild(this.renderer.domElement);
 
-    this.scene.background = new THREE.Color(0x87a8c0);
-    this.scene.fog = new THREE.Fog(0x87a8c0, 80, 250);
+    this.scene.background = new THREE.Color(0xb8d0e2);
+    this.scene.fog = new THREE.Fog(0xb8d0e2, 120, 320);
 
     this.camera = new THREE.PerspectiveCamera(
       60,
@@ -48,7 +48,7 @@ export class Scene {
     );
     this.camera.position.set(0, 6, 12);
 
-    const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+    const sun = new THREE.DirectionalLight(0xfff4dd, 1.4);
     sun.position.set(50, 80, 30);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -57,7 +57,7 @@ export class Scene {
     sun.shadow.camera.top = 60;
     sun.shadow.camera.bottom = -60;
     this.scene.add(sun);
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+    this.scene.add(new THREE.HemisphereLight(0xb8d0e2, 0x66553c, 0.6));
 
     // Placeholder ground until terrain handshake arrives. Replaced in setTerrain().
     const placeholder = new THREE.Mesh(
@@ -257,28 +257,42 @@ export class Scene {
     const target = this.cameraTarget;
     if (this.cameraMode === 'chase') {
       const offset = new THREE.Vector3(
-        -Math.sin(this.cameraYaw) * 8,
-        4,
-        -Math.cos(this.cameraYaw) * 8,
+        -Math.sin(this.cameraYaw) * 9,
+        5,
+        -Math.cos(this.cameraYaw) * 9,
       );
       const desired = target.clone().add(offset);
-      this.camera.position.lerp(desired, 0.12);
-      this.camera.lookAt(target);
+      // Make sure the camera doesn't dip below terrain when going down a hill.
+      const minY = (this.terrain ? this.terrainHeightAt(desired.x, desired.z) : 0) + 1.0;
+      if (desired.y < minY) desired.y = minY;
+      this.camera.position.lerp(desired, 0.15);
+      const lookTarget = target.clone();
+      lookTarget.y += 0.5;
+      this.camera.lookAt(lookTarget);
     } else if (this.cameraMode === 'hood') {
-      const offset = new THREE.Vector3(
-        Math.sin(this.cameraYaw) * 0.5,
-        1.5,
-        Math.cos(this.cameraYaw) * 0.5,
-      );
-      this.camera.position.copy(target).add(offset);
-      const lookAt = target.clone().add(
-        new THREE.Vector3(Math.sin(this.cameraYaw) * 10, 1, Math.cos(this.cameraYaw) * 10),
-      );
+      // Sit just above the chassis roof, looking forward in the car's heading.
+      const fwd = new THREE.Vector3(Math.sin(this.cameraYaw), 0, Math.cos(this.cameraYaw));
+      this.camera.position.copy(target).add(new THREE.Vector3(fwd.x * 0.2, 1.4, fwd.z * 0.2));
+      const lookAt = target.clone().add(new THREE.Vector3(fwd.x * 10, 1.0, fwd.z * 10));
       this.camera.lookAt(lookAt);
     } else {
       // free: stationary high overview
       this.camera.position.set(0, 60, 60);
       this.camera.lookAt(0, 0, 0);
     }
+  }
+
+  /** Sample terrain height at world (x, z). Used by the camera so it
+   *  doesn't bury under hills. */
+  private terrainHeightAt(x: number, z: number): number {
+    if (!this.terrain) return 0;
+    const t = this.terrain.terrain;
+    const n = t.resolution;
+    const u = (x / t.size + 0.5) * (n - 1);
+    const v = (z / t.size + 0.5) * (n - 1);
+    if (u < 0 || u > n - 1 || v < 0 || v > n - 1) return 0;
+    const c = Math.round(u);
+    const r = Math.round(v);
+    return t.heights[r * n + c] ?? 0;
   }
 }

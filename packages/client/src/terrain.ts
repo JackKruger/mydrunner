@@ -4,11 +4,14 @@
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 
+// Tuned so each surface reads at a glance: road is clearly grey, dirt
+// is sandy, mud is brown, deep mud is almost black. Big jumps in
+// luminance between adjacent surfaces matter more than realism.
 const SURFACE_COLORS: Record<number, [number, number, number]> = {
-  [Physics.Surface.Road]: [0.32, 0.32, 0.34],
-  [Physics.Surface.Dirt]: [0.45, 0.40, 0.25],
-  [Physics.Surface.Mud]: [0.30, 0.22, 0.13],
-  [Physics.Surface.DeepMud]: [0.18, 0.12, 0.07],
+  [Physics.Surface.Road]: [0.55, 0.55, 0.58],
+  [Physics.Surface.Dirt]: [0.55, 0.45, 0.25],
+  [Physics.Surface.Mud]: [0.28, 0.18, 0.10],
+  [Physics.Surface.DeepMud]: [0.12, 0.07, 0.04],
 };
 
 export class TerrainMesh {
