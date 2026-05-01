@@ -8,7 +8,7 @@
 // Slip ratio = (wheelSurfaceSpeed - groundSpeed) / max(|wheelSurfaceSpeed|, |groundSpeed|, eps)
 // where wheelSurfaceSpeed = wheelAngVel * wheelRadius.
 
-import { TIRE } from '../constants.js';
+import { TUNING } from '../tuning.js';
 
 export function slipRatio(wheelAngVel: number, wheelRadius: number, groundSpeed: number): number {
   const wheelLin = wheelAngVel * wheelRadius;
@@ -22,13 +22,13 @@ export function slipRatio(wheelAngVel: number, wheelRadius: number, groundSpeed:
  *  still no slip). Peak at slipPeak, decays toward slipFloor past it. */
 export function gripFromSlip(slip: number): number {
   const a = Math.abs(slip);
-  if (a <= TIRE.slipPeak) {
-    // Smooth rise from slipFloor to peak (1.0).
-    const t = a / TIRE.slipPeak;
-    return TIRE.slipFloor + (1 - TIRE.slipFloor) * t;
+  const peak = TUNING.slipPeak;
+  const floor = TUNING.slipFloor;
+  if (a <= peak) {
+    const t = a / peak;
+    return floor + (1 - floor) * t;
   }
-  // Past peak: exponential decay back toward slipFloor.
-  const over = a - TIRE.slipPeak;
-  const decay = Math.exp(-over * TIRE.slipFalloff);
-  return TIRE.slipFloor + (1 - TIRE.slipFloor) * decay;
+  const over = a - peak;
+  const decay = Math.exp(-over * TUNING.slipFalloff);
+  return floor + (1 - floor) * decay;
 }

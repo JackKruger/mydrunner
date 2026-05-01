@@ -3,7 +3,8 @@
 // terrain surface beneath the wheel, giving us the mud feel.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { VEHICLE, SURFACE_FRICTION, TIRE_BASE_GRIP, INCLINE_ASSIST_MAX } from '../constants.js';
+import { VEHICLE } from '../constants.js';
+import { TUNING } from '../tuning.js';
 import { EMPTY_INPUT, type PlayerInput, type VehicleState, type WheelState } from '../types.js';
 import { Surface, sampleSurface } from './terrain.js';
 import { createEngineState, stepEngine, type EngineState } from './engine.js';
@@ -80,12 +81,25 @@ export class Vehicle {
       );
     }
     for (let i = 0; i < 4; i++) {
-      this.controller.setWheelSuspensionStiffness(i, VEHICLE.suspensionStiffness);
-      this.controller.setWheelSuspensionCompression(i, VEHICLE.suspensionCompression);
-      this.controller.setWheelSuspensionRelaxation(i, VEHICLE.suspensionDamping);
-      this.controller.setWheelMaxSuspensionForce(i, VEHICLE.maxSuspensionForce);
-      this.controller.setWheelMaxSuspensionTravel(i, VEHICLE.maxSuspensionTravel);
-      this.controller.setWheelFrictionSlip(i, TIRE_BASE_GRIP);
+      this.controller.setWheelSuspensionStiffness(i, TUNING.suspensionStiffness);
+      this.controller.setWheelSuspensionCompression(i, TUNING.suspensionCompression);
+      this.controller.setWheelSuspensionRelaxation(i, TUNING.suspensionDamping);
+      this.controller.setWheelMaxSuspensionForce(i, TUNING.maxSuspensionForce);
+      this.controller.setWheelMaxSuspensionTravel(i, TUNING.maxSuspensionTravel);
+      this.controller.setWheelFrictionSlip(i, TUNING.tireBaseGrip);
+    }
+  }
+
+  /** Push suspension parameters from TUNING into Rapier. Called every
+   *  preStep so the debug panel can twist values at runtime and have
+   *  them apply on the next physics tick. Cheap (six setters per wheel). */
+  private syncSuspensionTuning(): void {
+    for (let i = 0; i < 4; i++) {
+      this.controller.setWheelSuspensionStiffness(i, TUNING.suspensionStiffness);
+      this.controller.setWheelSuspensionCompression(i, TUNING.suspensionCompression);
+      this.controller.setWheelSuspensionRelaxation(i, TUNING.suspensionDamping);
+      this.controller.setWheelMaxSuspensionForce(i, TUNING.maxSuspensionForce);
+      this.controller.setWheelMaxSuspensionTravel(i, TUNING.maxSuspensionTravel);
     }
   }
 
@@ -106,6 +120,7 @@ export class Vehicle {
   /** Apply input to wheels - called before world.step(). */
   preStep(): void {
     const dt = 1 / 60;
+    this.syncSuspensionTuning();
     // Smooth steering toward target. currentSteer is in player-intent
     // sign: positive = right. Two negations downstream cancel out:
     //   - Rapier's setWheelSteering below negates because the axle is
@@ -115,9 +130,9 @@ export class Vehicle {
     //     positive intent needs negative mesh-y to actually visually
     //     point right. Both negations are kept at their respective
     //     consumer; the wire format carries player intent.
-    const targetSteer = this.input.steer * VEHICLE.maxSteer;
+    const targetSteer = this.input.steer * TUNING.maxSteer;
     const steerDelta = targetSteer - this.currentSteer;
-    const maxStep = VEHICLE.steerSpeed * dt;
+    const maxStep = TUNING.steerSpeed * dt;
     this.currentSteer +=
       Math.abs(steerDelta) < maxStep ? steerDelta : Math.sign(steerDelta) * maxStep;
 
@@ -144,19 +159,19 @@ export class Vehicle {
     // Incline assist: forwardY > 0 means the nose is pitched up (climbing).
     // Linear boost up to forwardY=0.5 (~30 deg slope), capped there.
     const climb = Math.min(0.5, Math.max(0, forwardY));
-    const inclineMult = 1 + (climb / 0.5) * INCLINE_ASSIST_MAX;
+    const inclineMult = 1 + (climb / 0.5) * TUNING.inclineAssistMax;
 
     for (let i = 0; i < 4; i++) {
       const wp = this.wheelWorldPos(i);
       const surf = sampleSurface(this.world.terrain, wp.x, wp.z);
       this.wheelSurface[i] = surf;
       const surfMult = surfaceGrip(surf);
-      const axleMult = i < 2 ? VEHICLE.frontGripMult : VEHICLE.rearGripMult;
+      const axleMult = i < 2 ? TUNING.frontGripMult : TUNING.rearGripMult;
       const slip = slipRatio(wheelAngVels[i] ?? 0, VEHICLE.wheelRadius, longitudinal);
       const slipMult = gripFromSlip(slip);
       this.controller.setWheelFrictionSlip(
         i,
-        TIRE_BASE_GRIP * surfMult * axleMult * slipMult * inclineMult,
+        TUNING.tireBaseGrip * surfMult * axleMult * slipMult * inclineMult,
       );
     }
 
@@ -188,8 +203,8 @@ export class Vehicle {
     }
 
     // Brakes on all four. Handbrake locks rears for slides.
-    const brake = this.input.brake * VEHICLE.brakeForce;
-    const hand = this.input.handbrake * VEHICLE.brakeForce * 1.5;
+    const brake = this.input.brake * TUNING.brakeForce;
+    const hand = this.input.handbrake * TUNING.brakeForce * 1.5;
     this.controller.setWheelBrake(0, brake);
     this.controller.setWheelBrake(1, brake);
     this.controller.setWheelBrake(2, brake + hand);
@@ -293,11 +308,11 @@ export class Vehicle {
 
 function surfaceGrip(s: Surface): number {
   switch (s) {
-    case Surface.Road: return SURFACE_FRICTION.road;
-    case Surface.Dirt: return SURFACE_FRICTION.dirt;
-    case Surface.Mud: return SURFACE_FRICTION.mud;
-    case Surface.DeepMud: return SURFACE_FRICTION.deepMud;
-    case Surface.Grass: return SURFACE_FRICTION.grass;
-    case Surface.Gravel: return SURFACE_FRICTION.gravel;
+    case Surface.Road: return TUNING.surfaceFriction.road;
+    case Surface.Dirt: return TUNING.surfaceFriction.dirt;
+    case Surface.Mud: return TUNING.surfaceFriction.mud;
+    case Surface.DeepMud: return TUNING.surfaceFriction.deepMud;
+    case Surface.Grass: return TUNING.surfaceFriction.grass;
+    case Surface.Gravel: return TUNING.surfaceFriction.gravel;
   }
 }

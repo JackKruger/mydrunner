@@ -6,6 +6,7 @@ import { Physics, TICK_RATE, type PlayerId } from '@mydrunner/shared';
 import { EngineAudio } from './engineAudio.js';
 import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './joinScreen.js';
 import { initChat } from './chat.js';
+import { isDebugUser, initDebugPanel } from './debugPanel.js';
 
 const SURFACE_LABELS: Record<number, string> = {
   [Physics.Surface.Road]: 'road',
@@ -108,6 +109,11 @@ async function start(): Promise<void> {
     saveJoin(choice);
   }
 
+  // Debug panel: only for the player named "jack" (case-insensitive).
+  // Lets them twist physics tunables in flight and copy the result to
+  // clipboard so the values can be baked as new defaults.
+  if (isDebugUser(choice.name)) initDebugPanel();
+
   const net = new NetClient(getServerUrl(), choice.name, choice.carKind, {
     onOpen() {
       connected = true;
@@ -200,10 +206,9 @@ async function start(): Promise<void> {
     const dy = e.clientY - lastY;
     lastX = e.clientX;
     lastY = e.clientY;
-    // Drag right → camera orbits right (yaw +); drag down → camera
-    // looks down (pitch -, since negative userPitch = look up in our
-    // convention).
-    scene.cameraDrag(dx / PX_PER_RAD, -dy / PX_PER_RAD);
+    // Inverted "natural" feel: dragging the world tugs it under your
+    // finger, which is the same as the camera moving the opposite way.
+    scene.cameraDrag(-dx / PX_PER_RAD, dy / PX_PER_RAD);
   });
   const endDrag = (e: PointerEvent): void => {
     if (e.pointerId !== dragId) return;
