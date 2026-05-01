@@ -9,6 +9,7 @@ import { TerrainMesh } from './terrain.js';
 import { buildCarMesh, colorHash } from './carMesh.js';
 import { createNameplate, disposeNameplate } from './nameplate.js';
 import { ParticleSystem } from './particles.js';
+import { Obstacles } from './obstacles.js';
 
 interface SnapshotEntry {
   recvAtMs: number;
@@ -37,6 +38,7 @@ export class Scene {
   private cameraYaw = 0;
   private terrain: TerrainMesh | null = null;
   private terrainPlaceholder: THREE.Mesh | null = null;
+  private obstacles: Obstacles | null = null;
   private cameraMode: 'chase' | 'hood' | 'free' = 'chase';
   private particles: ParticleSystem;
   private lastFrameTimeMs = 0;
@@ -108,6 +110,9 @@ export class Scene {
     }
     this.terrain = new TerrainMesh(seed, size, resolution);
     this.scene.add(this.terrain.mesh);
+    if (this.obstacles) this.scene.remove(this.obstacles.group);
+    this.obstacles = new Obstacles(seed, size, resolution);
+    this.scene.add(this.obstacles.group);
   }
 
   applyRuts(cells: { i: number; dy: number }[]): void {
@@ -202,10 +207,19 @@ export class Scene {
       w.position.set(wp.x, wp.y - (susp - VEHICLE.suspensionRestLength), wp.z);
       w.rotation.set(ws ? ws.spin : 0, ws ? ws.steer : 0, 0);
     }
-    this.cameraTarget.copy(v.group.position);
-    // Track yaw for camera follow.
-    const e = new THREE.Euler().setFromQuaternion(v.group.quaternion, 'YXZ');
-    this.cameraYaw = e.y;
+    // Smooth camera target instead of snapping. Position is filtered with
+    // a low-pass; yaw is derived from the quaternion's actual forward
+    // axis (more stable than Euler.y on a pitched chassis).
+    this.cameraTarget.lerp(v.group.position, 0.25);
+    // Forward = local +Z rotated by chassis quaternion.
+    const fX = 2 * (rot.x * rot.z + rot.w * rot.y);
+    const fZ = 1 - 2 * (rot.x * rot.x + rot.y * rot.y);
+    const targetYaw = Math.atan2(fX, fZ);
+    // Shortest-arc lerp on yaw to avoid ±π wraps.
+    let dy = targetYaw - this.cameraYaw;
+    if (dy > Math.PI) dy -= 2 * Math.PI;
+    if (dy < -Math.PI) dy += 2 * Math.PI;
+    this.cameraYaw += dy * 0.12;
   }
 
   render(nowMs: number): void {
@@ -338,17 +352,17 @@ export class Scene {
     const target = this.cameraTarget;
     if (this.cameraMode === 'chase') {
       // Lower chase angle so we see the side profile + wheels, not just
-      // the roof. 8m back, 3m up.
+      // the roof. 8m back, 3m up. Position lerped softly to remove
+      // high-frequency suspension bounce.
       const offset = new THREE.Vector3(
         -Math.sin(this.cameraYaw) * 8,
         3,
         -Math.cos(this.cameraYaw) * 8,
       );
       const desired = target.clone().add(offset);
-      // Make sure the camera doesn't dip below terrain when going down a hill.
       const minY = (this.terrain ? this.terrainHeightAt(desired.x, desired.z) : 0) + 1.5;
       if (desired.y < minY) desired.y = minY;
-      this.camera.position.lerp(desired, 0.15);
+      this.camera.position.lerp(desired, 0.06);
       const lookTarget = target.clone();
       lookTarget.y += 0.5;
       this.camera.lookAt(lookTarget);

@@ -77,29 +77,31 @@ export function stepEngine(
     if (rpm < ENGINE.idleRpm) rpm = ENGINE.idleRpm;
   }
 
-  // Auto-shift logic. Reverse vs forward is selected by throttle sign.
-  // Only allow a gear change when |wheelAngVel| is small (no harsh shifts at speed).
+  // Direction-of-travel intent comes from throttle sign. Importantly, we
+  // shift into the requested direction even if the car is currently
+  // rolling the other way - the wheels then "fight" the existing
+  // momentum and decelerate the car. Without this, pressing W while
+  // rolling backward kept us in reverse gear and ACCELERATED us backward,
+  // which is exactly the opposite of what the player wants.
   let nextGear = gIdx;
-  const goingForward = wheelAngVel > 1.5;
-  const goingBackward = wheelAngVel < -1.5;
-  const wantsReverse = throttle < -0.05 && !goingForward;
-  const wantsForward = throttle > 0.05 && !goingBackward;
-  if (wantsReverse && gIdx >= ENGINE.firstGear) {
-    nextGear = ENGINE.reverseGear;
-  } else if (wantsForward && gIdx === ENGINE.reverseGear) {
+  const wantsReverse = throttle < -0.05;
+  const wantsForward = throttle > 0.05;
+  if (wantsForward && gIdx <= ENGINE.neutralGear) {
     nextGear = ENGINE.firstGear;
+  } else if (wantsReverse && gIdx >= ENGINE.firstGear) {
+    nextGear = ENGINE.reverseGear;
+  } else if (wantsReverse && gIdx === ENGINE.neutralGear) {
+    nextGear = ENGINE.reverseGear;
   } else if (gIdx >= ENGINE.firstGear) {
-    if (rpm > ENGINE.shiftUpRpm && gIdx < ENGINE.gears.length - 1) {
+    // Forward auto-shifting based on RPM. Only when actually rolling
+    // forward (don't upshift while wheels are spinning at standstill).
+    if (rpm > ENGINE.shiftUpRpm && gIdx < ENGINE.gears.length - 1 && wheelAngVel > 1.5) {
       nextGear = gIdx + 1;
     } else if (rpm < ENGINE.shiftDownRpm && gIdx > ENGINE.firstGear) {
       nextGear = gIdx - 1;
     }
   } else if (Math.abs(throttle) < 0.05 && Math.abs(wheelAngVel) < 0.5) {
-    // Idle into neutral when stopped and not pressing.
     nextGear = ENGINE.neutralGear;
-  } else if (gIdx === ENGINE.neutralGear) {
-    if (wantsForward) nextGear = ENGINE.firstGear;
-    if (wantsReverse) nextGear = ENGINE.reverseGear;
   }
   state.gearIndex = nextGear;
   state.rpm = rpm;

@@ -8,6 +8,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { GRAVITY_Y } from '../constants.js';
 import { Vehicle, type VehicleSpawn } from './vehicle.js';
 import { generateTerrain, type TerrainData, type TerrainOptions } from './terrain.js';
+import { generateObstacles, spawnObstacleColliders, type Obstacle } from './obstacles.js';
 
 let rapierReady: Promise<void> | null = null;
 export function initRapier(): Promise<void> {
@@ -27,8 +28,10 @@ export class World {
   readonly world: RAPIER.World;
   readonly vehicles = new Map<string, Vehicle>();
   readonly terrain: TerrainData;
+  readonly obstacles: Obstacle[];
   private terrainBody: RAPIER.RigidBody;
   private terrainCollider: RAPIER.Collider;
+  private obstacleBodies: RAPIER.RigidBody[] = [];
 
   constructor(opts: WorldOptions = {}) {
     this.rapier = RAPIER;
@@ -37,6 +40,10 @@ export class World {
     const built = this.buildTerrain(this.terrain);
     this.terrainBody = built.body;
     this.terrainCollider = built.collider;
+    // Obstacles are deterministic from the same seed - both client and
+    // server generate identical lists, no network sync needed.
+    this.obstacles = generateObstacles(this.terrain);
+    this.obstacleBodies = spawnObstacleColliders(this.world, this.obstacles);
   }
 
   private buildTerrain(t: TerrainData): { body: RAPIER.RigidBody; collider: RAPIER.Collider } {
@@ -96,6 +103,8 @@ export class World {
   dispose(): void {
     for (const v of this.vehicles.values()) v.dispose();
     this.vehicles.clear();
+    for (const b of this.obstacleBodies) this.world.removeRigidBody(b);
+    this.obstacleBodies = [];
     this.world.free();
   }
 }

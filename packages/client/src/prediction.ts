@@ -55,17 +55,14 @@ export class Prediction {
     this.lastSteppedSeq = input.seq;
   }
 
-  /** Advance the local sim by frame time without new input - keeps the car
-   *  rolling between input samples (mostly a no-op since we sample at 60Hz). */
-  advance(frameDt: number): void {
-    this.acc += Math.min(frameDt, 0.25);
-    while (this.acc >= FIXED_DT) {
-      // No queued input this frame: re-use the last one.
-      const last = this.queue.length > 0 ? this.queue[this.queue.length - 1]!.input : EMPTY_INPUT;
-      this.vehicle.setInput(last);
-      this.world.step();
-      this.acc -= FIXED_DT;
-    }
+  /** Frame-time advance is a NO-OP. Prediction steps exactly once per
+   *  sampled input via pushAndStep(); driving the world from the render
+   *  loop too caused prediction to over-step relative to the server,
+   *  which in turn caused snapshot reconciliation to snap-back at 30Hz
+   *  - visible as a wheel-flicker on steering. Inputs are sampled at
+   *  60Hz which matches the server's tick rate exactly. */
+  advance(_frameDt: number): void {
+    /* intentionally empty */
   }
 
   /** Reconcile against an authoritative snapshot for the local player. */
