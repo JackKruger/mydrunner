@@ -80,13 +80,16 @@ export interface PetrolStationPad {
 
 export function petrolStationPadFor(size: number): PetrolStationPad {
   // West of spawn, well clear of the mountain (which sits +X / +Z).
+  // halfD=18 pushes the road-facing edge well inside the wider road
+  // core (which is now flat to |z|=8) so the pad's wings merge with
+  // the flat road area instead of partially fading to natural terrain.
   // wingDelta=14 gives roughly a ~30 deg flare at each road-side
   // corner - clearly reads as turn-in lanes from a passing vehicle.
   return {
     cx: -size * 0.20,
-    cz: 14,
+    cz: 16,
     halfW: 14,
-    halfD: 13,
+    halfD: 18,
     wingDelta: 14,
     fade: 4,
     yaw: 0,
@@ -125,9 +128,11 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
 
   // Road geometry. The "core" is strictly flat at y=0 so vehicles spawn
   // and drive on a solid plane regardless of orientation. Outside the
-  // shoulder we ease back into natural terrain.
-  const roadCore = 5;       // |z| < roadCore is exactly flat at y=0
-  const roadShoulder = 8;   // roadCore <= |z| < roadShoulder eases into terrain
+  // shoulder we ease back into natural terrain. The flat area is wide
+  // enough that there's clear shoulder either side of the road for
+  // pulling over, parking, etc.
+  const roadCore = 8;       // |z| < roadCore is exactly flat at y=0
+  const roadShoulder = 14;  // roadCore <= |z| < roadShoulder eases into terrain
 
   // Mountain: single big landmark. Centered off-road in the upper quadrant
   // so it reads as a destination from the road.
@@ -187,6 +192,24 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
         const dz = z - b.z;
         hNat -= b.depth * Math.exp(-(dx * dx + dz * dz) / (2 * b.sigma * b.sigma));
       }
+
+      // Map-edge wall: ramp up the heightfield steeply along the last
+      // EDGE_RAMP m of each side so the world reads as bounded by
+      // cliffs / hills rather than a flat horizon you can drive off.
+      // Smoothstep on each axis, take max so corners get the full lift.
+      const edgeRamp = 14;
+      const edgeLift = 18;
+      const half = size / 2;
+      const distEdgeX = half - Math.abs(x);
+      const distEdgeZ = half - Math.abs(z);
+      const tEdge = (d: number): number => {
+        if (d >= edgeRamp) return 0;
+        if (d <= 0) return 1;
+        const u = 1 - d / edgeRamp;
+        return u * u * (3 - 2 * u);
+      };
+      const edgeWeight = Math.max(tEdge(distEdgeX), tEdge(distEdgeZ));
+      hNat += edgeLift * edgeWeight;
 
       // Pad-blend: smoothstep that reaches 1 inside the pad and fades
       // to 0 over `pad.fade` metres outside. We rotate the world point

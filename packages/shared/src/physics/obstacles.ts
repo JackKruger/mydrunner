@@ -162,6 +162,44 @@ export function generateObstacles(
     const height = 14 + rng() * 8;          // 14..22m
     out.push({ kind: 'pine', x: px, y: py, z: pz, size: trunkRadius, height, yaw: rng() * Math.PI * 2 });
   }
+
+  // Pass 5: perimeter rocks + pines along the world edges. The
+  // heightfield already ramps up at the edges (see terrain.ts) so the
+  // wall is impassable; this pass dresses the cliff base with rocks
+  // and the occasional pine so the boundary reads as a treeline /
+  // rockline rather than an arbitrary world cap. Last pass so it
+  // doesn't shift RNG state for earlier passes (test stability).
+  // The cliff bump in the heightfield IS the wall; perimeter obstacles
+  // are decoration. Sparse spacing keeps the obstacle/collider count
+  // reasonable while still reading as a treeline / rockline.
+  const perimSpacing = 8;
+  const perimInset = 4;
+  const perimSize = terrain.size;
+  const perimHalf = perimSize / 2;
+  for (let side = 0; side < 4; side++) {
+    const along = perimSize - 2 * perimInset;
+    const steps = Math.floor(along / perimSpacing);
+    for (let i = 0; i <= steps; i++) {
+      const along_t = (i / steps) * along - along / 2;
+      const jitter = (rng() - 0.5) * 3;
+      let px: number, pz: number;
+      if (side === 0) { px = along_t; pz = perimHalf - perimInset - jitter; }
+      else if (side === 1) { px = along_t; pz = -perimHalf + perimInset + jitter; }
+      else if (side === 2) { px = perimHalf - perimInset - jitter; pz = along_t; }
+      else                 { px = -perimHalf + perimInset + jitter; pz = along_t; }
+      const idx = worldToTerrainIndex(terrain, px, pz);
+      if (idx < 0) continue;
+      const py = terrain.heights[idx] ?? 0;
+      if (rng() < 0.20) {
+        const trunkRadius = 0.7 + rng() * 0.5;
+        const height = 12 + rng() * 6;
+        out.push({ kind: 'pine', x: px, y: py, z: pz, size: trunkRadius, height, yaw: rng() * Math.PI * 2 });
+      } else {
+        const radius = 1.5 + rng() * 1.5;
+        out.push({ kind: 'rock', x: px, y: py, z: pz, size: radius, height: 0, yaw: rng() * Math.PI * 2 });
+      }
+    }
+  }
   return out;
 }
 
