@@ -1,30 +1,19 @@
-name: Deploy
+name: Deploy Client
+# Railway handles the server (auto-deploys via its GitHub integration when
+# this branch lands). This workflow only ships the client to GitHub Pages.
 on:
   push:
     branches:
       - main
-      # Also deploy from the active dev branch so we can iterate without
-      # merging to main yet. Remove this once main is the source of truth.
+      # Active dev branch - remove once main is the source of truth.
       - claude/add-claude-documentation-b6LkY
   workflow_dispatch:
 
-# Cancel an in-flight deploy if a newer commit arrives.
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-client-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # --- Server: built from the monorepo Dockerfile, deployed to Fly.io ---
-  server:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only --config fly.toml
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-  # --- Client: static build via Vite, deployed to GitHub Pages ---
   client:
     runs-on: ubuntu-latest
     permissions:
@@ -43,13 +32,11 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      # The client needs to know the production server URL at build time.
-      # Set this to the wss:// URL of your Fly app.
       - name: Build client
         env:
-          VITE_SERVER_URL: ${{ secrets.PUBLIC_SERVER_URL || 'wss://mydrunner-server.fly.dev' }}
-          # GitHub Pages serves at /<repo>/ unless a custom domain is configured.
-          # Set VITE_BASE=/ if you have a custom domain.
+          # Set this secret in repo settings to your Railway-provided
+          # public WebSocket URL, e.g. wss://mydrunner-server.up.railway.app
+          VITE_SERVER_URL: ${{ secrets.PUBLIC_SERVER_URL }}
           VITE_BASE: /${{ github.event.repository.name }}/
         run: pnpm --filter @mydrunner/client run build
       - uses: actions/configure-pages@v5

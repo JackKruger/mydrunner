@@ -1,57 +1,43 @@
 # Deploying mydrunner
 
-The architecture has two deployable pieces:
+Two deployable pieces:
 
-- **Server** (`packages/server`) — Node process holding WebSocket connections.
-  Deployed as a Docker container to Fly.io.
-- **Client** (`packages/client`) — static Vite SPA. Deployed to GitHub Pages.
+- **Server** (`packages/server`) — Node WebSocket process. Deployed to
+  **Railway** (auto-deploys on push via Railway's GitHub integration).
+- **Client** (`packages/client`) — static Vite SPA. Deployed to
+  **GitHub Pages** (auto-deploys on push via `.github/workflows/deploy.yml`).
 
-Once the secrets below are set, every push to `main` (or the active dev branch
-listed in `.github/workflows/deploy.yml`) auto-deploys both. CI runs typecheck,
-unit tests, Playwright tests, and a build on every push regardless.
+End-to-end: push → server redeploys on Railway in ~2 min, client redeploys
+to Pages in ~1 min.
 
-## One-time setup
+## Setup checklist (all web UI)
 
-### 1. Fly.io app
+### 1. Create the Railway service
 
-```bash
-# Install flyctl: https://fly.io/docs/hands-on/install-flyctl/
-flyctl auth login
-flyctl apps create mydrunner-server     # name must match fly.toml `app`
-flyctl deploy                           # first deploy, sanity check
-```
+1. Go to [railway.app](https://railway.app/) and sign in with GitHub.
+2. **New Project → Deploy from GitHub repo** → pick `JackKruger/mydrunner`.
+3. Railway detects `railway.json` at the repo root and uses
+   `packages/server/Dockerfile`. Build context is the monorepo root so it
+   can see the workspace files.
+4. After the first build, open the service → **Settings → Networking → Generate
+   Domain**. You'll get a URL like `mydrunner-server-production.up.railway.app`.
+   The WebSocket URL is `wss://<that-domain>` (Railway terminates TLS).
+5. (Optional) **Settings → Service → Watch Paths** → set to
+   `packages/server/**` and `packages/shared/**` so unrelated commits
+   (e.g. client-only changes) don't trigger a server rebuild.
 
-After it's up, your server's URL will be `wss://mydrunner-server.fly.dev`.
+### 2. GitHub repo configuration
 
-Generate a deploy token for CI:
+Settings → **Secrets and variables → Actions → New repository secret**:
 
-```bash
-flyctl tokens create deploy -x 999999h
-```
+- `PUBLIC_SERVER_URL` = `wss://<your-railway-domain>` (from step 1.4).
 
-Copy the token.
+Settings → **Pages**:
 
-### 2. GitHub repo secrets
+- **Source** = "GitHub Actions".
 
-In **Settings → Secrets and variables → Actions**, add:
-
-- `FLY_API_TOKEN` — paste the token from the previous step.
-- `PUBLIC_SERVER_URL` (optional) — override the WSS URL the client connects to.
-  Defaults to `wss://mydrunner-server.fly.dev`. If you use a custom domain or a
-  different app name, set this.
-
-### 3. Enable GitHub Pages
-
-In **Settings → Pages**, set the source to **GitHub Actions**. The
-`deploy.yml` workflow handles publishing.
-
-### 4. Push
-
-```bash
-git push
-```
-
-CI runs and the deploy workflow takes over. ~3 minutes end to end.
+That's it. Push a commit; Railway redeploys the server, the deploy
+workflow publishes the client to Pages.
 
 ## Running the deploy locally
 
@@ -65,27 +51,40 @@ docker run -p 2567:2567 mydrunner-server
 Client (static):
 
 ```bash
-VITE_SERVER_URL=wss://mydrunner-server.fly.dev \
+VITE_SERVER_URL=wss://your-railway-domain.up.railway.app \
+  VITE_BASE=/mydrunner/ \
   pnpm --filter @mydrunner/client run build
 # Output is in packages/client/dist - serve it with any static host.
 ```
 
 ## Cost / scale notes
 
-- Fly's free tier covers a single shared-cpu-1x instance (256MB), plenty for
-  the MVP. The `auto_stop_machines = "stop"` config in `fly.toml` lets the
-  server sleep when no one is connected and wake on the first packet.
+- Railway free trial covers the basic instance Mydrunner needs ($5/mo
+  starter plan after that, or $0 with their sleeping-services tier).
+- The server image is small (~250MB) and uses ~80MB RAM at idle.
+- For >10 concurrent players, bump to Railway's "Pro" plan or upgrade
+  the instance size in the service settings.
 - GitHub Pages is free for public repos.
-- For >10 simultaneous players, bump `[[vm]]` size to `dedicated-cpu-1x` and
-  `memory = "512mb"`.
-- For multi-region, you'll need room-sharding first (see CLAUDE.md roadmap).
 
-## Picking a different host
+## Alternative: Fly.io
 
-If you'd rather use Railway / Render / a VPS:
+The repo also has `fly.toml` and a Fly-compatible Dockerfile, in case you
+want to switch back. To deploy on Fly:
 
-- The Dockerfile is generic; any Docker host works.
-- Render's free tier sleeps after 15min idle which kills WebSocket connections.
-  Annoying for a game; pay $7/mo for "Starter" or use Fly.
-- Railway: same shape as Fly but with a different CLI. Replace
-  `superfly/flyctl-actions` with the Railway action in `deploy.yml`.
+```bash
+flyctl auth login
+flyctl apps create mydrunner-server
+flyctl deploy
+flyctl tokens create deploy -x 999999h
+# Then add FLY_API_TOKEN to repo secrets and re-add a Fly deploy job to
+# .github/workflows/deploy.yml.
+```
+
+Fly's free tier is more aggressive about sleeping the server (which
+disconnects WS clients). Railway's "auto-sleep" is gentler.
+
+## CI
+
+`.github/workflows/ci.yml` runs typecheck + unit + Playwright tests on
+every push, regardless of branch. Screenshot artifacts are uploaded so
+you can inspect the visual state of any commit.
