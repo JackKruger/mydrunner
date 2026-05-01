@@ -44,7 +44,7 @@ export class Room {
   private ticksSinceRutFlush = 0;
 
   constructor(seed = 1337) {
-    this.world = new Physics.World({ generate: { size: 200, resolution: 64, seed } });
+    this.world = new Physics.World({ generate: { size: 320, resolution: 96, seed } });
     this.rutBuffer = new Physics.RutBuffer(this.world.terrain);
   }
 

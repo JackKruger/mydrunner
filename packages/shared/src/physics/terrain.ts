@@ -44,9 +44,17 @@ export interface TerrainOptions {
 
 /** Generates a heightmap and matching surface map.
  *
- *  - Heights: FBM simplex noise, gentle hills with a flatter "valley" along z=0.
- *  - Surfaces: mud in the low areas (where water would pool), dirt in mid
- *    elevations, road as a single straight strip across X for variety.
+ *  Layout:
+ *    - Road: flat strip along z=0, easing into terrain across the shoulder.
+ *    - Hills: FBM simplex noise. Amplitude grows the further off-road
+ *      you go so the area near the road is gentle and the wilds get rough.
+ *    - Mountain: one prominent Gaussian peak in the upper quadrant -
+ *      something to drive towards / try to climb.
+ *    - Mud bogs: a handful of Gaussian dips scattered off-road, so mud
+ *      isn't only the symmetrical valleys hugging the road.
+ *    - Surfaces: road inside the core; dirt elsewhere except low spots
+ *      (h < -0.2 = mud, h < -0.8 = deep mud) and the mountain summit
+ *      (h > 9 = bare dirt regardless of mud thresholds).
  */
 export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const size = opts.size ?? 200;
@@ -70,18 +78,59 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const roadCore = 5;       // |z| < roadCore is exactly flat at y=0
   const roadShoulder = 8;   // roadCore <= |z| < roadShoulder eases into terrain
 
+  // Mountain: single big landmark. Centered off-road in the upper quadrant
+  // so it reads as a destination from the road.
+  const mtnCx = size * 0.22;
+  const mtnCz = size * 0.28;
+  const mtnPeak = 32;
+  const mtnSigma = size * 0.11; // ~35m at 320m world - steeper than rolling hills
+
+  // Mud bogs: a few Gaussian dips so mud isn't just the radial valleys.
+  // Positions are deterministic from the seed so client + server agree.
+  const bogs: { x: number; z: number; depth: number; sigma: number }[] = [];
+  const bogCount = 5;
+  for (let i = 0; i < bogCount; i++) {
+    // Place between 25m and (size/2 - 25m) of the centerline, on one side
+    // or the other, with x spread across the world.
+    const side = rng() < 0.5 ? -1 : 1;
+    const z = side * (25 + rng() * (size / 2 - 50));
+    const x = (rng() - 0.5) * (size - 50);
+    // Skip if too close to mountain.
+    const dxMtn = x - mtnCx;
+    const dzMtn = z - mtnCz;
+    if (Math.hypot(dxMtn, dzMtn) < mtnSigma * 1.5) continue;
+    bogs.push({ x, z, depth: 1.3 + rng() * 1.0, sigma: 6 + rng() * 5 });
+  }
+
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
       const x = (c / (n - 1) - 0.5) * size;
       const z = (r / (n - 1) - 0.5) * size;
       const az = Math.abs(z);
 
-      // Base hills.
-      let hNat = noise(x * freq, z * freq) * 4;
-      hNat += noiseDetail(x * detailFreq, z * detailFreq) * 0.6;
-      // Mud valley further from the road.
+      // Distance-from-road amplitude scaling: gentle near the shoulder,
+      // rougher further out. Saturates around 1.0 past 60m off-road.
+      const roughness = Math.min(1, Math.max(0, (az - roadShoulder) / 60));
+      const baseAmp = 3 + roughness * 5; // 3..8m hills
+      let hNat = noise(x * freq, z * freq) * baseAmp;
+      hNat += noiseDetail(x * detailFreq, z * detailFreq) * 0.8;
+
+      // Symmetrical mud valley hugging the road shoulder.
       const valley = Math.exp(-((az - roadShoulder) ** 2) / (12 * 12)) * 1.4;
       if (az > roadShoulder) hNat -= valley;
+
+      // Mountain peak.
+      const dxM = x - mtnCx;
+      const dzM = z - mtnCz;
+      const distM2 = dxM * dxM + dzM * dzM;
+      hNat += mtnPeak * Math.exp(-distM2 / (2 * mtnSigma * mtnSigma));
+
+      // Mud bogs (subtract).
+      for (const b of bogs) {
+        const dx = x - b.x;
+        const dz = z - b.z;
+        hNat -= b.depth * Math.exp(-(dx * dx + dz * dz) / (2 * b.sigma * b.sigma));
+      }
 
       let h: number;
       if (az < roadCore) {
@@ -98,7 +147,9 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
       const idx = r * n + c;
       heights[idx] = h;
 
-      // Surface assignment.
+      // Surface assignment. Mountain summit stays dirt even at depths the
+      // mud thresholds would normally claim (heightfield is what it is,
+      // but a mountain peak shouldn't be mud).
       let surf: Surface = Surface.Dirt;
       if (az < roadCore) {
         surf = Surface.Road;

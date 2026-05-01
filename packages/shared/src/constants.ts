@@ -84,13 +84,24 @@ export const ENGINE = {
   rpmLimiterFalloff: 800,
 } as const;
 
-// Mud / surface friction. Higher = more grip.
+// Mud / surface friction. Multipliers in [0, 1] applied on top of
+// TIRE_BASE_GRIP. Higher = more grip. Spread is intentionally wide so
+// the player feels the surface change clearly when leaving the road.
+//   road    1.00 - tarmac, planted
+//   dirt    0.78 - off-road but driveable, mild slip
+//   mud     0.32 - clearly slippy, throttle wants to overrun grip
+//   deepMud 0.15 - bog: barely makes progress, very easy to spin
 export const SURFACE_FRICTION = {
   road: 1.0,
-  dirt: 0.85,
-  mud: 0.45,
-  deepMud: 0.25,
+  dirt: 0.78,
+  mud: 0.32,
+  deepMud: 0.15,
 } as const;
+
+// Base Rapier wheel friction-slip before surface / axle / slip-curve
+// modifiers. Higher = more grip overall. 2.8 keeps the road feeling
+// planted while leaving headroom for surfaceMult to bite hard on mud.
+export const TIRE_BASE_GRIP = 2.8;
 
 // Chase camera. Lives shared-side because the constants describe the
 // game's feel, not anything client-internal. The chase yaw uses an

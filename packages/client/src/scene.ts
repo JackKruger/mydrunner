@@ -65,7 +65,7 @@ export class Scene {
     canvasParent.appendChild(this.renderer.domElement);
 
     this.scene.background = new THREE.Color(0xb8d0e2);
-    this.scene.fog = new THREE.Fog(0xb8d0e2, 120, 320);
+    this.scene.fog = new THREE.Fog(0xb8d0e2, 180, 480);
 
     this.camera = new THREE.PerspectiveCamera(
       60,
@@ -79,10 +79,10 @@ export class Scene {
     sun.position.set(50, 80, 30);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -60;
-    sun.shadow.camera.right = 60;
-    sun.shadow.camera.top = 60;
-    sun.shadow.camera.bottom = -60;
+    sun.shadow.camera.left = -100;
+    sun.shadow.camera.right = 100;
+    sun.shadow.camera.top = 100;
+    sun.shadow.camera.bottom = -100;
     this.scene.add(sun);
     this.scene.add(new THREE.HemisphereLight(0xb8d0e2, 0x66553c, 0.6));
 

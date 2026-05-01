@@ -73,22 +73,21 @@ async function start(): Promise<void> {
   // Rapier WASM init - prediction depends on the same physics as the server.
   await Physics.initRapier();
 
-  // First-load name + car picker. Skipped on subsequent visits via
-  // localStorage. URL param ?auto=1 skips the picker too (used by e2e
-  // tests; harmless in normal use).
+  // Show the name + car picker on every load so the player can pick a
+  // different rig if they want; previous name + car are pre-filled from
+  // localStorage so the common case is one Enter to drive. URL param
+  // ?auto=1 skips the picker entirely (used by e2e tests).
   const params = new URLSearchParams(location.search);
   const auto = params.get('auto') === '1';
   const saved = loadSavedJoin();
   let choice: JoinChoice;
-  if (saved) {
-    choice = saved;
-  } else if (auto) {
+  if (auto) {
     choice = {
-      name: params.get('name') || `player-${Math.floor(Math.random() * 1000)}`,
-      carKind: params.get('car') === 'hilux' ? 'hilux' : 'patrol',
+      name: params.get('name') || saved?.name || `player-${Math.floor(Math.random() * 1000)}`,
+      carKind: params.get('car') === 'hilux' ? 'hilux' : (saved?.carKind ?? 'patrol'),
     };
   } else {
-    choice = await showJoinScreen({});
+    choice = await showJoinScreen(saved ?? {});
     saveJoin(choice);
   }
 

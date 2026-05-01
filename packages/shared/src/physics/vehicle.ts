@@ -3,7 +3,7 @@
 // terrain surface beneath the wheel, giving us the mud feel.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { VEHICLE, SURFACE_FRICTION } from '../constants.js';
+import { VEHICLE, SURFACE_FRICTION, TIRE_BASE_GRIP } from '../constants.js';
 import { EMPTY_INPUT, type PlayerInput, type VehicleState, type WheelState } from '../types.js';
 import { Surface, sampleSurface } from './terrain.js';
 import { createEngineState, stepEngine, type EngineState } from './engine.js';
@@ -84,7 +84,7 @@ export class Vehicle {
       this.controller.setWheelSuspensionRelaxation(i, VEHICLE.suspensionDamping);
       this.controller.setWheelMaxSuspensionForce(i, VEHICLE.maxSuspensionForce);
       this.controller.setWheelMaxSuspensionTravel(i, VEHICLE.maxSuspensionTravel);
-      this.controller.setWheelFrictionSlip(i, 2.0);
+      this.controller.setWheelFrictionSlip(i, TIRE_BASE_GRIP);
     }
   }
 
@@ -154,7 +154,7 @@ export class Vehicle {
       const axleMult = i < 2 ? VEHICLE.frontGripMult : VEHICLE.rearGripMult;
       const slip = slipRatio(wheelAngVels[i] ?? 0, VEHICLE.wheelRadius, longitudinal);
       const slipMult = gripFromSlip(slip);
-      this.controller.setWheelFrictionSlip(i, 2.0 * surfMult * axleMult * slipMult);
+      this.controller.setWheelFrictionSlip(i, TIRE_BASE_GRIP * surfMult * axleMult * slipMult);
     }
 
     // Engine + gearbox: signed average wheel angular velocity. wheelAngVels
