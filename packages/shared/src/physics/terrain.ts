@@ -80,12 +80,14 @@ export interface PetrolStationPad {
 
 export function petrolStationPadFor(size: number): PetrolStationPad {
   // West of spawn, well clear of the mountain (which sits +X / +Z).
+  // wingDelta=14 gives roughly a ~30 deg flare at each road-side
+  // corner - clearly reads as turn-in lanes from a passing vehicle.
   return {
     cx: -size * 0.20,
     cz: 14,
     halfW: 14,
     halfD: 13,
-    wingDelta: 6,
+    wingDelta: 14,
     fade: 4,
     yaw: 0,
   };
@@ -198,7 +200,11 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
       const dz = z - pad.cz;
       const lx = cosY * dx + sinY * dz;
       const lz = -sinY * dx + cosY * dz;
-      const wingT = Math.max(0, lz / pad.halfD); // 0 at back, 1 at road side
+      // Pad's road-facing edge is at lz = -halfD (the road is at world
+      // z<5 while the pad centre sits at world z=cz=14). Wing fattens
+      // the pad as we approach the road side: wingT 0 at back, 1 at
+      // road edge.
+      const wingT = Math.max(0, -lz / pad.halfD);
       const effHalfW = pad.halfW + wingT * pad.wingDelta;
       const padX = smoothFalloff(Math.abs(lx), effHalfW, pad.fade);
       const padZ = smoothFalloff(Math.abs(lz), pad.halfD, pad.fade);

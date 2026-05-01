@@ -33,6 +33,11 @@ export class Prediction {
   private lastSteppedSeq = 0;
   /** Spawn pose - used for resets. */
   private spawn: { position: { x: number; y: number; z: number }; yaw: number };
+  /** Visual position offset that decays each step. On reconcile, the body
+   *  snaps to the server pose; we capture the jump (oldPos - newPos) into
+   *  this offset so state() can return a smoothly-converging visual
+   *  position. Hides 30Hz reconcile stutter when divergence is small. */
+  private visualOffset = { x: 0, y: 0, z: 0 };
 
   constructor(seed: number, size: number, resolution: number, spawn: { position: { x: number; y: number; z: number }; yaw?: number }) {
     const terrain = Physics.generateTerrain({ seed, size, resolution });
@@ -53,6 +58,12 @@ export class Prediction {
     this.vehicle.setInput(input);
     this.world.step();
     this.lastSteppedSeq = input.seq;
+    // Decay the visual reconcile offset toward zero each step. 0.82 per
+    // step at 60Hz gives a ~80ms half-life, so a small reconcile snap
+    // converges away within a couple of frames - invisible.
+    this.visualOffset.x *= 0.82;
+    this.visualOffset.y *= 0.82;
+    this.visualOffset.z *= 0.82;
   }
 
   /** Frame-time advance is a NO-OP. Prediction steps exactly once per
@@ -73,6 +84,13 @@ export class Prediction {
     // Drop acked inputs.
     this.queue = this.queue.filter((q) => q.input.seq > me.lastAckSeq);
 
+    // Capture the predicted pose BEFORE we snap so we can smooth the
+    // visual jump. After replaying queued inputs, we'll compare
+    // post-replay pose to pre-snap pose and add the difference to the
+    // visual offset. Decay in pushAndStep then fades it out.
+    const before = this.vehicle.body.translation();
+    const beforeX = before.x, beforeY = before.y, beforeZ = before.z;
+
     // Snap to authoritative state. Includes the smoothed steering angle:
     // without this, replay would double-step currentSteer (since
     // prediction had already advanced it for each unacked input), making
@@ -89,9 +107,25 @@ export class Prediction {
       this.vehicle.setInput(q.input);
       this.world.step();
     }
+
+    // Compare post-replay pose to the pre-snap predicted pose. Anything
+    // we couldn't fix by replay shows up as a jump - bake it into the
+    // visual offset so the rendered car drifts smoothly to the new
+    // pose instead of popping. Cap to ±1.5m so a catastrophic
+    // divergence still snaps visibly (better to teleport than fly).
+    const after = this.vehicle.body.translation();
+    const dx = beforeX - after.x;
+    const dy = beforeY - after.y;
+    const dz = beforeZ - after.z;
+    const CAP = 1.5;
+    this.visualOffset.x = Math.max(-CAP, Math.min(CAP, this.visualOffset.x + dx));
+    this.visualOffset.y = Math.max(-CAP, Math.min(CAP, this.visualOffset.y + dy));
+    this.visualOffset.z = Math.max(-CAP, Math.min(CAP, this.visualOffset.z + dz));
   }
 
-  /** Read the predicted vehicle state for rendering. */
+  /** Read the predicted vehicle state for rendering. The position
+   *  includes the visual reconcile offset (decaying toward zero) so
+   *  small server corrections don't pop the car. */
   state(): {
     position: { x: number; y: number; z: number };
     rotation: { x: number; y: number; z: number; w: number };
@@ -99,7 +133,11 @@ export class Prediction {
   } {
     const s = this.vehicle.getState();
     return {
-      position: s.position,
+      position: {
+        x: s.position.x + this.visualOffset.x,
+        y: s.position.y + this.visualOffset.y,
+        z: s.position.z + this.visualOffset.z,
+      },
       rotation: s.rotation,
       wheels: s.wheels.map((w) => ({ steer: w.steer, spin: w.spin, suspensionLength: w.suspensionLength })),
     };
