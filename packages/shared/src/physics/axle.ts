@@ -1,22 +1,25 @@
-// Axle state machine for the solid-axle vehicle model. An axle has two
-// degrees of freedom relative to its chassis attachment:
+// Axle state for the solid-axle vehicle model. An axle has two degrees
+// of freedom relative to its chassis attachment:
 //
-//   rideY     - vertical translation along the axle's mount, governed by
-//               the ride spring + damper.
-//   rollAngle - rotation of the axle beam about the chassis-forward axis,
-//               governed by a (much softer) roll spring + damper. Roll
-//               articulation is capped at +/- maxArticulation; surplus
-//               torque past the cap is reported back to the caller so it
-//               can be applied to the chassis (the body leans).
+//   rideY     - vertical translation along the axle's mount.
+//   rollAngle - rotation of the axle beam about the chassis-forward axis.
 //
-// Both wheels on the axle share these DOFs - that's the whole point of
-// "solid axle". A bump under one wheel rotates the beam, which lifts the
-// hub on the other side OR (if past the cap) levers the chassis instead.
+// The model is kinematic: each tick we set rideY to track average ground
+// compression and rollAngle to track terrain slope across the wheels,
+// both clamped at their travel limits. The "spring" dynamics live on the
+// chassis: the per-tick ride and roll forces produced here drive the
+// chassis Rapier rigid body, and Rapier integrates the chassis bounce.
+// This avoids the stability headache of a separate axle integrator at a
+// tick rate where axle natural frequencies (omega ~ sqrt(k/m_axle) ~ 27
+// rad/s) are close to Nyquist.
 //
-// Pure functions; no Rapier handles. Tested in isolation in
-// shared/__tests__/axle.test.ts.
+// The articulation cap is enforced here: when terrain demands more roll
+// than maxArticulation, rollAngle clamps and the surplus torque dumps
+// onto the chassis - that's the lean-over-a-rock behaviour that gives
+// solid-axle rock crawlers their distinctive look.
+//
+// Pure functions; no Rapier handles. Tested in shared/__tests__/axle.test.ts.
 
-import { GRAVITY_Y } from '../constants.js';
 import type { AxleGeom } from './vehicleGeom.js';
 
 export interface AxleState {
@@ -80,95 +83,73 @@ export interface StepAxleInputs {
   /** Wheel-end ground compression depths from the latest raycasts (m). */
   leftDepth: number;
   rightDepth: number;
-  /** Whether each ray hit anything (no contact -> the spring relaxes). */
+  /** Whether each ray hit anything (no contact -> no ride force). */
   leftContact: boolean;
   rightContact: boolean;
   /** Vertical component of the chassis velocity at the axle anchor in
-   *  world space, used so chassis motion damps the axle correctly. */
+   *  world space, used to damp chassis bounce on the ride spring. */
   chassisVertVelAtAnchor: number;
   dt: number;
-  /** Internal sub-stepping count for stability at high spring rates.
-   *  Defaults to 4 - cheap because the axle math is tiny. */
-  substeps?: number;
 }
 
-/** Advance an AxleState one fixed timestep. Pure: mutates `s` in place
- *  and returns the chassis reaction terms. Sub-steps the integrator
- *  internally for unconditional stability up to ~200k N/m spring rates. */
+/** Advance an AxleState one fixed timestep. Kinematic: rideY tracks
+ *  average ground compression, rollAngle tracks terrain slope; both
+ *  clamped at their travel limits. Returns the per-tick reaction force
+ *  on the chassis (ride spring + damper) and roll torque (only non-zero
+ *  past the articulation cap). */
 export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   const g = s.geom;
-  const subs = Math.max(1, input.substeps ?? 4);
-  const h = input.dt / subs;
 
-  // The springs only push when the wheel is actually touching ground.
-  // No-contact wheels droop to their stop and contribute nothing.
-  const lc = input.leftContact ? input.leftDepth : 0;
-  const rc = input.rightContact ? input.rightDepth : 0;
+  const lc = input.leftContact ? Math.max(0, input.leftDepth) : 0;
+  const rc = input.rightContact ? Math.max(0, input.rightDepth) : 0;
   s.leftDepth = lc;
   s.rightDepth = rc;
   s.leftContact = input.leftContact;
   s.rightContact = input.rightContact;
 
+  // rideY: average compression, clamped to the axle's bump stop. Below
+  // the bump stop the chassis is supported by the ride spring; at the
+  // stop, anything beyond is taken by the chassis collider directly.
   const avgComp = 0.5 * (lc + rc);
-  // Target articulation = atan of the wheel-end height delta over the
-  // axle's full track. Solving exactly tracks ground slope across the
-  // wheels; the spring then carries rollAngle toward this target.
+  let targetY = avgComp;
+  if (targetY > g.bumpMax) targetY = g.bumpMax;
+  // No droop modelling in the kinematic axle: an in-air axle reports
+  // rideY=0 (no support). Real droop with a strap-limited drop is a
+  // future refinement; for now the chassis just feels no lift on this
+  // axle, which is the correct gameplay behaviour.
+  if (targetY < 0) targetY = 0;
+  const prevY = s.rideY;
+  s.rideY = targetY;
+  s.rideVelY = input.dt > 0 ? (s.rideY - prevY) / input.dt : 0;
+
+  // rollAngle tracks terrain slope across the wheels, clamped at the
+  // articulation cap. Anything past the cap dumps surplus into the
+  // chassis as a torque - that's the body-lean-over-a-rock behaviour.
   const targetRoll = Math.atan2(rc - lc, 2 * g.trackHalf);
+  let clampedRoll = targetRoll;
+  if (clampedRoll > g.maxArticulation) clampedRoll = g.maxArticulation;
+  else if (clampedRoll < -g.maxArticulation) clampedRoll = -g.maxArticulation;
+  const prevRoll = s.rollAngle;
+  s.rollAngle = clampedRoll;
+  s.rollVel = input.dt > 0 ? (s.rollAngle - prevRoll) / input.dt : 0;
 
-  for (let i = 0; i < subs; i++) {
-    // Ride dynamics. The spring force on the axle from the ground is
-    // rideStiffness * avgComp; on top of that, the damping term scales
-    // the axle's local vertical velocity relative to the chassis at the
-    // anchor (so the axle settles instead of bouncing forever).
-    const groundForce = g.rideStiffness * avgComp;
-    const relVel = s.rideVelY - input.chassisVertVelAtAnchor;
-    const dampF = -g.rideDamping * relVel;
-    // Axle weight pulls the hub down; chassis weight is handled by
-    // gravity on the chassis body itself (Rapier integrates it). The
-    // axle mass is a free body relative to the chassis between its
-    // droop/bump stops; gravity on it shows up here.
-    const axleWeight = g.axleMass * GRAVITY_Y;
-    const accel = (groundForce + dampF + axleWeight) / g.axleMass;
-    s.rideVelY += accel * h;
-    s.rideY += s.rideVelY * h;
-    if (s.rideY > g.bumpMax) {
-      s.rideY = g.bumpMax;
-      if (s.rideVelY > 0) s.rideVelY = 0;
-    } else if (s.rideY < -g.droopMax) {
-      s.rideY = -g.droopMax;
-      if (s.rideVelY < 0) s.rideVelY = 0;
-    }
+  // Ride force on chassis: positive (up) when axle is compressed
+  // (rideY > 0). The damping term is scaled by spring engagement
+  // (rideY / restLength), so a chassis hitting the spring at speed
+  // gets a soft initial response that builds with compression - this
+  // matches a real shock absorber where fluid bandwidth limits the
+  // peak force at the moment of contact, and avoids huge impulses
+  // that otherwise launch the chassis off its first contact.
+  const engagement = Math.min(1, s.rideY / g.suspensionRestLength);
+  const chassisRideForce =
+    s.rideY > 1e-6
+      ? g.rideStiffness * s.rideY
+        - g.rideDamping * engagement * input.chassisVertVelAtAnchor
+      : 0;
 
-    // Roll dynamics. Spring restores toward the terrain target; damping
-    // resists rapid articulation. Mass moment is axleRollInertia.
-    const rollErr = targetRoll - s.rollAngle;
-    const rollAccel = (g.rollStiffness * rollErr - g.rollDamping * s.rollVel) / g.axleRollInertia;
-    s.rollVel += rollAccel * h;
-    s.rollAngle += s.rollVel * h;
-    if (s.rollAngle > g.maxArticulation) {
-      s.rollAngle = g.maxArticulation;
-      if (s.rollVel > 0) s.rollVel = 0;
-    } else if (s.rollAngle < -g.maxArticulation) {
-      s.rollAngle = -g.maxArticulation;
-      if (s.rollVel < 0) s.rollVel = 0;
-    }
-  }
-
-  // Force the chassis sees from this axle = the spring pre-load. With
-  // axle compressed (rideY < 0) the spring pushes the chassis up; with
-  // axle extended (rideY > 0) it pulls down. Damping uses the same
-  // relative-velocity term so chassis motion doesn't ring on top of the
-  // axle's own settling.
-  const relVelEnd = s.rideVelY - input.chassisVertVelAtAnchor;
-  const chassisRideForce = -g.rideStiffness * s.rideY - g.rideDamping * relVelEnd;
-
-  // Surplus articulation past the mechanical stop becomes a torque on
-  // the chassis. Below the cap it's zero (the axle is free to flex).
   let chassisRollTorque = 0;
-  const surplus = targetRoll - s.rollAngle;
-  if (s.rollAngle >= g.maxArticulation && surplus > 0) {
-    chassisRollTorque = g.rollStiffness * surplus;
-  } else if (s.rollAngle <= -g.maxArticulation && surplus < 0) {
+  if (Math.abs(targetRoll) > g.maxArticulation) {
+    const surplus = targetRoll - clampedRoll;
     chassisRollTorque = g.rollStiffness * surplus;
   }
 

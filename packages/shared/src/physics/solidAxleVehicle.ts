@@ -165,6 +165,13 @@ export class SolidAxleVehicle implements VehicleLike {
   preStep(): void {
     const dt = FIXED_DT;
 
+    // CRITICAL: Rapier accumulates external forces across step() calls
+    // until reset. Without these calls, last tick's spring force would
+    // add to this tick's, causing a runaway upward force after a few
+    // ticks of contact. Reset here so each tick's force is fresh.
+    this.body.resetForces(false);
+    this.body.resetTorques(false);
+
     // 1. Capture chassis pose ONCE (determinism rule).
     const t = this.body.translation();
     const r = this.body.rotation();

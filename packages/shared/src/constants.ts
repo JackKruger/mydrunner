@@ -128,7 +128,10 @@ export const AXLE = {
     droopMax: 0.30,
     bumpMax: 0.20,
     rideStiffness: 80_000,
-    rideDamping: 6_500,
+    // c_critical = 2*sqrt(k*m_chassis_share) ~ 2*sqrt(80000*750) ~ 15500 N*s/m
+    // per axle (one axle supports half the chassis). 12000 is ~75% of
+    // critical: settles in roughly one cycle without feeling rigid.
+    rideDamping: 12_000,
     rollStiffness: 35_000,
     rollDamping: 1_800,
     maxArticulation: 0.45,
@@ -146,7 +149,7 @@ export const AXLE = {
     droopMax: 0.32,
     bumpMax: 0.20,
     rideStiffness: 90_000,
-    rideDamping: 7_200,
+    rideDamping: 13_000,
     rollStiffness: 28_000,
     rollDamping: 1_500,
     maxArticulation: 0.50,
