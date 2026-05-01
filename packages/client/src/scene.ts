@@ -204,7 +204,8 @@ export class Scene {
       const w = v.wheels[i]!;
       const ws = wheels[i];
       const susp = ws ? ws.suspensionLength : VEHICLE.suspensionRestLength;
-      w.position.set(wp.x, wp.y - (susp - VEHICLE.suspensionRestLength), wp.z);
+      const sink = this.wheelSinkAt(v.group, wp);
+      w.position.set(wp.x, wp.y - (susp - VEHICLE.suspensionRestLength) - sink, wp.z);
       w.rotation.set(ws ? ws.spin : 0, ws ? ws.steer : 0, 0);
     }
     // Smooth camera target instead of snapping. Position is filtered with
@@ -258,7 +259,8 @@ export class Scene {
             const susp = wa && wb
               ? wa.suspensionLength + (wb.suspensionLength - wa.suspensionLength) * t
               : VEHICLE.suspensionRestLength;
-            wheel.position.set(wp.x, wp.y - (susp - VEHICLE.suspensionRestLength), wp.z);
+            const sink = this.wheelSinkAt(vis.group, wp);
+            wheel.position.set(wp.x, wp.y - (susp - VEHICLE.suspensionRestLength) - sink, wp.z);
             const steer = wa ? wa.steer : 0;
             const spin = wa && wb ? wa.spin + (wb.spin - wa.spin) * t : 0;
             wheel.rotation.set(spin, steer, 0);
@@ -377,6 +379,27 @@ export class Scene {
       this.camera.position.set(0, 60, 60);
       this.camera.lookAt(0, 0, 0);
     }
+  }
+
+  /** Compute how far below its physics-resolved position a wheel visual
+   *  should drop because the ground beneath it is soft (mud). Pure
+   *  visual; the chassis still rides at its physics-determined height.
+   *  Returns 0 on road / dirt. */
+  private wheelSinkAt(group: THREE.Group, wp: { x: number; y: number; z: number }): number {
+    if (!this.terrain) return 0;
+    // Rotate the local wheel position by chassis rotation to get world XZ.
+    const q = group.quaternion;
+    const ix = q.w * wp.x + q.y * wp.z - q.z * wp.y;
+    const iy = q.w * wp.y + q.z * wp.x - q.x * wp.z;
+    const iz = q.w * wp.z + q.x * wp.y - q.y * wp.x;
+    const iw = -q.x * wp.x - q.y * wp.y - q.z * wp.z;
+    const wx = group.position.x + ix * q.w + iw * -q.x + iy * -q.z - iz * -q.y;
+    const wz = group.position.z + iz * q.w + iw * -q.z + ix * -q.y - iy * -q.x;
+    void iy;
+    const surf = Physics.sampleSurface(this.terrain.terrain, wx, wz);
+    if (surf === Physics.Surface.Mud) return VEHICLE.wheelRadius * 0.18;
+    if (surf === Physics.Surface.DeepMud) return VEHICLE.wheelRadius * 0.35;
+    return 0;
   }
 
   /** Sample terrain height at world (x, z). Used by the camera so it

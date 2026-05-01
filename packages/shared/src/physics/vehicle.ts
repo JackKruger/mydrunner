@@ -63,11 +63,17 @@ export class Vehicle {
 
     this.controller = world.world.createVehicleController(this.body);
     const suspDir = { x: 0, y: -1, z: 0 };
+    // Axle direction matters for what Rapier considers the wheel's
+    // "forward". Internally forward = axle x suspensionDir, so:
+    //   axle = (-1,0,0), susp = (0,-1,0) -> forward = (0,0,+1) (local +Z).
+    // We use that convention so wheelPositions z=+1.3 = "front of car"
+    // and pressing W applies positive engine force -> motion in +Z.
+    const axle = { x: -1, y: 0, z: 0 };
     for (const wp of VEHICLE.wheelPositions) {
       this.controller.addWheel(
         wp,
         suspDir,
-        { x: 1, y: 0, z: 0 }, // axle (local +X)
+        axle,
         VEHICLE.suspensionRestLength,
         VEHICLE.wheelRadius,
       );
