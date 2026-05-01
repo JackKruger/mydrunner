@@ -99,9 +99,9 @@ export const SURFACE_FRICTION = {
 // the outside of the turn instead of locking rigidly behind the car.
 export const CAMERA = {
   chaseYawStiffness: 14,    // rad/s^2 per rad of error - higher = tracks faster
-  chaseYawDamping: 4,       // critical damping at 2*sqrt(stiffness) ~7.48; below that = under-damped (swing)
-  chaseSwingLateral: 0.45,  // metres of side offset per rad/s of camera yaw rate
-  chaseSwingMax: 1.5,       // clamp on lateral swing offset (m)
+  chaseYawDamping: 2.8,     // critical at 2*sqrt(stiffness) ~7.48; well below that for visible swing
+  chaseSwingLateral: 0.75,  // metres of side offset per rad/s of camera yaw rate
+  chaseSwingMax: 2.2,       // clamp on lateral swing offset (m)
 } as const;
 
 // Networking
@@ -116,3 +116,11 @@ export const INTERPOLATION_DELAY_MS = 100;
 export const RUT_RATE = 0.0035;        // m per tick at full slip
 export const RUT_MAX_DEPTH = 0.6;      // m below original height
 export const RUT_REBUILD_INTERVAL_TICKS = 30;
+// Disabled for now: at the current world size (200m) / heightfield
+// resolution (64), each rut cell is ~3.17m across - much wider than a
+// tire - so wheel passes sink large patches instead of carving tracks.
+// Also causes prediction divergence (the client's prediction world
+// never receives rut deltas), producing periodic rubberbanding on mud.
+// Re-enable once terrain resolution bumps or a sub-cell rut overlay
+// (visuals decoupled from the collider) lands.
+export const RUTS_ENABLED = false;
