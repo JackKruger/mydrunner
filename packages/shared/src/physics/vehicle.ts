@@ -297,5 +297,7 @@ function surfaceGrip(s: Surface): number {
     case Surface.Dirt: return SURFACE_FRICTION.dirt;
     case Surface.Mud: return SURFACE_FRICTION.mud;
     case Surface.DeepMud: return SURFACE_FRICTION.deepMud;
+    case Surface.Grass: return SURFACE_FRICTION.grass;
+    case Surface.Gravel: return SURFACE_FRICTION.gravel;
   }
 }

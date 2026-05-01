@@ -12,6 +12,8 @@ const SURFACE_LABELS: Record<number, string> = {
   [Physics.Surface.Dirt]: 'dirt',
   [Physics.Surface.Mud]: 'mud',
   [Physics.Surface.DeepMud]: 'deep mud',
+  [Physics.Surface.Grass]: 'grass',
+  [Physics.Surface.Gravel]: 'gravel',
 };
 import { initInput, sampleInput, clearKeys } from './input.js';
 import { initTouchInput, onTouchEdge } from './touchInput.js';

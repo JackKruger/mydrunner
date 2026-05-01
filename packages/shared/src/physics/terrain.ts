@@ -8,6 +8,8 @@ export const Surface = {
   Dirt: 1,
   Mud: 2,
   DeepMud: 3,
+  Grass: 4,
+  Gravel: 5,
 } as const;
 export type Surface = (typeof Surface)[keyof typeof Surface];
 
@@ -161,9 +163,17 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
       const idx = r * n + c;
       heights[idx] = h;
 
-      // Surface assignment. Mountain summit stays dirt even at depths the
-      // mud thresholds would normally claim (heightfield is what it is,
-      // but a mountain peak shouldn't be mud).
+      // Surface assignment. Six bands:
+      //   Road    - centre strip
+      //   Dirt    - shoulder + transition zone
+      //   Mud     - shallow low spots
+      //   DeepMud - deepest low spots / bogs
+      //   Grass   - rolling mid-elevations away from the road
+      //   Gravel  - mountain slope (anything within mountain's influence
+      //             that's well above the surrounding terrain)
+      const distMtn2 = (x - mtnCx) ** 2 + (z - mtnCz) ** 2;
+      const onMtn = distMtn2 < (mtnSigma * 1.2) ** 2;
+
       let surf: Surface = Surface.Dirt;
       if (az < roadCore) {
         surf = Surface.Road;
@@ -173,6 +183,13 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
         surf = Surface.DeepMud;
       } else if (h < -0.2) {
         surf = Surface.Mud;
+      } else if (onMtn && h > 4) {
+        // The mountain's flanks are loose rock: gravel covers anything
+        // both inside the mountain's footprint and clearly elevated.
+        surf = Surface.Gravel;
+      } else if (h > 1.5 && h < 5) {
+        // Rolling mid-elevation grassy plateau.
+        surf = Surface.Grass;
       }
       surfaces[idx] = surf;
     }

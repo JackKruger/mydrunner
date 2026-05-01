@@ -91,11 +91,15 @@ export const ENGINE = {
 //   dirt    0.78 - off-road but driveable, mild slip
 //   mud     0.32 - clearly slippy, throttle wants to overrun grip
 //   deepMud 0.15 - bog: barely makes progress, very easy to spin
+//   grass   0.68 - softer than dirt, slick when wet
+//   gravel  0.62 - loose stones; less grip than dirt, similar to wet grass
 export const SURFACE_FRICTION = {
   road: 1.0,
   dirt: 0.78,
   mud: 0.32,
   deepMud: 0.15,
+  grass: 0.68,
+  gravel: 0.62,
 } as const;
 
 // Base Rapier wheel friction-slip before surface / axle / slip-curve

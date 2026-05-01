@@ -23,11 +23,9 @@ const STYLE = `
   border-radius: 3px;
   padding: 3px 8px;
   color: #eee;
-  transition: opacity 0.6s ease-out;
   word-wrap: break-word;
   overflow-wrap: anywhere;
 }
-#chat-log .line.fade { opacity: 0; }
 #chat-log .name { color: #ffb27a; margin-right: 6px; }
 #chat-log .name.me { color: #7adfff; }
 #chat-log .system .name { color: #999; font-style: italic; }
@@ -54,15 +52,8 @@ const STYLE = `
 }
 `;
 
-const MAX_VISIBLE = 6;
-const HOLD_MS = 6000;
-const FADE_MS = 600;
+const MAX_VISIBLE = 5;
 const MAX_LEN = 200;
-
-interface LogEntry {
-  el: HTMLElement;
-  expiresAt: number;
-}
 
 export interface ChatUI {
   /** Append a remote (or echoed-back) chat line to the log. */
@@ -103,27 +94,14 @@ export function initChat(hooks: Hooks): ChatUI {
   inputWrap.appendChild(input);
   document.body.appendChild(inputWrap);
 
-  const entries: LogEntry[] = [];
-
-  const tick = (): void => {
-    const now = performance.now();
-    while (entries.length > 0 && entries[0]!.expiresAt + FADE_MS < now) {
-      const e = entries.shift()!;
-      e.el.remove();
-    }
-    for (const e of entries) {
-      if (now > e.expiresAt) e.el.classList.add('fade');
-    }
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
+  const entries: HTMLElement[] = [];
 
   const append = (line: HTMLElement): void => {
     log.appendChild(line);
-    entries.push({ el: line, expiresAt: performance.now() + HOLD_MS });
+    entries.push(line);
     while (entries.length > MAX_VISIBLE) {
       const dropped = entries.shift()!;
-      dropped.el.remove();
+      dropped.remove();
     }
   };
 
