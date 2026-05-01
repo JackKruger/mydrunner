@@ -18,6 +18,7 @@ import { createNameplate, disposeNameplate } from './nameplate.js';
 import { ParticleSystem } from './particles.js';
 import { Obstacles } from './obstacles.js';
 import { ChaseCamera } from './camera.js';
+import { Sky } from './sky.js';
 
 interface SnapshotEntry {
   recvAtMs: number;
@@ -49,6 +50,7 @@ export class Scene {
   private terrainPlaceholder: THREE.Mesh | null = null;
   private obstacles: Obstacles | null = null;
   private particles: ParticleSystem;
+  private sky: Sky;
   private lastFrameTimeMs = 0;
 
   constructor(canvasParent: HTMLElement) {
@@ -58,8 +60,11 @@ export class Scene {
     this.renderer.shadowMap.enabled = true;
     canvasParent.appendChild(this.renderer.domElement);
 
-    this.scene.background = new THREE.Color(0xb8d0e2);
-    this.scene.fog = new THREE.Fog(0xb8d0e2, 180, 480);
+    // Procedural sky dome replaces the flat background colour. Fog still
+    // matches the horizon tint so distant terrain melts into the sky.
+    this.scene.fog = new THREE.Fog(0xd6e2ec, 180, 480);
+    this.sky = new Sky();
+    this.scene.add(this.sky.mesh);
 
     this.cam = new ChaseCamera(window.innerWidth / window.innerHeight);
     this.camera = this.cam.camera;
@@ -321,6 +326,7 @@ export class Scene {
       this.spawnMudParticles(pair.b.snap, pair.b.recvAtMs);
     }
     this.particles.update(frameDt);
+    this.sky.update(this.camera);
 
     this.renderer.render(this.scene, this.camera);
   }

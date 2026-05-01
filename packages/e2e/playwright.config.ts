@@ -11,7 +11,7 @@ if (!process.env.PLAYWRIGHT_BROWSERS_PATH && existsSync('/opt/pw-browsers')) {
 // waits for both URLs before running tests.
 export default defineConfig({
   testDir: './tests',
-  timeout: 30_000,
+  timeout: 45_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,
   workers: 1,

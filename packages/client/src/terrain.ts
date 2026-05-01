@@ -1,13 +1,13 @@
 // Build a Three.js terrain mesh from a deterministic seed by reusing the
 // same generator the server runs. Per-fragment colour comes from a
-// procedural noise shader keyed off a per-vertex Surface ID, so each
-// surface (road / dirt / mud / deep mud / grass / gravel) gets its own
-// look without baking any image assets.
+// procedural noise shader keyed off a Surface ID sampled from a DataTexture.
 //
-// We use a hand-written ShaderMaterial (with a single directional sun
-// + ambient + linear fog) instead of macroing MeshStandardMaterial via
-// onBeforeCompile - the macroed-pipeline approach was fragile for our
-// custom attribute and we don't need PBR for terrain.
+// Why a texture rather than a per-vertex attribute: linear interpolation
+// across a triangle with two different surface IDs produces meaningless
+// intermediate values (e.g. road=0 + grass=4 gives mud=2 mid-triangle).
+// The texture stores one ID per cell with nearest-neighbour sampling, and
+// the shader jitters the world-space lookup with FBM noise so cell-aligned
+// boundaries become irregular and organic.
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
@@ -28,20 +28,13 @@ export class TerrainMesh {
 
     const pos = geo.attributes.position as THREE.BufferAttribute;
     this.positions = pos.array as Float32Array;
-
-    const surfAttr = new Float32Array(pos.count);
-    for (let r = 0; r < n; r++) {
-      for (let c = 0; c < n; c++) {
-        const i = r * n + c;
-        this.positions[i * 3 + 1] = this.terrain.heights[i] ?? 0;
-        surfAttr[i] = this.terrain.surfaces[i] ?? Physics.Surface.Dirt;
-      }
+    for (let i = 0; i < n * n; i++) {
+      this.positions[i * 3 + 1] = this.terrain.heights[i] ?? 0;
     }
     pos.needsUpdate = true;
-    geo.setAttribute('aSurface', new THREE.BufferAttribute(surfAttr, 1));
     geo.computeVertexNormals();
 
-    this.material = makeTerrainMaterial();
+    this.material = makeTerrainMaterial(this.terrain);
     this.mesh = new THREE.Mesh(geo, this.material);
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = false;
@@ -68,33 +61,31 @@ export class TerrainMesh {
 }
 
 const VERT = /* glsl */ `
-attribute float aSurface;
 varying vec3 vWorldPos;
 varying vec3 vNormal;
-varying float vSurface;
 
 void main() {
   vec4 wp = modelMatrix * vec4(position, 1.0);
   vWorldPos = wp.xyz;
   vNormal = normalize(normalMatrix * normal);
-  vSurface = aSurface;
   gl_Position = projectionMatrix * viewMatrix * wp;
 }
 `;
 
 const FRAG = /* glsl */ `
 precision highp float;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
 
-uniform vec3 uSunDir;       // normalized direction TOWARD the light
-uniform vec3 uSunColor;     // directional intensity (premultiplied)
-uniform vec3 uAmbient;      // ambient term
+uniform vec3 uSunDir;
+uniform vec3 uSunColor;
+uniform vec3 uAmbient;
 uniform vec3 uFogColor;
 uniform float uFogNear;
 uniform float uFogFar;
 
-varying vec3 vWorldPos;
-varying vec3 vNormal;
-varying float vSurface;
+uniform sampler2D uSurfaceMap;
+uniform float uTerrainSize;       // world size in m (square)
 
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -123,34 +114,36 @@ float fbm(vec2 p) {
 }
 
 vec3 surfaceColor(int s, vec2 p) {
-  // Road: compacted gravel-dirt. Streaked along +X.
+  // Each surface mixes a low-frequency colour variation (broad patches)
+  // with a high-frequency detail (grain / pebbles / blades).
   if (s == 0) {
+    // Road: compacted gravel-dirt with streaks along the +X axis.
     float n = fbm(vec2(p.x * 0.4, p.y * 1.6));
     float pebble = step(0.78, vnoise(p * 9.0));
     vec3 base = mix(vec3(0.42, 0.40, 0.38), vec3(0.60, 0.56, 0.50), n);
     return mix(base, vec3(0.30, 0.28, 0.25), pebble * 0.5);
   }
-  // Dirt: tan with brown variation.
   if (s == 1) {
+    // Dirt: tan with brown variation.
     float n = fbm(p * 0.6);
     float g = vnoise(p * 7.0);
     vec3 base = mix(vec3(0.42, 0.30, 0.16), vec3(0.66, 0.52, 0.32), n);
     return base * (0.85 + g * 0.30);
   }
-  // Mud: dark wet brown with broad streaks.
   if (s == 2) {
+    // Mud: dark wet brown with broad streaks.
     float n = fbm(p * 0.45);
     float wet = fbm(p * 1.7 + 13.0);
     vec3 base = mix(vec3(0.18, 0.12, 0.07), vec3(0.36, 0.24, 0.14), n);
     return base * (0.85 + wet * 0.40);
   }
-  // Deep mud: nearly black with slick variation.
   if (s == 3) {
+    // Deep mud: nearly black with slick variation.
     float n = fbm(p * 0.5 + 7.0);
     return mix(vec3(0.05, 0.03, 0.02), vec3(0.18, 0.11, 0.06), n);
   }
-  // Grass: green with darker macroes and the occasional yellow blade.
   if (s == 4) {
+    // Grass: green with darker patches and the occasional yellow blade.
     float macro = fbm(p * 0.5);
     float blade = vnoise(p * 14.0);
     float yellow = step(0.80, fbm(p * 0.25 + 3.0));
@@ -158,8 +151,8 @@ vec3 surfaceColor(int s, vec2 p) {
     base = mix(base, vec3(0.55, 0.50, 0.20), yellow * 0.35);
     return base * (0.78 + blade * 0.34);
   }
-  // Gravel: cool gray-brown with high-contrast pebble noise.
   if (s == 5) {
+    // Gravel: cool gray-brown with high-contrast pebble noise.
     float pebble = vnoise(p * 9.0);
     float macro = fbm(p * 0.7);
     vec3 base = mix(vec3(0.34, 0.32, 0.30), vec3(0.58, 0.52, 0.48), macro);
@@ -169,14 +162,41 @@ vec3 surfaceColor(int s, vec2 p) {
 }
 
 void main() {
-  int sid = int(floor(vSurface + 0.5));
-  vec3 albedo = surfaceColor(sid, vWorldPos.xz);
+  // Jitter the surface lookup with low-frequency noise so cell-aligned
+  // boundaries (the heightfield grid) become irregular instead of grid
+  // lines. ~3m of displacement at a noise scale that produces 5-8m
+  // wavelengths breaks up the seams without losing the broad layout.
+  vec2 wp = vWorldPos.xz;
+  float jx = fbm(wp * 0.18) - 0.5;
+  float jz = fbm(wp * 0.18 + 71.0) - 0.5;
+  vec2 lookup = wp + vec2(jx, jz) * 4.5;
 
-  // Lambert + ambient. uSunDir points toward the light source.
+  vec2 uv = lookup / uTerrainSize + 0.5;
+  // texture2D returns a normalised [0,1] value; we stored the byte ID as
+  // the R channel of an unsigned-byte texture, so multiply by 255.
+  float surfRaw = texture2D(uSurfaceMap, uv).r * 255.0;
+  int sid = int(surfRaw + 0.5);
+
+  vec3 albedo = surfaceColor(sid, wp);
+
+  // Soften the boundary further with a fine secondary jitter that picks
+  // the neighbour cell occasionally. This is the "blend" - a fragment
+  // near a cell edge has a chance to render as the neighbour, which
+  // dithers the transition. Cheap: a single extra texture sample.
+  float blend = vnoise(wp * 1.3);
+  if (blend > 0.62) {
+    vec2 lookup2 = wp + vec2(jx, jz) * 7.0; // larger jitter for variety
+    vec2 uv2 = lookup2 / uTerrainSize + 0.5;
+    int sid2 = int(texture2D(uSurfaceMap, uv2).r * 255.0 + 0.5);
+    vec3 a2 = surfaceColor(sid2, wp);
+    albedo = mix(albedo, a2, smoothstep(0.62, 0.78, blend));
+  }
+
+  // Lambert + ambient.
   float diff = max(dot(normalize(vNormal), normalize(uSunDir)), 0.0);
   vec3 lit = albedo * (uAmbient + uSunColor * diff);
 
-  // Linear fog matching THREE.Fog (near, far).
+  // Linear fog matching THREE.Fog.
   float dist = length(vWorldPos - cameraPosition);
   float fogFactor = clamp((dist - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);
   vec3 final = mix(lit, uFogColor, fogFactor);
@@ -185,18 +205,36 @@ void main() {
 }
 `;
 
-function makeTerrainMaterial(): THREE.ShaderMaterial {
-  // Sun direction must match scene.ts (sun.position = (50, 80, 30) toward
-  // origin). Normalising (50, 80, 30) gives roughly (0.5, 0.8, 0.3).
+function makeTerrainMaterial(terrain: Physics.TerrainData): THREE.ShaderMaterial {
   const sunDir = new THREE.Vector3(50, 80, 30).normalize();
+
+  // Pack the surface map into an 8-bit single-channel texture. Three.js
+  // doesn't expose a clean `R8` format on WebGL 1, so we use Luminance
+  // (.r works on both WebGL 1 and 2 and we only sample .r in the shader).
+  const n = terrain.resolution;
+  // Three.js dropped Luminance in newer revisions; use RedFormat which
+  // is supported when WebGL 2 is active (Vite default in modern Chrome).
+  // Fall back to a 4-channel texture if not.
+  const dataRgba = new Uint8Array(n * n * 4);
+  for (let i = 0; i < n * n; i++) {
+    const s = terrain.surfaces[i] ?? 1;
+    dataRgba[i * 4] = s;
+  }
+  const surfaceMap = new THREE.DataTexture(dataRgba, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+  surfaceMap.magFilter = THREE.NearestFilter;
+  surfaceMap.minFilter = THREE.NearestFilter;
+  surfaceMap.needsUpdate = true;
+
   return new THREE.ShaderMaterial({
     uniforms: {
       uSunDir: { value: sunDir },
       uSunColor: { value: new THREE.Color(0xfff4dd).multiplyScalar(1.4) },
-      uAmbient: { value: new THREE.Color(0xb8d0e2).multiplyScalar(0.45) },
-      uFogColor: { value: new THREE.Color(0xb8d0e2) },
+      uAmbient: { value: new THREE.Color(0xd6e2ec).multiplyScalar(0.45) },
+      uFogColor: { value: new THREE.Color(0xd6e2ec) },
       uFogNear: { value: 180 },
       uFogFar: { value: 480 },
+      uSurfaceMap: { value: surfaceMap },
+      uTerrainSize: { value: terrain.size },
     },
     vertexShader: VERT,
     fragmentShader: FRAG,
