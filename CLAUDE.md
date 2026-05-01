@@ -6,7 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mydrunner is a browser-based, multiplayer, physics-driven off-road 4x4 game inspired by MudRunner. The fun comes from the physics: suspension, slip, mud, deformable terrain, and getting unstuck. Treat the physics as the product — gameplay, content, and polish all live downstream of it feeling good.
 
-The vehicle is a Nissan-Patrol-GQ-style boxy 4x4 (AWD, roof rack, bullbar, snorkel). Built procedurally from Three.js primitives so the codebase has no asset dependencies. Rollover is intentionally a real risk on slopes and at-speed turns into ruts — it's tuned to be controllable on the road but punishing off it.
+Vehicles are procedural Three.js silhouettes; physics is shared, only the mesh varies. Two kinds today (more is just adding a body builder + palette + picker entry):
+- **Patrol** — Nissan-Patrol-GQ-style boxy SUV (AWD, roof rack, bullbar, snorkel, rear spare).
+- **Hilux** — Toyota-Hilux-style ute with a hardtop canopy on the bed.
+
+Rollover is intentionally a real risk on slopes and at-speed turns into ruts — it's tuned to be controllable on the road but punishing off it. There is also an incline-traction assist (`INCLINE_ASSIST_MAX`) so the truck can actually climb the rocky path up the mountain.
 
 ## Stack
 
@@ -59,9 +63,9 @@ Playwright browsers: in sandboxed environments without internet, the config auto
 
 ```
 packages/
-  shared/   types, constants, net protocol, fixed-step runner, World+Vehicle+terrain+ruts physics
+  shared/   types, constants, net protocol, World+Vehicle+terrain+ruts+obstacles physics
   server/   WS+HTTP entry point, Room (one world, all players, fixed loop, rut buffer)
-  client/   Vite app: input -> NetClient -> Scene (Three.js) + Prediction (local Rapier sim)
+  client/   Vite app: input + touch -> NetClient -> Scene (Three.js) + ChaseCamera + Prediction
   e2e/      Playwright tests + screenshot capture (boots client + server via webServer config)
 ```
 
@@ -75,9 +79,8 @@ The server is the source of truth for physics. Each tick (60Hz):
 2. `vehicle.preStep()` applies steer/throttle/brake to the Rapier vehicle controller, performs **per-wheel surface lookup** (sample terrain texel under each wheel → modulate friction slip), then `controller.updateVehicle(dt)`.
 3. `world.step()` advances Rapier.
 4. `vehicle.postStep()` accumulates wheel spin for visuals.
-5. Each driven wheel's pass is recorded into the **rut buffer** (server-side erosion accumulator).
-6. Every `RUT_REBUILD_INTERVAL_TICKS` (~0.5s), drained rut deltas mutate the heightfield, the collider is rebuilt, and the changes are broadcast to clients.
-7. Every other tick (30Hz), broadcast a `WorldSnapshot` to every player.
+5. (Disabled) Each driven wheel's pass would be recorded into the **rut buffer** when `RUTS_ENABLED=true`. Currently off — the heightfield resolution is too coarse for tyre-width tracks, and the prediction client doesn't replay deltas, so deformation produced periodic reconcile snaps. Buffer + flush + collider-rebuild plumbing is intact in `room.ts` for when the underlying issues are fixed.
+6. Every other tick (30Hz), broadcast a `WorldSnapshot` to every player.
 
 The client runs a parallel local Rapier world that simulates **only the local player's vehicle**, in lockstep with the server's fixed timestep. On every input sample:
 
@@ -95,19 +98,24 @@ Other players are still rendered by interpolating between buffered snapshots ~10
 
 ### Key files
 
-- `packages/shared/src/constants.ts` — every tunable: tick rate, vehicle mass / suspension / drive split, surface friction, rut rate. Tuning lives here, code does not.
-- `packages/shared/src/types.ts` — `PlayerInput`, `VehicleState`, `WorldSnapshot`. Wire-shape contract.
-- `packages/shared/src/net/messages.ts` — `ClientMessage` / `ServerMessage` discriminated unions, `encode` / `decode*`. Welcome carries terrain seed + spawn pose; `rut` messages carry per-cell deltas.
-- `packages/shared/src/physics/world.ts` — `World` wraps a `RAPIER.World`, owns the heightfield collider + map of vehicles. **Note: heights are transposed before being handed to Rapier** (Rapier reads column-major; our generator is row-major).
-- `packages/shared/src/physics/vehicle.ts` — `Vehicle` wraps `RAPIER.DynamicRayCastVehicleController`. `preStep` does per-wheel surface lookup, AWD torque distribution, and friction modulation.
-- `packages/shared/src/physics/terrain.ts` — deterministic FBM-noise heightmap + Surface enum. `roadCore=5` strict-flat, `roadCore..roadShoulder=8` smoothstep into natural terrain.
-- `packages/shared/src/physics/ruts.ts` — `RutBuffer` accumulates per-cell erosion, capped at `RUT_MAX_DEPTH`. Only Mud / DeepMud cells erode.
-- `packages/server/src/room.ts` — owns `World` + `RutBuffer`, 60Hz tick, 30Hz snapshots, rut flush every 0.5s, player spawns on the road grid.
+- `packages/shared/src/constants.ts` — every tunable: tick rate, vehicle mass / suspension / drive split, surface friction, rut rate, camera spring, incline assist. Tuning lives here, code does not.
+- `packages/shared/src/types.ts` — `PlayerInput`, `VehicleState`, `WorldSnapshot`, `CarKind`. Wire-shape contract.
+- `packages/shared/src/net/messages.ts` — `ClientMessage` / `ServerMessage` discriminated unions, `encode` / `decode*`. Welcome carries terrain seed + spawn pose; `hello` carries name + carKind; snapshots include each player's `carKind`; `rut` messages carry per-cell deltas (currently never emitted).
+- `packages/shared/src/physics/world.ts` — `World` wraps a `RAPIER.World`, owns the heightfield collider + map of vehicles + obstacles. **Note: heights are transposed before being handed to Rapier** (Rapier reads column-major; our generator is row-major).
+- `packages/shared/src/physics/vehicle.ts` — `Vehicle` wraps `RAPIER.DynamicRayCastVehicleController`. `preStep` does per-wheel surface lookup, AWD torque distribution, friction modulation, and incline-traction assist.
+- `packages/shared/src/physics/terrain.ts` — deterministic FBM-noise heightmap + Surface enum + `mountainFor(size)` landmark spec. `roadCore=5` strict-flat, `roadCore..roadShoulder=8` smoothstep into natural terrain. Rolling hills, one Gaussian mountain peak, scattered mud bogs.
+- `packages/shared/src/physics/obstacles.ts` — deterministic rock + tree placement. Three passes: medium scatter, dense small-rock detail, and a corridor of boulders along the rocky hill climb up the mountain.
+- `packages/shared/src/physics/ruts.ts` — `RutBuffer` accumulates per-cell erosion, capped at `RUT_MAX_DEPTH`. Only Mud / DeepMud cells erode. Plumbing is in place but disabled via `RUTS_ENABLED`.
+- `packages/shared/src/physics/util.ts` — small shared helpers (currently `rotateVecByQuat`).
+- `packages/server/src/room.ts` — owns `World`, 60Hz tick, 30Hz snapshots, player spawns on the road grid. World is 320×320 at heightfield resolution 96.
 - `packages/server/src/index.ts` — HTTP+WS bootstrap, route messages into `Room`, expose `/health`.
-- `packages/client/src/scene.ts` — Three.js scene, snapshot interpolation, terrain replication, camera modes (chase/hood/free) with terrain-clearance clamping.
+- `packages/client/src/scene.ts` — Three.js scene, snapshot interpolation, terrain replication, mud splatter particles. Camera state is delegated to `ChaseCamera`.
+- `packages/client/src/camera.ts` — `ChaseCamera`: chase-cam yaw spring with corner swing, pitch-aware lookAt for hill driving, hood cam, sky cam.
 - `packages/client/src/prediction.ts` — local Rapier sim, input queue, reconcile-on-snapshot.
-- `packages/client/src/carMesh.ts` — procedural GQ-Patrol-style 4x4 visual.
-- `packages/client/src/terrain.ts` — Three.js terrain mesh built from the same generator the server uses; `applyRut(i, dy)` deforms it as ruts arrive.
+- `packages/client/src/carMesh.ts` — `buildCarMesh(kind, isLocal, idHash)` for `'patrol' | 'hilux'`. Shared materials + wheel builder, per-kind body builders. Wheels have visible spokes + tread lugs so rotation direction reads.
+- `packages/client/src/joinScreen.ts` — first-load name + car picker. Persists name + carKind to localStorage; subsequent visits pre-fill the picker. `?auto=1` URL bypass for e2e.
+- `packages/client/src/touchInput.ts` — on-screen analog steer pad + gas/brake/handbrake/aux buttons for mobile. State merges into `sampleInput()` alongside keyboard.
+- `packages/client/src/terrain.ts` — Three.js terrain mesh built from the same generator the server uses; `applyRut(i, dy)` deforms it (currently unused since ruts are off).
 
 ### Determinism note
 
@@ -122,7 +130,7 @@ Rapier in single-threaded mode is deterministic given identical inputs and step 
 - **No comments that restate code.** Comments explain *why*: a constraint, a tradeoff, a workaround.
 - **Tests use real components.** Server tests use real Rapier. Browser tests use real Playwright. There is no mocked physics or socket — bugs love mocks.
 - **Diagnostic hooks are dev-only.** `window.__scene` and `window.__prediction` are guarded by `import.meta.env.DEV`. Production bundles do not expose them.
-- **Branching:** all development goes on `claude/add-claude-documentation-b6LkY` until told otherwise. Do not push to other branches without explicit user approval.
+- **Branching:** development happens on `main`. After committing, mirror to `claude/add-claude-documentation-b6LkY` (fast-forward + push) so both branches stay at the same tip — the user runs deployments off both.
 - **No PRs unless asked.**
 - **Commit screenshots with each visual milestone** (`packages/e2e/screenshots/` is tracked) so the repo carries a visual changelog alongside the code one.
 
@@ -148,14 +156,20 @@ This file should be updated when the architecture changes. If you (future Claude
 
 ## Roadmap
 
-The MVP loop is **complete**: connect → drive a 4x4 with AWD physics on procedural terrain → cross mud at low traction → carve ruts that persist → see other players move with smooth interpolation → respond instantly thanks to client-side prediction. Next priorities, roughly in order:
+The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4 with AWD physics on procedural terrain → cross mud at low traction → climb the rocky hill route up the mountain → see other players move with smooth interpolation → respond instantly thanks to client-side prediction. Next priorities, roughly in order:
+
+### Shipped
+- Surface-name HUD.
+- Engine sound (RPM-driven via `AudioContext`).
+- Mud splatter particles in deep mud.
+- Player nameplate above each remote vehicle.
+- Pitch-aware chase camera + corner swing + sky cam follow.
+- Hilux variant + name/car localStorage persistence.
+- Touch / mobile controls (analog steer pad + pedals + aux).
+- Hill-climb traction assist, wider surface friction contrast.
 
 ### Polish (small, valuable)
-- Surface-name HUD (so you know when you're in mud).
 - Minimap / map overview.
-- Engine sound (RPM-driven via `AudioContext`).
-- Mud splatter particles when wheels spin in deep mud.
-- Player nameplate above each vehicle.
 
 ### Content
 - More than one road. A real "course" with stretches of dirt, mud, water crossings.
@@ -165,18 +179,18 @@ The MVP loop is **complete**: connect → drive a 4x4 with AWD physics on proced
 ### Multiplayer depth
 - Lobby / room codes (currently single global room).
 - Lag compensation for inputs the server processes (server interpolates back).
-- Voice / text chat.
+- Text chat (voice was scoped and shelved — WebRTC P2P + WS signaling is the chosen approach).
 
 ### Wire-format optimisation
 - Move snapshots to msgpack or binary deltas — only changed players, only changed fields.
 - Quantize positions/quaternions for snapshots (1cm position, ~0.001 rad rotation are plenty).
-- Coalesce rut deltas into a single message per flush rather than N entries.
 
 ### Stretch
 - Winch (rope constraint between vehicles, physics-driven recovery).
 - Destructible terrain features (trees, fences) on top of mud-deformation.
 - Physics-driven water bodies that the chassis floats in / bogs down in.
 - Day/night cycle + headlight illumination.
+- Re-enable ruts: needs higher heightfield resolution (or a sub-cell visual deformation overlay decoupled from the collider) and prediction-side rut replay.
 
 ## How to add a feature, end to end
 

@@ -109,8 +109,9 @@ export const TIRE_BASE_GRIP = 2.8;
 // chassis "nose up" component (forward.y, =sin(pitch)). At flat ground
 // the multiplier is 1; at forward.y=0.5 (~30 degree climb) it's
 // (1 + INCLINE_ASSIST_MAX). Negative pitch (nose down, descending)
-// gets no boost - going downhill grip isn't the problem.
-export const INCLINE_ASSIST_MAX = 0.6;
+// gets no boost - going downhill grip isn't the problem. Tuned to make
+// a properly-driven 4x4 climb the rocky-hill route to the summit.
+export const INCLINE_ASSIST_MAX = 1.1;
 
 // Chase camera. Lives shared-side because the constants describe the
 // game's feel, not anything client-internal. The chase yaw uses an
