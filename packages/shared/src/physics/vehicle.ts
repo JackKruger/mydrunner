@@ -225,6 +225,20 @@ export class Vehicle {
     return out;
   }
 
+  /** Snapshot the smoothed steering value used for visual + Rapier
+   *  steer-set. The prediction layer reads this on reconcile to avoid
+   *  double-stepping the smoothing during input replay. */
+  get steerAngle(): number {
+    return this.currentSteer;
+  }
+
+  /** Set the smoothed steering value directly. Used by prediction
+   *  reconcile to seed currentSteer from the authoritative snapshot
+   *  before replaying queued inputs. */
+  setSteerAngle(angle: number): void {
+    this.currentSteer = angle;
+  }
+
   /** Reset to a spawn pose. Called when player presses R (or hits map edge). */
   resetTo(spawn: VehicleSpawn): void {
     this.body.setTranslation(

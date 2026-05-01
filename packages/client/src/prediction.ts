@@ -73,12 +73,16 @@ export class Prediction {
     // Drop acked inputs.
     this.queue = this.queue.filter((q) => q.input.seq > me.lastAckSeq);
 
-    // Snap to authoritative state.
+    // Snap to authoritative state. Includes the smoothed steering angle:
+    // without this, replay would double-step currentSteer (since
+    // prediction had already advanced it for each unacked input), making
+    // the wheel visibly jitter on every snapshot.
     const v = me.vehicle;
     this.vehicle.body.setTranslation(v.position, true);
     this.vehicle.body.setRotation(v.rotation, true);
     this.vehicle.body.setLinvel(v.linVel, true);
     this.vehicle.body.setAngvel(v.angVel, true);
+    if (v.wheels[0]) this.vehicle.setSteerAngle(v.wheels[0].steer);
 
     // Replay remaining queue to fast-forward to prediction time.
     for (const q of this.queue) {

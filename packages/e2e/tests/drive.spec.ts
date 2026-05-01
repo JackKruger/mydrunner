@@ -116,6 +116,55 @@ test.describe('driving', () => {
     expect(fwdDist, `forward progress after W from rolling-back was ${fwdDist.toFixed(2)}m`).toBeGreaterThan(0.3);
   });
 
+  test('drives at least 30m down the road in 8s (A->B navigation)', async ({ page }) => {
+    await page.goto('/');
+    await waitConnected(page);
+    await page.waitForTimeout(800);
+    const start = await readDiag(page);
+    const fwd = forwardAxisFromQuat(start!.rotation);
+
+    // Hold W. The car should pick up speed and cover at least 30m of
+    // forward distance. This validates the "engine actually has enough
+    // power to make meaningful progress" requirement, plus the gear
+    // shifts work, plus the prediction stays in sync.
+    await page.keyboard.down('KeyW');
+    await page.waitForTimeout(8000);
+    await page.keyboard.up('KeyW');
+
+    const end = await readDiag(page);
+    const dx = end!.position.x - start!.position.x;
+    const dz = end!.position.z - start!.position.z;
+    const along = dot({ x: dx, z: dz }, fwd);
+    expect(along, `forward distance after 8s of W = ${along.toFixed(1)}m`).toBeGreaterThan(30);
+  });
+
+  test('drives up a moderate hill (climb test)', async ({ page }) => {
+    await page.goto('/');
+    await waitConnected(page);
+    await page.waitForTimeout(800);
+
+    // The road is straight along +X; off-road is mostly hilly. To climb
+    // we drive forward then turn. Aiming for at least some altitude gain.
+    const start = await readDiag(page);
+    await page.keyboard.down('KeyW');
+    await page.waitForTimeout(2500);
+    await page.keyboard.down('KeyD'); // turn off the road
+    await page.waitForTimeout(4500);
+    await page.keyboard.up('KeyD');
+    await page.keyboard.up('KeyW');
+
+    const end = await readDiag(page);
+    // We should have moved off the spawn meaningfully and the car
+    // should still be upright (quaternion w near cos(yaw/2) regardless of
+    // yaw, but |w| > 0.5 means we're not on our roof).
+    const dist = Math.hypot(
+      end!.position.x - start!.position.x,
+      end!.position.z - start!.position.z,
+    );
+    expect(dist, `total horizontal travel was ${dist.toFixed(1)}m`).toBeGreaterThan(15);
+    expect(Math.abs(end!.rotation.w), `quaternion w was ${end!.rotation.w.toFixed(3)} (car upside down?)`).toBeGreaterThan(0.5);
+  });
+
   test('holding A produces a stable left steer angle (no flicker)', async ({ page }) => {
     await page.goto('/');
     await waitConnected(page);

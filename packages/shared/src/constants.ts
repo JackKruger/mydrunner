@@ -36,8 +36,6 @@ export const VEHICLE = {
   engineForce: 3200,
   driveSplit: { front: 0.5, rear: 0.5 },
   brakeForce: 2500,
-  // Slightly less aggressive steering: harder to flip at speed, still
-  // tight enough to navigate. Steer ramp-time also slowed.
   maxSteer: 0.42,
   steerSpeed: 2.2,
   // Wheel friction multipliers - front slightly less grippy than rear so
@@ -64,28 +62,25 @@ export const TIRE = {
   slipFloor: 0.45,
 } as const;
 
-// Engine + gearbox. Torque curve modeled as a piecewise cubic that peaks
-// in the 3000-4500 RPM band. Off the band the engine produces less force
-// regardless of throttle - lugging in 5th at low RPM crawls; revving in
-// 1st screams toward redline. Auto-gearbox shifts on RPM thresholds.
+// Engine + gearbox. Torque curve peaks in the 3000-4500 RPM band. Off
+// the band the engine produces less torque regardless of throttle.
+// Auto-gearbox shifts on RPM thresholds.
 export const ENGINE = {
   idleRpm: 850,
   redlineRpm: 5800,
   peakTorqueRpm: 3500,
-  peakTorqueNm: 320,
-  // Final drive ratio (differential) and per-gear ratios.
-  finalDrive: 3.7,
-  gears: [-3.2, 0, 3.6, 2.1, 1.4, 1.0, 0.78], // [reverse, neutral, 1, 2, 3, 4, 5]
-  // Index 0 = reverse, 1 = neutral, 2 = first.
+  // Off-roader peak torque - bumped from 320 so the truck has enough
+  // grunt to climb the hills around the road. Matches what a real ~3L
+  // SUV diesel would put down.
+  peakTorqueNm: 480,
+  finalDrive: 4.1,
+  gears: [-3.6, 0, 4.0, 2.3, 1.5, 1.05, 0.82],
   reverseGear: 0,
   neutralGear: 1,
   firstGear: 2,
   shiftUpRpm: 4600,
   shiftDownRpm: 1700,
-  // Engine braking when off throttle: torque opposing motion proportional to
-  // (rpm - idle).
   engineBrakeCoef: 0.04,
-  // Torque drop above redline (acts as a soft rev limiter).
   rpmLimiterFalloff: 800,
 } as const;
 

@@ -16,7 +16,9 @@ export class EngineAudio {
   private filter: BiquadFilterNode | null = null;
   private lastRpm = 800;
   private lastThrottle = 0;
-  private muted = false;
+  // Audio disabled by default - the procedural synth doesn't sound great
+  // yet. Toggle on with M (or whatever key the main loop binds).
+  private muted = true;
 
   /** Lazy-start - call from any user-gesture handler. Safe to call again. */
   start(): void {
