@@ -214,14 +214,18 @@ export class Vehicle {
   }
 
   postStep(): void {
-    // Accumulate wheel spin for visual rotation. Tiny per-tick increments
-    // (suspension micro-settling, contact jitter) get filtered out via
-    // the dead-zone - otherwise wheelSpin slowly drifts at idle and the
-    // spoked tyres visibly rotate while the truck is parked.
-    const SPIN_DEADZONE = 0.002; // rad/tick; ~0.2 km/h ground speed for r=0.46
+    // Accumulate wheel spin for visual rotation. We gate the
+    // accumulation on whether the chassis is actually moving: when the
+    // truck is sitting still, suspension micro-settle produces small
+    // alternating wheelRotation values that sum near zero but make the
+    // spokes visibly wobble. The angVel < 1 escape lets you still see
+    // the wheels spin if you're stationary but on the throttle in mud.
+    const linVel = this.body.linvel();
+    const groundSpeed = Math.hypot(linVel.x, linVel.z);
+    const STATIONARY = 0.3; // m/s ~ 1 km/h
     for (let i = 0; i < 4; i++) {
       const angVel = this.controller.wheelRotation(i) ?? 0;
-      if (Math.abs(angVel) <= SPIN_DEADZONE) continue;
+      if (groundSpeed < STATIONARY && Math.abs(angVel) < 1.0) continue;
       this.wheelSpin[i] = (this.wheelSpin[i] ?? 0) + angVel;
     }
   }
