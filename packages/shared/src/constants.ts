@@ -180,13 +180,13 @@ export const WHEEL = {
   rollingResistance: 0.015,
 } as const;
 
-// Vehicle physics model. Phase 1 of the suspension overhaul lands the
-// custom solid-axle vehicle alongside the existing Rapier raycast vehicle
-// behind this flag; with 'raycast' (default) the game runs the legacy
-// model, with 'solidAxle' it runs the new model with axle articulation.
-// Default flips to 'solidAxle' in Phase 2 once the new path is validated.
+// Vehicle physics model. The custom solid-axle path is now the default;
+// 'raycast' is kept as a one-line escape hatch in case the new model
+// regresses something in production. Both paths are exercised by the
+// test suite (legacy via physics.test.ts + prediction.test.ts, solid-
+// axle via solidAxleVehicle.test.ts + axle.test.ts).
 export type VehicleModel = 'raycast' | 'solidAxle';
-export const VEHICLE_MODEL: VehicleModel = 'raycast';
+export const VEHICLE_MODEL: VehicleModel = 'solidAxle';
 
 // Hill-climb traction assist. Real 4x4s lose grip on slopes because
 // gravity peels the tyre's contact away; in our model it manifests as
