@@ -3,6 +3,8 @@
 
 import { Physics, TICK_RATE, type PlayerId } from '@mydrunner/shared';
 
+import { EngineAudio } from './engineAudio.js';
+
 const SURFACE_LABELS: Record<number, string> = {
   [Physics.Surface.Road]: 'road',
   [Physics.Surface.Dirt]: 'dirt',
@@ -26,6 +28,26 @@ const app = document.getElementById('app')!;
 
 initInput();
 const scene = new Scene(app);
+const engineAudio = new EngineAudio();
+
+// Browsers block AudioContext until a user gesture - start audio on the
+// first keypress.
+const startAudioOnce = (): void => {
+  engineAudio.start();
+  window.removeEventListener('keydown', startAudioOnce);
+  window.removeEventListener('mousedown', startAudioOnce);
+  window.removeEventListener('touchstart', startAudioOnce);
+};
+window.addEventListener('keydown', startAudioOnce);
+window.addEventListener('mousedown', startAudioOnce);
+window.addEventListener('touchstart', startAudioOnce);
+
+// Mute toggle on M.
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyM') engineAudio.toggleMute();
+});
+
+// Expose scene + prediction for E2E diagnostics.
 // Diagnostic hooks for E2E / browser debugging. Only exposed in dev (Vite
 // sets DEV; production builds skip this) so production bundles do not ship
 // the internals to the window object.
@@ -81,6 +103,7 @@ async function start(): Promise<void> {
           lastSpeed = Math.hypot(lv.x, lv.z);
           lastRpm = me.vehicle.rpm;
           lastGear = me.vehicle.gear;
+          engineAudio.set(me.vehicle.rpm, me.vehicle.throttle);
         }
       }
     },

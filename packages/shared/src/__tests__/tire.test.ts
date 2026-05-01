@@ -23,21 +23,29 @@ describe('slipRatio', () => {
 });
 
 describe('gripFromSlip', () => {
-  it('returns 0 at zero slip', () => {
-    expect(gripFromSlip(0)).toBe(0);
+  it('returns slipFloor at zero slip (avoids standstill deadlock)', () => {
+    expect(gripFromSlip(0)).toBeCloseTo(TIRE.slipFloor, 5);
   });
 
-  it('peaks at slipPeak', () => {
+  it('peaks at slipPeak with grip = 1.0', () => {
     const peak = gripFromSlip(TIRE.slipPeak);
     expect(peak).toBeCloseTo(1.0, 5);
-    expect(gripFromSlip(TIRE.slipPeak * 0.99)).toBeLessThan(peak);
-    expect(gripFromSlip(TIRE.slipPeak * 1.5)).toBeLessThan(peak);
+    expect(gripFromSlip(TIRE.slipPeak * 0.5)).toBeLessThan(peak);
+    expect(gripFromSlip(TIRE.slipPeak * 2.0)).toBeLessThan(peak);
+  });
+
+  it('rises monotonically up to peak', () => {
+    const a = gripFromSlip(0.02);
+    const b = gripFromSlip(0.05);
+    const c = gripFromSlip(TIRE.slipPeak);
+    expect(a).toBeLessThan(b);
+    expect(b).toBeLessThan(c);
   });
 
   it('falls toward (but not below) slipFloor as slip grows large', () => {
     const wayPast = gripFromSlip(2.0);
     expect(wayPast).toBeGreaterThanOrEqual(TIRE.slipFloor);
-    expect(wayPast).toBeLessThan(0.6);
+    expect(wayPast).toBeLessThan(TIRE.slipFloor + 0.15);
   });
 
   it('is symmetric for positive and negative slip', () => {

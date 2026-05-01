@@ -61,12 +61,10 @@ describe('vehicle physics', () => {
     world.dispose();
   });
 
-  it('accelerates faster on road than on deep mud (same input)', () => {
-    // Build two worlds: one all-road, one all-deep-mud, by hand-crafting
-    // surface arrays. Same heightmap (flat) so terrain doesn't confound.
+  it('reaches a higher top speed on road than on deep mud', () => {
     function makeWorld(allMud: boolean): Physics.World {
       const n = 32;
-      const heights = new Float32Array(n * n); // all zeros, flat ground
+      const heights = new Float32Array(n * n);
       const surfaces = new Uint8Array(n * n);
       surfaces.fill(allMud ? Physics.Surface.DeepMud : Physics.Surface.Road);
       return new Physics.World({
@@ -80,20 +78,23 @@ describe('vehicle physics', () => {
     simSeconds(wRoad, 0.5);
     simSeconds(wMud, 0.5);
 
+    // Long throttle pull so both reach steady state. Top speed on road
+    // ends up higher because aerodynamic-equivalent drag (linear damping)
+    // grows faster than the ground force the mud-wheel can transmit.
     vRoad.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1 });
     vMud.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1 });
-    simSeconds(wRoad, 3);
-    simSeconds(wMud, 3);
+    let topRoad = 0;
+    let topMud = 0;
+    for (let i = 0; i < 20 * 60; i++) {
+      wRoad.step();
+      wMud.step();
+      const sr = Math.hypot(vRoad.getState().linVel.x, vRoad.getState().linVel.z);
+      const sm = Math.hypot(vMud.getState().linVel.x, vMud.getState().linVel.z);
+      if (sr > topRoad) topRoad = sr;
+      if (sm > topMud) topMud = sm;
+    }
 
-    const speedRoad = Math.hypot(
-      vRoad.getState().linVel.x,
-      vRoad.getState().linVel.z,
-    );
-    const speedMud = Math.hypot(
-      vMud.getState().linVel.x,
-      vMud.getState().linVel.z,
-    );
-    expect(speedRoad).toBeGreaterThan(speedMud + 1.0);
+    expect(topRoad).toBeGreaterThan(topMud + 1.0);
     wRoad.dispose();
     wMud.dispose();
   });

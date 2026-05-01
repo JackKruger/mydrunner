@@ -7,6 +7,7 @@ import { VEHICLE, SURFACE_FRICTION } from '../constants.js';
 import { EMPTY_INPUT, type PlayerInput, type VehicleState, type WheelState } from '../types.js';
 import { Surface, sampleSurface } from './terrain.js';
 import { createEngineState, stepEngine, type EngineState } from './engine.js';
+import { slipRatio, gripFromSlip } from './tire.js';
 import type { World } from './world.js';
 
 export interface VehicleSpawn {
@@ -119,51 +120,58 @@ export class Vehicle {
     this.controller.setWheelSteering(0, this.currentSteer);
     this.controller.setWheelSteering(1, this.currentSteer);
 
-    // Per-wheel surface lookup. Front wheels intentionally have less grip
-    // (frontGripMult) so the car understeers and slides under hard turns
-    // rather than pivoting fast enough to roll over.
+    // Per-wheel grip computation. Three multipliers stack:
+    //   surface  - mud has less peak grip than road
+    //   axle     - front slightly less than rear (anti-rollover understeer)
+    //   slip     - Pacejka-style: peak grip near slipPeak, drops as the
+    //              wheel breaks loose. This is what makes a spinning
+    //              wheel transmit LESS force than a gripping one.
+    // We read wheel angular velocity once here so we can reuse it for
+    // the engine model below.
+    const wheelAngVels = [0, 1, 2, 3].map((i) => this.controller.wheelRotation(i) ?? 0);
+    const fwdLin = this.body.linvel();
+    const yaw = this.body.rotation();
+    const forwardX = 2 * (yaw.x * yaw.z + yaw.w * yaw.y);
+    const forwardZ = 1 - 2 * (yaw.x * yaw.x + yaw.y * yaw.y);
+    const longitudinal = fwdLin.x * forwardX + fwdLin.z * forwardZ;
+
     for (let i = 0; i < 4; i++) {
       const wp = this.wheelWorldPos(i);
       const surf = sampleSurface(this.world.terrain, wp.x, wp.z);
       this.wheelSurface[i] = surf;
-      const grip = surfaceGrip(surf);
+      const surfMult = surfaceGrip(surf);
       const axleMult = i < 2 ? VEHICLE.frontGripMult : VEHICLE.rearGripMult;
-      this.controller.setWheelFrictionSlip(i, 2.0 * grip * axleMult);
+      const slip = slipRatio(wheelAngVels[i] ?? 0, VEHICLE.wheelRadius, longitudinal);
+      const slipMult = gripFromSlip(slip);
+      this.controller.setWheelFrictionSlip(i, 2.0 * surfMult * axleMult * slipMult);
     }
 
-    // Engine + gearbox: average wheel angular velocity (signed, with sign
-    // taken from the chassis longitudinal velocity so a wheel-spin in
-    // mud doesn't lie about which gear we want).
-    const wheelAngVels = [0, 1, 2, 3].map((i) => this.controller.wheelRotation(i) ?? 0);
+    // Engine + gearbox: signed average wheel angular velocity. wheelAngVels
+    // and longitudinal computed above for the slip-curve loop.
     const avgDriveAng = (wheelAngVels[0]! + wheelAngVels[1]! + wheelAngVels[2]! + wheelAngVels[3]!) / 4;
-    const fwd = this.body.linvel();
-    const yaw = this.body.rotation();
-    const forwardX = 2 * (yaw.x * yaw.z + yaw.w * yaw.y);
-    const forwardZ = 1 - 2 * (yaw.x * yaw.x + yaw.y * yaw.y);
-    const longitudinal = fwd.x * forwardX + fwd.z * forwardZ;
     const signedAngVel = Math.sign(longitudinal || avgDriveAng) * Math.abs(avgDriveAng);
 
     const out = stepEngine(this.engine, signedAngVel, this.input.throttle, dt);
     this.lastRpm = out.rpm;
     this.lastGear = out.gear;
 
-    // Distribute torque across axles. Per-wheel grip gates how much
-    // torque the surface can absorb (mud transmits less than road).
-    //
-    // Slip-curve modulation on top of this is *also* implemented in
-    // tire.ts but not yet wired here - applying it to engine force
-    // directly creates a chicken-and-egg at standstill (zero slip ->
-    // zero force -> no movement -> still zero slip). The right place
-    // is on Rapier's wheelFrictionSlip per step; left for a follow-up.
+    // Distribute engine torque across axles. Two stacking effects:
+    //   - friction slip (set above) limits how much force the wheel can
+    //     transmit to the ground when the wheel breaks loose.
+    //   - surface multiplier here scales the engine's INTENT - in mud
+    //     the engine is "fighting" the wheel which is barely engaged
+    //     with the soft ground, so even before the friction limit kicks
+    //     in the effective drive force is reduced.
+    // Together: low surface grip + slip = mud is slow AND has wheelspin
+    // that makes the throttle feel useless.
     const frontShare = VEHICLE.driveSplit.front;
     const rearShare = VEHICLE.driveSplit.rear;
     for (let i = 0; i < 4; i++) {
       const isFront = i < 2;
       const share = isFront ? frontShare / 2 : rearShare / 2;
-      const surfaceMult = surfaceGrip(this.wheelSurface[i] ?? Surface.Dirt);
-      this.controller.setWheelEngineForce(i, out.wheelForce * share * surfaceMult);
+      const surfMult = surfaceGrip(this.wheelSurface[i] ?? Surface.Dirt);
+      this.controller.setWheelEngineForce(i, out.wheelForce * share * surfMult);
     }
-    void wheelAngVels; // wired to setWheelFrictionSlip in a future pass
 
     // Brakes on all four. Handbrake locks rears for slides.
     const brake = this.input.brake * VEHICLE.brakeForce;

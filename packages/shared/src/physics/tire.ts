@@ -16,13 +16,18 @@ export function slipRatio(wheelAngVel: number, wheelRadius: number, groundSpeed:
   return (wheelLin - groundSpeed) / denom;
 }
 
+/** Grip multiplier as a function of slip ratio. Always >= slipFloor so a
+ *  tire at zero slip still has meaningful grip (otherwise the model
+ *  deadlocks at standstill: no slip -> no grip -> no acceleration ->
+ *  still no slip). Peak at slipPeak, decays toward slipFloor past it. */
 export function gripFromSlip(slip: number): number {
   const a = Math.abs(slip);
   if (a <= TIRE.slipPeak) {
-    // Linear ramp up to peak.
-    return a / TIRE.slipPeak;
+    // Smooth rise from slipFloor to peak (1.0).
+    const t = a / TIRE.slipPeak;
+    return TIRE.slipFloor + (1 - TIRE.slipFloor) * t;
   }
-  // Exponential decay past peak, asymptoting to slipFloor.
+  // Past peak: exponential decay back toward slipFloor.
   const over = a - TIRE.slipPeak;
   const decay = Math.exp(-over * TIRE.slipFalloff);
   return TIRE.slipFloor + (1 - TIRE.slipFloor) * decay;
