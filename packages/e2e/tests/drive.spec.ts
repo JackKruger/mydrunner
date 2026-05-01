@@ -23,6 +23,8 @@ async function readDiag(page: Page): Promise<Diag | null> {
 }
 
 async function waitConnected(page: Page): Promise<void> {
+  // Dismiss the startup menu so the game connects.
+  await page.click('#play-btn');
   await expect(page.locator('#hud')).toContainText('connected', { timeout: 10_000 });
   // And wait until __prediction is up.
   await expect.poll(() => page.evaluate(() => {

@@ -11,22 +11,11 @@ export interface CarMesh {
   wheels: THREE.Object3D[];
 }
 
-const BODY_COLORS = [
-  0xd9531e, // burnt orange (local default)
-  0x2a4a6a, // navy
-  0x466b3a, // olive
-  0xc9b86b, // sand
-  0x8b4513, // saddle brown
-  0xb23a48, // brick red
-];
-
-export function buildCarMesh(isLocal: boolean, idHash: number): CarMesh {
+export function buildCarMesh(color: number): CarMesh {
   const group = new THREE.Group();
   const ext = VEHICLE.chassisHalfExtents;
 
-  const bodyColor = isLocal
-    ? BODY_COLORS[0]!
-    : (BODY_COLORS[1 + (idHash % (BODY_COLORS.length - 1))] ?? BODY_COLORS[1]!);
+  const bodyColor = color;
   const trimColor = 0x161616; // dark plastic, lower body cladding
 
   const bodyMat = new THREE.MeshStandardMaterial({
@@ -251,9 +240,3 @@ export function buildCarMesh(isLocal: boolean, idHash: number): CarMesh {
   return { group, wheels };
 }
 
-/** Hash a player id string to a stable small int for color selection. */
-export function colorHash(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}

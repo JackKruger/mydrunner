@@ -31,6 +31,7 @@ async function main(): Promise<void> {
     const handle: PlayerHandle = {
       id,
       name: 'anon',
+      color: 0xd9531e,
       send: (msg: string) => {
         if (ws.readyState === ws.OPEN) ws.send(msg);
       },
@@ -47,6 +48,7 @@ async function main(): Promise<void> {
         case 'hello':
           if (joined) return;
           handle.name = msg.name.slice(0, 32) || 'anon';
+          if (msg.color !== undefined) handle.color = msg.color & 0xffffff;
           room.addPlayer(handle);
           joined = true;
           break;

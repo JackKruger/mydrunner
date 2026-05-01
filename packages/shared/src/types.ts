@@ -59,6 +59,8 @@ export interface WheelState {
 export interface PlayerSnapshot {
   id: PlayerId;
   name: string;
+  /** Body colour as a 24-bit RGB integer (0xRRGGBB). */
+  color: number;
   vehicle: VehicleState;
   // Last input seq the server has consumed for this player.
   lastAckSeq: number;

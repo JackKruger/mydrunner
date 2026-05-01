@@ -18,6 +18,8 @@ import {
 export interface PlayerHandle {
   id: PlayerId;
   name: string;
+  /** Body colour as 0xRRGGBB. Optional - defaults to burnt orange if absent. */
+  color?: number;
   send(msg: string): void;
 }
 
@@ -172,6 +174,7 @@ export class Room {
       players.push({
         id: p.handle.id,
         name: p.handle.name,
+        color: p.handle.color ?? 0xd9531e,
         vehicle: p.vehicle.getState(),
         lastAckSeq: p.lastAckSeq,
       });

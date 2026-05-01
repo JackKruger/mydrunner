@@ -66,6 +66,8 @@ test('two clients see each other in snapshots', async ({ browser }) => {
   const b = await ctxB.newPage();
   await a.goto('/');
   await b.goto('/');
+  await a.click('#play-btn'); // dismiss startup menu
+  await b.click('#play-btn'); // dismiss startup menu
 
   // Both connect.
   await expect(a.locator('#hud')).toContainText('connected', { timeout: 10_000 });

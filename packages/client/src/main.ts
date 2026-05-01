@@ -23,6 +23,41 @@ function getServerUrl(): string {
   return `${proto}//${location.hostname}:2567`;
 }
 
+/** Show the startup menu and resolve when the player clicks Drive. */
+function waitForMenu(): Promise<{ name: string; color: number }> {
+  return new Promise((resolve) => {
+    const menu = document.getElementById('menu')!;
+    const nameInput = document.getElementById('name-input') as HTMLInputElement;
+    const playBtn = document.getElementById('play-btn')!;
+    const swatches = document.querySelectorAll<HTMLElement>('.color-swatch');
+
+    nameInput.placeholder = `player-${Math.floor(Math.random() * 1000)}`;
+
+    let selectedColor = 0xd9531e;
+
+    swatches.forEach((s) => {
+      s.addEventListener('click', () => {
+        swatches.forEach((x) => x.classList.remove('selected'));
+        s.classList.add('selected');
+        selectedColor = parseInt(s.dataset['color']!, 16);
+      });
+    });
+
+    const submit = (): void => {
+      const name = nameInput.value.trim() || nameInput.placeholder;
+      menu.style.display = 'none';
+      resolve({ name, color: selectedColor });
+    };
+
+    playBtn.addEventListener('click', submit);
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+
+    nameInput.focus();
+  });
+}
+
 const hud = document.getElementById('hud')!;
 const app = document.getElementById('app')!;
 
@@ -66,16 +101,18 @@ let lastFrameTimeMs = performance.now();
 let terrainData: Physics.TerrainData | null = null;
 
 async function start(): Promise<void> {
+  const { name, color } = await waitForMenu();
+
   // Rapier WASM init - prediction depends on the same physics as the server.
   await Physics.initRapier();
 
-  const net = new NetClient(getServerUrl(), `player-${Math.floor(Math.random() * 1000)}`, {
+  const net = new NetClient(getServerUrl(), name, color, {
     onOpen() {
       connected = true;
     },
     onWelcome(id, _serverTimeMs, terrain, spawn) {
       localId = id;
-      scene.setLocalPlayer(id);
+      scene.setLocalPlayer(id, color);
       scene.setTerrain(terrain.seed, terrain.size, terrain.resolution);
       // Cache terrain data for surface HUD lookups (cheap - we already
       // generate it for the prediction sim).

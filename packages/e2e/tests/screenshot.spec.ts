@@ -13,6 +13,7 @@ test.describe('@screenshot', () => {
 
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto('/');
+    await page.click('#play-btn'); // dismiss startup menu
     await expect(page.locator('#hud')).toContainText('connected', { timeout: 10_000 });
 
     // Expose diagnostics from the running scene.
