@@ -315,7 +315,11 @@ export class Scene {
               ? wa.suspensionLength + (wb.suspensionLength - wa.suspensionLength) * t
               : VEHICLE.suspensionRestLength;
             const sink = this.wheelSinkAt(vis.group, wp);
-            wheel.position.set(wp.x, wp.y - (susp - VEHICLE.suspensionRestLength) - sink, wp.z);
+            // wp.y is the chassis-connection point (chassis bottom edge);
+            // wheel hangs below at the current suspension extension. The
+            // earlier `wp.y - (susp - rest)` form assumed wp was the wheel
+            // center at rest, which Rapier doesn't.
+            wheel.position.set(wp.x, wp.y - susp - sink, wp.z);
             const steer = wa ? wa.steer : 0;
             const spin = wa && wb ? wa.spin + (wb.spin - wa.spin) * t : 0;
             wheel.rotation.set(spin, -steer, 0);
@@ -376,19 +380,17 @@ export class Scene {
         vis.lastSpin[i] = wheelSnap.spin;
         const wheelLin = Math.abs(spinRate) * VEHICLE.wheelRadius;
         if (wheelLin <= groundSpeed + 1.5) continue; // not really slipping
-        // Compute world-space wheel position.
+        // World-space wheel contact point: rotate the local wheel position
+        // (lowered slightly so particles emit near the ground) by the
+        // chassis quaternion, then add the chassis world position.
         const wp = VEHICLE.wheelPositions[i]!;
         const t = vis.group.position;
         const q = vis.group.quaternion;
-        // Rotate local (wp.x, wp.y, wp.z) by q.
-        const x = wp.x, y = wp.y - VEHICLE.wheelRadius * 0.6, z = wp.z;
-        const ix = q.w * x + q.y * z - q.z * y;
-        const iy = q.w * y + q.z * x - q.x * z;
-        const iz = q.w * z + q.x * y - q.y * x;
-        const iw = -q.x * x - q.y * y - q.z * z;
-        const wx = t.x + ix * q.w + iw * -q.x + iy * -q.z - iz * -q.y;
-        const wy = t.y + iy * q.w + iw * -q.y + iz * -q.x - ix * -q.z;
-        const wz = t.z + iz * q.w + iw * -q.z + ix * -q.y - iy * -q.x;
+        const local = { x: wp.x, y: wp.y - VEHICLE.wheelRadius * 0.6, z: wp.z };
+        const v = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
+        const wx = t.x + v.x;
+        const wy = t.y + v.y;
+        const wz = t.z + v.z;
 
         const surf = Physics.sampleSurface(terrainData, wx, wz);
         if (surf !== Physics.Surface.Mud && surf !== Physics.Surface.DeepMud) continue;
@@ -469,16 +471,13 @@ export class Scene {
    *  Returns 0 on road / dirt. */
   private wheelSinkAt(group: THREE.Group, wp: { x: number; y: number; z: number }): number {
     if (!this.terrain) return 0;
-    // Rotate the local wheel position by chassis rotation to get world XZ.
     const q = group.quaternion;
-    const ix = q.w * wp.x + q.y * wp.z - q.z * wp.y;
-    const iy = q.w * wp.y + q.z * wp.x - q.x * wp.z;
-    const iz = q.w * wp.z + q.x * wp.y - q.y * wp.x;
-    const iw = -q.x * wp.x - q.y * wp.y - q.z * wp.z;
-    const wx = group.position.x + ix * q.w + iw * -q.x + iy * -q.z - iz * -q.y;
-    const wz = group.position.z + iz * q.w + iw * -q.z + ix * -q.y - iy * -q.x;
-    void iy;
-    const surf = Physics.sampleSurface(this.terrain.terrain, wx, wz);
+    const v = Physics.rotateVecByQuat(wp, { x: q.x, y: q.y, z: q.z, w: q.w });
+    const surf = Physics.sampleSurface(
+      this.terrain.terrain,
+      group.position.x + v.x,
+      group.position.z + v.z,
+    );
     if (surf === Physics.Surface.Mud) return VEHICLE.wheelRadius * 0.18;
     if (surf === Physics.Surface.DeepMud) return VEHICLE.wheelRadius * 0.35;
     return 0;

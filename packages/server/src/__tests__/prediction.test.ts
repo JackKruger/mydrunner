@@ -7,7 +7,7 @@
 // amount of reconciliation will hide it.
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { Physics, FIXED_DT, EMPTY_INPUT } from '@mydrunner/shared';
+import { Physics, EMPTY_INPUT } from '@mydrunner/shared';
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -51,7 +51,6 @@ describe('client prediction', () => {
     expect(sa.position.z).toBeCloseTo(sb.position.z, 3);
     a.world.dispose();
     b.world.dispose();
-    void FIXED_DT;
   });
 
   it('reset returns vehicle to spawn pose with zero velocity', () => {

@@ -8,6 +8,7 @@ import { EMPTY_INPUT, type PlayerInput, type VehicleState, type WheelState } fro
 import { Surface, sampleSurface } from './terrain.js';
 import { createEngineState, stepEngine, type EngineState } from './engine.js';
 import { slipRatio, gripFromSlip } from './tire.js';
+import { rotateVecByQuat } from './util.js';
 import type { World } from './world.js';
 
 export interface VehicleSpawn {
@@ -98,28 +99,22 @@ export class Vehicle {
     const wp = VEHICLE.wheelPositions[i]!;
     const t = this.body.translation();
     const r = this.body.rotation();
-    // Rotate local point by quaternion: q * v * q^-1.
-    const x = wp.x, y = wp.y, z = wp.z;
-    const qx = r.x, qy = r.y, qz = r.z, qw = r.w;
-    const ix = qw * x + qy * z - qz * y;
-    const iy = qw * y + qz * x - qx * z;
-    const iz = qw * z + qx * y - qy * x;
-    const iw = -qx * x - qy * y - qz * z;
-    return {
-      x: t.x + ix * qw + iw * -qx + iy * -qz - iz * -qy,
-      y: t.y + iy * qw + iw * -qy + iz * -qx - ix * -qz,
-      z: t.z + iz * qw + iw * -qz + ix * -qy - iy * -qx,
-    };
+    const v = rotateVecByQuat(wp, r);
+    return { x: t.x + v.x, y: t.y + v.y, z: t.z + v.z };
   }
 
   /** Apply input to wheels - called before world.step(). */
   preStep(): void {
     const dt = 1 / 60;
-    // Smooth steering toward target. currentSteer keeps the player's
-    // intent sign (positive = right) so the wheel visual rotates the
-    // way the player expects. The Rapier setWheelSteering call below
-    // negates because flipping the axle to (-1,0,0) (which fixed the
-    // throttle direction) also flipped the steering-positive direction.
+    // Smooth steering toward target. currentSteer is in player-intent
+    // sign: positive = right. Two negations downstream cancel out:
+    //   - Rapier's setWheelSteering below negates because the axle is
+    //     (-1,0,0), which inverts Rapier's "positive steer" direction.
+    //   - The renderer (scene.ts) negates rotation.y because Three.js's
+    //     right-hand Y rotation takes +Z forward toward -X (left), so
+    //     positive intent needs negative mesh-y to actually visually
+    //     point right. Both negations are kept at their respective
+    //     consumer; the wire format carries player intent.
     const targetSteer = this.input.steer * VEHICLE.maxSteer;
     const steerDelta = targetSteer - this.currentSteer;
     const maxStep = VEHICLE.steerSpeed * dt;
@@ -236,13 +231,6 @@ export class Vehicle {
       out.push({ x: wp.x, z: wp.z, contact, slip });
     }
     return out;
-  }
-
-  /** Snapshot the smoothed steering value used for visual + Rapier
-   *  steer-set. The prediction layer reads this on reconcile to avoid
-   *  double-stepping the smoothing during input replay. */
-  get steerAngle(): number {
-    return this.currentSteer;
   }
 
   /** Set the smoothed steering value directly. Used by prediction

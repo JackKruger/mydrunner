@@ -47,7 +47,3 @@ export function sampleInput(): PlayerInput {
     buttons: Math.max(kbReset, t.reset),
   };
 }
-
-export function isPressed(code: string): boolean {
-  return KEYS.has(code);
-}

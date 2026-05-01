@@ -33,15 +33,6 @@ export function saveJoin(choice: JoinChoice): void {
   }
 }
 
-export function clearSavedJoin(): void {
-  try {
-    localStorage.removeItem(NAME_KEY);
-    localStorage.removeItem(CAR_KEY);
-  } catch {
-    /* ignored */
-  }
-}
-
 const STYLE = `
 #join-overlay {
   position: fixed; inset: 0; z-index: 10;
