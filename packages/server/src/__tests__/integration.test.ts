@@ -27,6 +27,7 @@ describe('server integration', () => {
       const handle: PlayerHandle = {
         id,
         name: 'test',
+        carKind: 'patrol',
         send: (m: string) => ws.readyState === ws.OPEN && ws.send(m),
       };
       handles.set(id, handle);

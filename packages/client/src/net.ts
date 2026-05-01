@@ -1,6 +1,6 @@
 // Tiny client wrapper around the shared message protocol.
 
-import { Net, INTERPOLATION_DELAY_MS, type WorldSnapshot, type PlayerInput, type PlayerId } from '@mydrunner/shared';
+import { Net, INTERPOLATION_DELAY_MS, type CarKind, type WorldSnapshot, type PlayerInput, type PlayerId } from '@mydrunner/shared';
 import type { TerrainHandshake, SpawnHandshake } from '@mydrunner/shared/net';
 
 export interface NetEvents {
@@ -16,12 +16,12 @@ export class NetClient {
   private events: NetEvents;
   private url: string;
   private name: string;
-  private color: number;
+  private carKind: CarKind;
 
-  constructor(url: string, name: string, color: number, events: NetEvents) {
+  constructor(url: string, name: string, carKind: CarKind, events: NetEvents) {
     this.url = url;
     this.name = name;
-    this.color = color;
+    this.carKind = carKind;
     this.events = events;
   }
 
@@ -29,7 +29,7 @@ export class NetClient {
     const ws = new WebSocket(this.url);
     this.ws = ws;
     ws.addEventListener('open', () => {
-      ws.send(Net.encode({ t: 'hello', name: this.name, color: this.color }));
+      ws.send(Net.encode({ t: 'hello', name: this.name, carKind: this.carKind }));
       this.events.onOpen();
     });
     ws.addEventListener('message', (ev) => {

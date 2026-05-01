@@ -3,10 +3,18 @@
 // the past so we always have two snapshots to interpolate between.
 
 import * as THREE from 'three';
-import { VEHICLE, Physics, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
+import {
+  VEHICLE,
+  CAMERA,
+  Physics,
+  DEFAULT_CAR_KIND,
+  type CarKind,
+  type WorldSnapshot,
+  type PlayerId,
+} from '@mydrunner/shared';
 import { RENDER_DELAY_MS } from './net.js';
 import { TerrainMesh } from './terrain.js';
-import { buildCarMesh } from './carMesh.js';
+import { buildCarMesh, colorHash } from './carMesh.js';
 import { createNameplate, disposeNameplate } from './nameplate.js';
 import { ParticleSystem } from './particles.js';
 import { Obstacles } from './obstacles.js';
@@ -21,6 +29,7 @@ interface VehicleVisual {
   wheels: THREE.Object3D[];
   nameplate: THREE.Sprite | null;
   nameplateText: string;
+  carKind: CarKind;
   /** Last known wheel spin per wheel - used to derive spin rate. */
   lastSpin: number[];
   /** Tracking time of the previous snapshot used to compute spin rate. */
@@ -34,9 +43,13 @@ export class Scene {
   private buffer: SnapshotEntry[] = [];
   private vehicles = new Map<PlayerId, VehicleVisual>();
   private localId: PlayerId | null = null;
-  private localColor: number = 0xd9531e;
+  private localCarKind: CarKind = DEFAULT_CAR_KIND;
   private cameraTarget = new THREE.Vector3();
   private cameraYaw = 0;
+  /** Spring-damper velocity of cameraYaw - drives both the catch-up motion
+   *  and the lateral "swing" offset in chase mode. */
+  private cameraYawVel = 0;
+  private lastCamUpdateMs = 0;
   private terrain: TerrainMesh | null = null;
   private terrainPlaceholder: THREE.Mesh | null = null;
   private obstacles: Obstacles | null = null;
@@ -93,9 +106,9 @@ export class Scene {
     });
   }
 
-  setLocalPlayer(id: PlayerId, color: number): void {
+  setLocalPlayer(id: PlayerId, carKind: CarKind = DEFAULT_CAR_KIND): void {
     this.localId = id;
-    this.localColor = color;
+    this.localCarKind = carKind;
   }
 
   setTerrain(seed: number, size: number, resolution: number): void {
@@ -149,16 +162,27 @@ export class Scene {
     return null;
   }
 
-  private ensureVehicle(id: PlayerId, color: number): VehicleVisual {
+  private ensureVehicle(id: PlayerId, isLocal: boolean, kind: CarKind): VehicleVisual {
     let v = this.vehicles.get(id);
-    if (v) return v;
-    const built = buildCarMesh(color);
+    if (v && v.carKind === kind) return v;
+    if (v) {
+      // Player swapped car kind mid-session - rebuild the mesh under the
+      // same id so the visual matches snapshot state. Keep nameplate state.
+      this.scene.remove(v.group);
+      if (v.nameplate) {
+        v.group.remove(v.nameplate);
+        disposeNameplate(v.nameplate);
+      }
+      this.vehicles.delete(id);
+    }
+    const built = buildCarMesh(kind, isLocal, colorHash(id));
     this.scene.add(built.group);
     v = {
       group: built.group,
       wheels: built.wheels,
       nameplate: null,
       nameplateText: '',
+      carKind: kind,
       lastSpin: [0, 0, 0, 0],
       lastSpinAtMs: 0,
     };
@@ -198,7 +222,7 @@ export class Scene {
    *  prediction so the local truck doesn't lag the snapshot buffer. */
   setLocalVehiclePose(pos: { x: number; y: number; z: number }, rot: { x: number; y: number; z: number; w: number }, wheels: { steer: number; spin: number; suspensionLength: number }[]): void {
     if (!this.localId) return;
-    const v = this.ensureVehicle(this.localId, this.localColor);
+    const v = this.ensureVehicle(this.localId, true, this.localCarKind);
     v.group.position.set(pos.x, pos.y, pos.z);
     v.group.quaternion.set(rot.x, rot.y, rot.z, rot.w);
     for (let i = 0; i < 4; i++) {
@@ -215,11 +239,11 @@ export class Scene {
       w.position.set(wp.x, wp.y - susp - sink, wp.z);
       w.rotation.set(ws ? ws.spin : 0, ws ? ws.steer : 0, 0);
     }
-    // Smooth target + yaw with reasonably high alphas so the camera
-    // stays close to the action; the camera position itself is then
-    // computed directly (no further lerp) which avoids compounded lag.
-    // Result: minimal bounce (target/yaw filter the high-frequency
-    // chassis wobble) without sluggish chase.
+    // Position target tracks the car directly with a light lerp - kills
+    // chassis-wobble high-frequency jitter without lag. Yaw uses an
+    // under-damped spring so the camera swings through corners instead
+    // of locking rigidly to heading; the resulting cameraYawVel feeds
+    // a lateral offset in updateCamera() that pushes outside the turn.
     this.cameraTarget.lerp(v.group.position, 0.4);
     const fX = 2 * (rot.x * rot.z + rot.w * rot.y);
     const fZ = 1 - 2 * (rot.x * rot.x + rot.y * rot.y);
@@ -227,7 +251,15 @@ export class Scene {
     let dy = targetYaw - this.cameraYaw;
     if (dy > Math.PI) dy -= 2 * Math.PI;
     if (dy < -Math.PI) dy += 2 * Math.PI;
-    this.cameraYaw += dy * 0.25;
+
+    const nowMs = performance.now();
+    const dt = this.lastCamUpdateMs ? Math.min(0.05, (nowMs - this.lastCamUpdateMs) / 1000) : 1 / 60;
+    this.lastCamUpdateMs = nowMs;
+    const accel = CAMERA.chaseYawStiffness * dy - CAMERA.chaseYawDamping * this.cameraYawVel;
+    this.cameraYawVel += accel * dt;
+    this.cameraYaw += this.cameraYawVel * dt;
+    if (this.cameraYaw > Math.PI) this.cameraYaw -= 2 * Math.PI;
+    if (this.cameraYaw < -Math.PI) this.cameraYaw += 2 * Math.PI;
   }
 
   render(nowMs: number): void {
@@ -242,8 +274,7 @@ export class Scene {
         const pb = bMap.get(pa.id) ?? pa;
         present.add(pa.id);
         const isLocal = pa.id === this.localId;
-        const color = isLocal ? this.localColor : pa.color;
-        const vis = this.ensureVehicle(pa.id, color);
+        const vis = this.ensureVehicle(pa.id, isLocal, pa.carKind);
         this.setNameplate(vis, pa.name, isLocal);
 
         // Local vehicle is overridden by setLocalVehiclePose() once prediction
@@ -367,9 +398,18 @@ export class Scene {
         -Math.cos(this.cameraYaw) * 8,
       );
       const desired = target.clone().add(offset);
+      // Lateral swing: when the camera yaw is sweeping (cornering), push
+      // sideways opposite the sweep direction so the camera ends up on
+      // the outside of the turn. Negative sign because positive yaw rate
+      // = turning right, and we want to push to the world-left.
+      const swingMag = Math.max(
+        -CAMERA.chaseSwingMax,
+        Math.min(CAMERA.chaseSwingMax, -this.cameraYawVel * CAMERA.chaseSwingLateral),
+      );
+      desired.x += Math.cos(this.cameraYaw) * swingMag;
+      desired.z += -Math.sin(this.cameraYaw) * swingMag;
       const minY = (this.terrain ? this.terrainHeightAt(desired.x, desired.z) : 0) + 1.5;
       if (desired.y < minY) desired.y = minY;
-      // Set position directly. Smoothing already happened on target+yaw.
       this.camera.position.copy(desired);
       const lookTarget = target.clone();
       lookTarget.y += 0.5;

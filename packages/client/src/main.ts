@@ -4,6 +4,7 @@
 import { Physics, TICK_RATE, type PlayerId } from '@mydrunner/shared';
 
 import { EngineAudio } from './engineAudio.js';
+import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './joinScreen.js';
 
 const SURFACE_LABELS: Record<number, string> = {
   [Physics.Surface.Road]: 'road',
@@ -12,51 +13,16 @@ const SURFACE_LABELS: Record<number, string> = {
   [Physics.Surface.DeepMud]: 'deep mud',
 };
 import { initInput, sampleInput } from './input.js';
+import { initTouchInput, onTouchEdge } from './touchInput.js';
 import { NetClient } from './net.js';
 import { Scene } from './scene.js';
 import { Prediction } from './prediction.js';
-import { initTouchInput, onTouchEdge } from './touchInput.js';
 
 function getServerUrl(): string {
   const explicit = import.meta.env.VITE_SERVER_URL as string | undefined;
   if (explicit) return explicit;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.hostname}:2567`;
-}
-
-/** Show the startup menu and resolve when the player clicks Drive. */
-function waitForMenu(): Promise<{ name: string; color: number }> {
-  return new Promise((resolve) => {
-    const menu = document.getElementById('menu')!;
-    const nameInput = document.getElementById('name-input') as HTMLInputElement;
-    const playBtn = document.getElementById('play-btn')!;
-    const swatches = document.querySelectorAll<HTMLElement>('.color-swatch');
-
-    nameInput.placeholder = `player-${Math.floor(Math.random() * 1000)}`;
-
-    let selectedColor = 0xd9531e;
-
-    swatches.forEach((s) => {
-      s.addEventListener('click', () => {
-        swatches.forEach((x) => x.classList.remove('selected'));
-        s.classList.add('selected');
-        selectedColor = parseInt(s.dataset['color']!, 16);
-      });
-    });
-
-    const submit = (): void => {
-      const name = nameInput.value.trim() || nameInput.placeholder;
-      menu.style.display = 'none';
-      resolve({ name, color: selectedColor });
-    };
-
-    playBtn.addEventListener('click', submit);
-    nameInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') submit();
-    });
-
-    nameInput.focus();
-  });
 }
 
 const hud = document.getElementById('hud')!;
@@ -79,7 +45,7 @@ window.addEventListener('keydown', startAudioOnce);
 window.addEventListener('mousedown', startAudioOnce);
 window.addEventListener('touchstart', startAudioOnce);
 
-// Mute toggle on M (or the on-screen mute button).
+// Mute toggle on M (or the on-screen mute button on touch).
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyM') engineAudio.toggleMute();
 });
@@ -104,18 +70,35 @@ let lastFrameTimeMs = performance.now();
 let terrainData: Physics.TerrainData | null = null;
 
 async function start(): Promise<void> {
-  const { name, color } = await waitForMenu();
-
   // Rapier WASM init - prediction depends on the same physics as the server.
   await Physics.initRapier();
 
-  const net = new NetClient(getServerUrl(), name, color, {
+  // First-load name + car picker. Skipped on subsequent visits via
+  // localStorage. URL param ?auto=1 skips the picker too (used by e2e
+  // tests; harmless in normal use).
+  const params = new URLSearchParams(location.search);
+  const auto = params.get('auto') === '1';
+  const saved = loadSavedJoin();
+  let choice: JoinChoice;
+  if (saved) {
+    choice = saved;
+  } else if (auto) {
+    choice = {
+      name: params.get('name') || `player-${Math.floor(Math.random() * 1000)}`,
+      carKind: params.get('car') === 'hilux' ? 'hilux' : 'patrol',
+    };
+  } else {
+    choice = await showJoinScreen({});
+    saveJoin(choice);
+  }
+
+  const net = new NetClient(getServerUrl(), choice.name, choice.carKind, {
     onOpen() {
       connected = true;
     },
     onWelcome(id, _serverTimeMs, terrain, spawn) {
       localId = id;
-      scene.setLocalPlayer(id, color);
+      scene.setLocalPlayer(id, choice.carKind);
       scene.setTerrain(terrain.seed, terrain.size, terrain.resolution);
       // Cache terrain data for surface HUD lookups (cheap - we already
       // generate it for the prediction sim).
@@ -157,7 +140,7 @@ async function start(): Promise<void> {
   });
   net.connect();
 
-  // Camera-cycle hotkey (C) or the on-screen "cam" button. Edge-triggered.
+  // Camera-cycle hotkey (C) or on-screen "cam" button. Edge-triggered.
   let cPrev = false;
   window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyC' && !cPrev) {

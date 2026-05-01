@@ -12,88 +12,6 @@
       #hud { position: fixed; top: 8px; left: 8px; padding: 6px 10px; background: rgba(0,0,0,0.5); border-radius: 4px; font-size: 12px; line-height: 1.4; pointer-events: none; }
       #help { position: fixed; bottom: 8px; left: 8px; padding: 6px 10px; background: rgba(0,0,0,0.5); border-radius: 4px; font-size: 11px; line-height: 1.4; pointer-events: none; opacity: 0.7; }
 
-      /* ── Startup menu ───────────────────────────────────────────── */
-      #menu {
-        position: fixed;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(0, 0, 0, 0.88);
-        z-index: 100;
-      }
-      #menu-panel {
-        background: #1a1a1a;
-        border: 1px solid #2e2e2e;
-        border-radius: 8px;
-        padding: 36px 44px;
-        display: flex;
-        flex-direction: column;
-        gap: 18px;
-        min-width: 320px;
-      }
-      #menu-title {
-        font-size: 30px;
-        letter-spacing: 3px;
-        color: #d9531e;
-        text-align: center;
-        margin-bottom: 4px;
-      }
-      .menu-label {
-        font-size: 10px;
-        color: #666;
-        text-transform: uppercase;
-        letter-spacing: 1.5px;
-        margin-bottom: -10px;
-      }
-      #name-input {
-        background: #111;
-        border: 1px solid #333;
-        border-radius: 4px;
-        color: #eee;
-        font-family: ui-monospace, monospace;
-        font-size: 14px;
-        padding: 9px 11px;
-        outline: none;
-        width: 100%;
-      }
-      #name-input:focus { border-color: #d9531e; }
-      #color-row {
-        display: flex;
-        gap: 10px;
-      }
-      .color-swatch {
-        width: 34px;
-        height: 34px;
-        border-radius: 5px;
-        cursor: pointer;
-        border: 2px solid transparent;
-        flex-shrink: 0;
-        transition: transform 0.1s;
-      }
-      .color-swatch:hover { transform: scale(1.1); }
-      .color-swatch.selected {
-        border-color: #fff;
-        box-shadow: 0 0 0 1px #fff;
-      }
-      #play-btn {
-        background: #d9531e;
-        border: none;
-        border-radius: 4px;
-        color: #fff;
-        font-family: ui-monospace, monospace;
-        font-size: 13px;
-        font-weight: bold;
-        letter-spacing: 3px;
-        padding: 11px 0;
-        cursor: pointer;
-        text-transform: uppercase;
-        margin-top: 4px;
-        width: 100%;
-      }
-      #play-btn:hover { background: #c44719; }
-      #play-btn:active { background: #a83c14; }
-
       /* ── Touch controls ─────────────────────────────────────────── */
       #touch-controls {
         position: fixed;
@@ -236,24 +154,6 @@
         <button class="aux-btn" id="cam-btn" type="button">cam</button>
         <button class="aux-btn" id="reset-btn" type="button">reset</button>
         <button class="aux-btn" id="mute-btn" type="button">mute</button>
-      </div>
-    </div>
-
-    <div id="menu">
-      <div id="menu-panel">
-        <div id="menu-title">mydrunner</div>
-        <span class="menu-label">name</span>
-        <input id="name-input" type="text" maxlength="32" autocomplete="off" spellcheck="false" />
-        <span class="menu-label">colour</span>
-        <div id="color-row">
-          <span class="color-swatch selected" data-color="d9531e" style="background:#d9531e" title="burnt orange"></span>
-          <span class="color-swatch" data-color="2a4a6a" style="background:#2a4a6a" title="navy"></span>
-          <span class="color-swatch" data-color="466b3a" style="background:#466b3a" title="olive"></span>
-          <span class="color-swatch" data-color="c9b86b" style="background:#c9b86b" title="sand"></span>
-          <span class="color-swatch" data-color="8b4513" style="background:#8b4513" title="saddle brown"></span>
-          <span class="color-swatch" data-color="b23a48" style="background:#b23a48" title="brick red"></span>
-        </div>
-        <button id="play-btn">drive</button>
       </div>
     </div>
 

@@ -3,7 +3,7 @@
 import { WebSocketServer, type WebSocket } from 'ws';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_PORT, Net, Physics } from '@mydrunner/shared';
+import { DEFAULT_PORT, DEFAULT_CAR_KIND, normalizeCarKind, Net, Physics } from '@mydrunner/shared';
 import { Room, type PlayerHandle } from './room.js';
 
 async function main(): Promise<void> {
@@ -31,7 +31,7 @@ async function main(): Promise<void> {
     const handle: PlayerHandle = {
       id,
       name: 'anon',
-      color: 0xd9531e,
+      carKind: DEFAULT_CAR_KIND,
       send: (msg: string) => {
         if (ws.readyState === ws.OPEN) ws.send(msg);
       },
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
         case 'hello':
           if (joined) return;
           handle.name = msg.name.slice(0, 32) || 'anon';
-          if (msg.color !== undefined) handle.color = msg.color & 0xffffff;
+          handle.carKind = normalizeCarKind(msg.carKind);
           room.addPlayer(handle);
           joined = true;
           break;

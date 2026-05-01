@@ -11,8 +11,7 @@ test('client loads, connects, and renders snapshots', async ({ page }) => {
     if (msg.type() === 'error') consoleErrors.push(msg.text());
   });
 
-  await page.goto('/');
-  await page.click('#play-btn'); // dismiss startup menu
+  await page.goto('/?auto=1');
 
   // HUD switches from "connecting…" to "connected · …" once snapshots arrive.
   const hud = page.locator('#hud');

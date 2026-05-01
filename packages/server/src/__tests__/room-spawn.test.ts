@@ -17,6 +17,7 @@ describe('room spawn behavior', () => {
     const handle = {
       id: 'p1',
       name: 'tester',
+      carKind: 'patrol' as const,
       send: (m: string) => sent.push(m),
     };
     room.addPlayer(handle);

@@ -6,6 +6,7 @@ import {
   TICK_RATE,
   SNAPSHOT_INTERVAL_MS,
   RUT_REBUILD_INTERVAL_TICKS,
+  RUTS_ENABLED,
   EMPTY_INPUT,
   Net,
   Physics,
@@ -13,13 +14,13 @@ import {
   type PlayerInput,
   type PlayerSnapshot,
   type WorldSnapshot,
+  type CarKind,
 } from '@mydrunner/shared';
 
 export interface PlayerHandle {
   id: PlayerId;
   name: string;
-  /** Body colour as 0xRRGGBB. Optional - defaults to burnt orange if absent. */
-  color?: number;
+  carKind: CarKind;
   send(msg: string): void;
 }
 
@@ -139,25 +140,31 @@ export class Room {
     this.world.step();
     this.tick += 1;
 
-    // Record rut accumulation from each vehicle's wheels.
-    for (const p of this.players.values()) {
-      for (const w of p.vehicle.wheelSamples()) {
-        this.rutBuffer.recordWheel(w.x, w.z, w.slip, w.contact);
+    // Rut accumulation + flush. Gated on RUTS_ENABLED - currently off
+    // because per-cell footprint is much wider than a tire and the
+    // client prediction world doesn't receive deltas, causing periodic
+    // reconcile snaps. Buffer machinery is left wired so it can flip
+    // back on without touching this loop.
+    if (RUTS_ENABLED) {
+      for (const p of this.players.values()) {
+        for (const w of p.vehicle.wheelSamples()) {
+          this.rutBuffer.recordWheel(w.x, w.z, w.slip, w.contact);
+        }
       }
-    }
-    this.ticksSinceRutFlush += 1;
-    if (this.ticksSinceRutFlush >= RUT_REBUILD_INTERVAL_TICKS) {
-      this.ticksSinceRutFlush = 0;
-      const deltas = this.rutBuffer.flush();
-      if (deltas.length > 0) {
-        this.world.rebuildTerrain();
-        this.rutVersion += 1;
-        const msg = Net.encode({
-          t: 'rut',
-          version: this.rutVersion,
-          cells: deltas,
-        });
-        for (const p of this.players.values()) p.handle.send(msg);
+      this.ticksSinceRutFlush += 1;
+      if (this.ticksSinceRutFlush >= RUT_REBUILD_INTERVAL_TICKS) {
+        this.ticksSinceRutFlush = 0;
+        const deltas = this.rutBuffer.flush();
+        if (deltas.length > 0) {
+          this.world.rebuildTerrain();
+          this.rutVersion += 1;
+          const msg = Net.encode({
+            t: 'rut',
+            version: this.rutVersion,
+            cells: deltas,
+          });
+          for (const p of this.players.values()) p.handle.send(msg);
+        }
       }
     }
 
@@ -174,7 +181,7 @@ export class Room {
       players.push({
         id: p.handle.id,
         name: p.handle.name,
-        color: p.handle.color ?? 0xd9531e,
+        carKind: p.handle.carKind,
         vehicle: p.vehicle.getState(),
         lastAckSeq: p.lastAckSeq,
       });
