@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { VEHICLE, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
 import { RENDER_DELAY_MS } from './net.js';
 import { TerrainMesh } from './terrain.js';
+import { buildCarMesh, colorHash } from './carMesh.js';
 
 interface SnapshotEntry {
   recvAtMs: number;
@@ -14,7 +15,7 @@ interface SnapshotEntry {
 
 interface VehicleVisual {
   group: THREE.Group;
-  wheels: THREE.Mesh[];
+  wheels: THREE.Object3D[];
 }
 
 export class Scene {
@@ -131,27 +132,9 @@ export class Scene {
   private ensureVehicle(id: PlayerId, isLocal: boolean): VehicleVisual {
     let v = this.vehicles.get(id);
     if (v) return v;
-    const group = new THREE.Group();
-    const ext = VEHICLE.chassisHalfExtents;
-    const chassis = new THREE.Mesh(
-      new THREE.BoxGeometry(ext.x * 2, ext.y * 2, ext.z * 2),
-      new THREE.MeshStandardMaterial({ color: isLocal ? 0xd9531e : 0x3a78c2 }),
-    );
-    chassis.castShadow = true;
-    group.add(chassis);
-
-    const wheels: THREE.Mesh[] = [];
-    const wheelGeo = new THREE.CylinderGeometry(VEHICLE.wheelRadius, VEHICLE.wheelRadius, VEHICLE.wheelWidth, 16);
-    wheelGeo.rotateZ(Math.PI / 2);
-    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
-    for (let i = 0; i < 4; i++) {
-      const w = new THREE.Mesh(wheelGeo, wheelMat);
-      w.castShadow = true;
-      group.add(w);
-      wheels.push(w);
-    }
-    this.scene.add(group);
-    v = { group, wheels };
+    const built = buildCarMesh(isLocal, colorHash(id));
+    this.scene.add(built.group);
+    v = built;
     this.vehicles.set(id, v);
     return v;
   }
@@ -256,14 +239,16 @@ export class Scene {
   private updateCamera(): void {
     const target = this.cameraTarget;
     if (this.cameraMode === 'chase') {
+      // Lower chase angle so we see the side profile + wheels, not just
+      // the roof. 8m back, 3m up.
       const offset = new THREE.Vector3(
-        -Math.sin(this.cameraYaw) * 9,
-        5,
-        -Math.cos(this.cameraYaw) * 9,
+        -Math.sin(this.cameraYaw) * 8,
+        3,
+        -Math.cos(this.cameraYaw) * 8,
       );
       const desired = target.clone().add(offset);
       // Make sure the camera doesn't dip below terrain when going down a hill.
-      const minY = (this.terrain ? this.terrainHeightAt(desired.x, desired.z) : 0) + 1.0;
+      const minY = (this.terrain ? this.terrainHeightAt(desired.x, desired.z) : 0) + 1.5;
       if (desired.y < minY) desired.y = minY;
       this.camera.position.lerp(desired, 0.15);
       const lookTarget = target.clone();
