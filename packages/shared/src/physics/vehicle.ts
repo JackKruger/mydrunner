@@ -1,13 +1,11 @@
 // Vehicle uses Rapier's DynamicRayCastVehicleController - a Bullet-style
-// raycast vehicle. Fast, robust, and gives us per-wheel suspension and
-// friction we can later modulate by surface (mud, deep mud).
-//
-// This is intentionally simple for the MVP. The "feel" knobs all live in
-// constants.VEHICLE so we can tune without touching code.
+// raycast vehicle. Per-wheel friction is modulated each tick based on the
+// terrain surface beneath the wheel, giving us the mud feel.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { VEHICLE } from '../constants.js';
+import { VEHICLE, SURFACE_FRICTION } from '../constants.js';
 import { EMPTY_INPUT, type PlayerInput, type VehicleState, type WheelState } from '../types.js';
+import { Surface, sampleSurface } from './terrain.js';
 import type { World } from './world.js';
 
 export interface VehicleSpawn {
@@ -24,6 +22,7 @@ export class Vehicle {
   private input: PlayerInput = { ...EMPTY_INPUT };
   private currentSteer = 0;
   private wheelSpin: number[] = [0, 0, 0, 0];
+  private wheelSurface: Surface[] = [Surface.Dirt, Surface.Dirt, Surface.Dirt, Surface.Dirt];
 
   constructor(world: World, id: string, spawn: VehicleSpawn) {
     this.world = world;
@@ -71,6 +70,26 @@ export class Vehicle {
     this.input = input;
   }
 
+  /** Return world-space position of wheel i (chassis pos + rotated local pos).
+   *  Used for surface lookup. */
+  private wheelWorldPos(i: number): { x: number; y: number; z: number } {
+    const wp = VEHICLE.wheelPositions[i]!;
+    const t = this.body.translation();
+    const r = this.body.rotation();
+    // Rotate local point by quaternion: q * v * q^-1.
+    const x = wp.x, y = wp.y, z = wp.z;
+    const qx = r.x, qy = r.y, qz = r.z, qw = r.w;
+    const ix = qw * x + qy * z - qz * y;
+    const iy = qw * y + qz * x - qx * z;
+    const iz = qw * z + qx * y - qy * x;
+    const iw = -qx * x - qy * y - qz * z;
+    return {
+      x: t.x + ix * qw + iw * -qx + iy * -qz - iz * -qy,
+      y: t.y + iy * qw + iw * -qy + iz * -qx - ix * -qz,
+      z: t.z + iz * qw + iw * -qz + ix * -qy - iy * -qx,
+    };
+  }
+
   /** Apply input to wheels - called before world.step(). */
   preStep(): void {
     const dt = 1 / 60;
@@ -85,10 +104,38 @@ export class Vehicle {
     this.controller.setWheelSteering(0, this.currentSteer);
     this.controller.setWheelSteering(1, this.currentSteer);
 
-    // Rear-wheel drive. Throttle in [-1,1].
-    const drive = this.input.throttle * VEHICLE.engineForce;
-    this.controller.setWheelEngineForce(2, drive);
-    this.controller.setWheelEngineForce(3, drive);
+    // Per-wheel surface lookup. The rear wheels are driven, so mud on the
+    // rear axle slows acceleration; mud on the fronts mostly affects turning.
+    for (let i = 0; i < 4; i++) {
+      const wp = this.wheelWorldPos(i);
+      const surf = sampleSurface(this.world.terrain, wp.x, wp.z);
+      this.wheelSurface[i] = surf;
+      const grip =
+        surf === Surface.Road
+          ? SURFACE_FRICTION.road
+          : surf === Surface.Dirt
+            ? SURFACE_FRICTION.dirt
+            : surf === Surface.Mud
+              ? SURFACE_FRICTION.mud
+              : SURFACE_FRICTION.deepMud;
+      // Friction slip is the Pacejka-style peak grip in Rapier's vehicle.
+      // Lower = slips more = less torque transfer.
+      this.controller.setWheelFrictionSlip(i, 2.0 * grip);
+    }
+
+    // 4x4 / AWD. Each wheel gets its share of engine torque, scaled by that
+    // wheel's grip - so a wheel in deep mud spins less of the budget away
+    // and the others can still pull the car. This is the classic 4x4 win
+    // over RWD on bad surfaces.
+    const torque = this.input.throttle * VEHICLE.engineForce;
+    const frontShare = VEHICLE.driveSplit.front;
+    const rearShare = VEHICLE.driveSplit.rear;
+    for (let i = 0; i < 4; i++) {
+      const isFront = i < 2;
+      const share = isFront ? frontShare / 2 : rearShare / 2;
+      const grip = surfaceGrip(this.wheelSurface[i] ?? Surface.Dirt);
+      this.controller.setWheelEngineForce(i, torque * share * grip);
+    }
 
     // Brakes on all four. Handbrake locks rears for slides.
     const brake = this.input.brake * VEHICLE.brakeForce;
@@ -107,6 +154,24 @@ export class Vehicle {
       const angVel = this.controller.wheelRotation(i) ?? 0;
       this.wheelSpin[i] = (this.wheelSpin[i] ?? 0) + angVel;
     }
+  }
+
+  /** Reset to a spawn pose. Called when player presses R (or hits map edge). */
+  resetTo(spawn: VehicleSpawn): void {
+    this.body.setTranslation(
+      { x: spawn.position.x, y: spawn.position.y, z: spawn.position.z },
+      true,
+    );
+    if (spawn.yaw !== undefined) {
+      const half = spawn.yaw / 2;
+      this.body.setRotation({ x: 0, y: Math.sin(half), z: 0, w: Math.cos(half) }, true);
+    } else {
+      this.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    }
+    this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this.currentSteer = 0;
+    this.input = { ...EMPTY_INPUT };
   }
 
   getState(): VehicleState {
@@ -136,5 +201,14 @@ export class Vehicle {
   dispose(): void {
     this.world.world.removeVehicleController(this.controller);
     this.world.world.removeRigidBody(this.body);
+  }
+}
+
+function surfaceGrip(s: Surface): number {
+  switch (s) {
+    case Surface.Road: return SURFACE_FRICTION.road;
+    case Surface.Dirt: return SURFACE_FRICTION.dirt;
+    case Surface.Mud: return SURFACE_FRICTION.mud;
+    case Surface.DeepMud: return SURFACE_FRICTION.deepMud;
   }
 }

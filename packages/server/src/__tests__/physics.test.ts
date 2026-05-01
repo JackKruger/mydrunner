@@ -15,7 +15,7 @@ function simSeconds(world: Physics.World, seconds: number): void {
 
 describe('vehicle physics', () => {
   it('falls onto the ground from a small height and settles', () => {
-    const world = new Physics.World({ size: 100, resolution: 32 });
+    const world = new Physics.World({ generate: { size: 100, resolution: 32, seed: 1 } });
     const v = world.spawnVehicle('p1', { position: { x: 0, y: 3, z: 0 } });
     simSeconds(world, 2);
     const s = v.getState();
@@ -28,7 +28,7 @@ describe('vehicle physics', () => {
   });
 
   it('drives forward when throttle is applied', () => {
-    const world = new Physics.World({ size: 100, resolution: 32 });
+    const world = new Physics.World({ generate: { size: 100, resolution: 32, seed: 1 } });
     const v = world.spawnVehicle('p1', { position: { x: 0, y: 1.5, z: 0 } });
     simSeconds(world, 1); // settle on ground
 
@@ -43,7 +43,7 @@ describe('vehicle physics', () => {
   });
 
   it('responds to steering', () => {
-    const world = new Physics.World({ size: 100, resolution: 32 });
+    const world = new Physics.World({ generate: { size: 100, resolution: 32, seed: 1 } });
     const v = world.spawnVehicle('p1', { position: { x: 0, y: 1.5, z: 0 } });
     simSeconds(world, 1);
 
@@ -61,8 +61,45 @@ describe('vehicle physics', () => {
     world.dispose();
   });
 
+  it('accelerates faster on road than on deep mud (same input)', () => {
+    // Build two worlds: one all-road, one all-deep-mud, by hand-crafting
+    // surface arrays. Same heightmap (flat) so terrain doesn't confound.
+    function makeWorld(allMud: boolean): Physics.World {
+      const n = 32;
+      const heights = new Float32Array(n * n); // all zeros, flat ground
+      const surfaces = new Uint8Array(n * n);
+      surfaces.fill(allMud ? Physics.Surface.DeepMud : Physics.Surface.Road);
+      return new Physics.World({
+        terrain: { size: 100, resolution: n, heights, surfaces, seed: 0 },
+      });
+    }
+    const wRoad = makeWorld(false);
+    const wMud = makeWorld(true);
+    const vRoad = wRoad.spawnVehicle('a', { position: { x: 0, y: 1.5, z: 0 } });
+    const vMud = wMud.spawnVehicle('a', { position: { x: 0, y: 1.5, z: 0 } });
+    simSeconds(wRoad, 0.5);
+    simSeconds(wMud, 0.5);
+
+    vRoad.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1 });
+    vMud.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1 });
+    simSeconds(wRoad, 3);
+    simSeconds(wMud, 3);
+
+    const speedRoad = Math.hypot(
+      vRoad.getState().linVel.x,
+      vRoad.getState().linVel.z,
+    );
+    const speedMud = Math.hypot(
+      vMud.getState().linVel.x,
+      vMud.getState().linVel.z,
+    );
+    expect(speedRoad).toBeGreaterThan(speedMud + 1.0);
+    wRoad.dispose();
+    wMud.dispose();
+  });
+
   it('multiple vehicles do not penetrate each other', () => {
-    const world = new Physics.World({ size: 100, resolution: 32 });
+    const world = new Physics.World({ generate: { size: 100, resolution: 32, seed: 1 } });
     const a = world.spawnVehicle('a', { position: { x: -2, y: 1.5, z: 0 } });
     const b = world.spawnVehicle('b', { position: { x: 2, y: 1.5, z: 0 } });
     simSeconds(world, 2);

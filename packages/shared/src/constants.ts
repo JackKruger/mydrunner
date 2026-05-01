@@ -8,29 +8,32 @@ export const SNAPSHOT_INTERVAL_MS = 1000 / SNAPSHOT_RATE;
 // World
 export const GRAVITY_Y = -9.81;
 
-// Vehicle (tunable - feel comes from here)
+// Vehicle (tunable - feel comes from here). Tuned for a 4x4 SUV / off-road
+// car: AWD, smaller than a truck, peppy enough to be fun on dirt.
 export const VEHICLE = {
   mass: 1500,
-  chassisHalfExtents: { x: 1.0, y: 0.4, z: 2.0 },
-  wheelRadius: 0.4,
-  wheelWidth: 0.3,
-  suspensionRestLength: 0.5,
-  suspensionStiffness: 35,
-  suspensionDamping: 4,
-  suspensionCompression: 0.83,
+  chassisHalfExtents: { x: 0.85, y: 0.45, z: 1.9 }, // ~1.7m wide, 3.8m long
+  wheelRadius: 0.36,
+  wheelWidth: 0.25,
+  suspensionRestLength: 0.45,
+  suspensionStiffness: 32,
+  suspensionDamping: 4.5,
+  suspensionCompression: 0.85,
   maxSuspensionForce: 6000,
-  maxSuspensionTravel: 0.5,
-  // Wheel positions relative to chassis center
+  maxSuspensionTravel: 0.4,
+  // Wheel positions relative to chassis center.
   wheelPositions: [
-    { x: -0.9, y: -0.2, z: 1.4 },  // FL
-    { x: 0.9, y: -0.2, z: 1.4 },   // FR
-    { x: -0.9, y: -0.2, z: -1.4 }, // RL
-    { x: 0.9, y: -0.2, z: -1.4 },  // RR
+    { x: -0.78, y: -0.25, z: 1.3 },  // FL
+    { x: 0.78, y: -0.25, z: 1.3 },   // FR
+    { x: -0.78, y: -0.25, z: -1.3 }, // RL
+    { x: 0.78, y: -0.25, z: -1.3 },  // RR
   ],
-  engineForce: 4000,
-  brakeForce: 2500,
-  maxSteer: 0.5, // radians
-  steerSpeed: 2.5, // rad/s response
+  // AWD torque split front:rear. 0.5/0.5 for symmetric 4x4 feel.
+  engineForce: 4200,
+  driveSplit: { front: 0.5, rear: 0.5 },
+  brakeForce: 2800,
+  maxSteer: 0.55, // radians
+  steerSpeed: 3.0, // rad/s response
 } as const;
 
 // Mud / surface friction. Higher = more grip.

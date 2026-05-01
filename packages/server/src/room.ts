@@ -17,7 +17,7 @@ import {
 export interface PlayerHandle {
   id: PlayerId;
   name: string;
-  send(msg: ReturnType<typeof Net.encode> extends string ? string : never): void;
+  send(msg: string): void;
 }
 
 interface InternalPlayer {
@@ -25,6 +25,8 @@ interface InternalPlayer {
   vehicle: Physics.Vehicle;
   pendingInput: PlayerInput;
   lastAckSeq: number;
+  /** Spawn pose remembered for resets. */
+  spawn: { position: { x: number; y: number; z: number }; yaw: number };
 }
 
 export class Room {
@@ -34,15 +36,14 @@ export class Room {
   private startedAtMs = Date.now();
   private snapAccumMs = 0;
   private loopHandle: NodeJS.Timeout | null = null;
-  private lastTickAtMs = 0;
+  private rutVersion = 0;
 
-  constructor() {
-    this.world = new Physics.World({ size: 200, resolution: 64 });
+  constructor(seed = 1337) {
+    this.world = new Physics.World({ generate: { size: 200, resolution: 64, seed } });
   }
 
   start(): void {
     if (this.loopHandle) return;
-    this.lastTickAtMs = Date.now();
     const intervalMs = 1000 / TICK_RATE;
     this.loopHandle = setInterval(() => this.tickOnce(), intervalMs);
   }
@@ -56,20 +57,29 @@ export class Room {
     return Date.now() - this.startedAtMs;
   }
 
-  addPlayer(handle: PlayerHandle): void {
-    // Stagger spawns in a small ring so cars don't pile up at origin.
+  /** Find a safe spawn position: ring around the road strip, snapped to
+   *  terrain height + clearance. */
+  private nextSpawn(): { position: { x: number; y: number; z: number }; yaw: number } {
     const n = this.players.size;
-    const angle = (n * Math.PI * 2) / 8;
-    const r = 4;
-    const vehicle = this.world.spawnVehicle(handle.id, {
-      position: { x: Math.cos(angle) * r, y: 2, z: Math.sin(angle) * r },
-      yaw: angle + Math.PI,
-    });
+    const lane = (n % 4) - 1.5; // -1.5, -0.5, 0.5, 1.5
+    const back = -20 - Math.floor(n / 4) * 6;
+    const x = lane * 2.5;
+    const z = back;
+    // Sample terrain height at this point to avoid spawning underground.
+    const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);
+    const ground = idx >= 0 ? (this.world.terrain.heights[idx] ?? 0) : 0;
+    return { position: { x, y: ground + 1.5, z }, yaw: 0 };
+  }
+
+  addPlayer(handle: PlayerHandle): void {
+    const spawn = this.nextSpawn();
+    const vehicle = this.world.spawnVehicle(handle.id, spawn);
     this.players.set(handle.id, {
       handle,
       vehicle,
       pendingInput: { ...EMPTY_INPUT },
       lastAckSeq: 0,
+      spawn,
     });
     handle.send(
       Net.encode({
@@ -77,6 +87,12 @@ export class Room {
         you: handle.id,
         tick: this.tick,
         serverTimeMs: this.nowMs(),
+        terrain: {
+          seed: this.world.terrain.seed,
+          size: this.world.terrain.size,
+          resolution: this.world.terrain.resolution,
+          rutVersion: this.rutVersion,
+        },
       }),
     );
   }
@@ -91,18 +107,25 @@ export class Room {
   applyInput(id: PlayerId, input: PlayerInput): void {
     const p = this.players.get(id);
     if (!p) return;
-    // Drop out-of-order inputs (very simple - replace with reorder buffer later).
     if (input.seq <= p.lastAckSeq) return;
-    p.pendingInput = input;
+    // Clamp out-of-range inputs (anti-cheat / bad client).
+    p.pendingInput = {
+      seq: input.seq,
+      throttle: clamp(input.throttle, -1, 1),
+      steer: clamp(input.steer, -1, 1),
+      brake: clamp(input.brake, 0, 1),
+      handbrake: clamp(input.handbrake, 0, 1),
+      buttons: input.buttons | 0,
+    };
     p.lastAckSeq = input.seq;
   }
 
   private tickOnce(): void {
-    const now = Date.now();
-    const dt = (now - this.lastTickAtMs) / 1000;
-    this.lastTickAtMs = now;
-
     for (const p of this.players.values()) {
+      // Reset request: button bit 0.
+      if ((p.pendingInput.buttons & 1) !== 0) {
+        p.vehicle.resetTo(p.spawn);
+      }
       p.vehicle.setInput(p.pendingInput);
     }
     this.world.step();
@@ -113,7 +136,6 @@ export class Room {
       this.snapAccumMs = 0;
       this.broadcastSnapshot();
     }
-    void dt;
   }
 
   private broadcastSnapshot(): void {
@@ -138,4 +160,8 @@ export class Room {
   get playerCount(): number {
     return this.players.size;
   }
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
 }

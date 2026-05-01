@@ -7,6 +7,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { GRAVITY_Y } from '../constants.js';
 import { Vehicle, type VehicleSpawn } from './vehicle.js';
+import { generateTerrain, type TerrainData, type TerrainOptions } from './terrain.js';
 
 let rapierReady: Promise<void> | null = null;
 export function initRapier(): Promise<void> {
@@ -15,49 +16,52 @@ export function initRapier(): Promise<void> {
 }
 
 export interface WorldOptions {
-  /** Heightmap size in world units (X/Z extent). */
-  size?: number;
-  /** Heightmap resolution (samples per side, must be power-of-two friendly). */
-  resolution?: number;
-  /** Optional seeded heights array (length = resolution * resolution). If
-   *  omitted, a flat plane is used. */
-  heights?: Float32Array;
+  /** Either pre-built terrain data (e.g. received from the server) or
+   *  generation options - the constructor will generate if needed. */
+  terrain?: TerrainData;
+  generate?: TerrainOptions;
 }
 
 export class World {
   readonly rapier: typeof RAPIER;
   readonly world: RAPIER.World;
   readonly vehicles = new Map<string, Vehicle>();
-  readonly size: number;
-  readonly resolution: number;
-  readonly heights: Float32Array;
+  readonly terrain: TerrainData;
+  private terrainBody: RAPIER.RigidBody;
+  private terrainCollider: RAPIER.Collider;
 
   constructor(opts: WorldOptions = {}) {
     this.rapier = RAPIER;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y, z: 0 });
-    this.size = opts.size ?? 200;
-    this.resolution = opts.resolution ?? 64;
-    this.heights =
-      opts.heights ?? new Float32Array(this.resolution * this.resolution);
-    this.buildTerrain();
+    this.terrain = opts.terrain ?? generateTerrain(opts.generate);
+    const built = this.buildTerrain(this.terrain);
+    this.terrainBody = built.body;
+    this.terrainCollider = built.collider;
   }
 
-  private buildTerrain(): void {
-    const n = this.resolution;
-    // Rapier's heightfield expects (n+1) x (n+1) samples for n cells, but the
-    // compat build accepts an n x n Float32Array indexed col-major.
-    const halfSize = this.size / 2;
-    const scale = { x: this.size, y: 1, z: this.size };
+  private buildTerrain(t: TerrainData): { body: RAPIER.RigidBody; collider: RAPIER.Collider } {
+    const n = t.resolution;
+    const scale = { x: t.size, y: 1, z: t.size };
     const colliderDesc = RAPIER.ColliderDesc.heightfield(
       n - 1,
       n - 1,
-      this.heights,
+      t.heights,
       scale,
     ).setFriction(1.0);
     const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
     const body = this.world.createRigidBody(bodyDesc);
-    this.world.createCollider(colliderDesc, body);
-    void halfSize; // reserved for future bounds walls
+    const collider = this.world.createCollider(colliderDesc, body);
+    return { body, collider };
+  }
+
+  /** Replace the heightfield in place (used by deformable ruts). Existing
+   *  vehicles stay attached to the world; only the static terrain swaps. */
+  rebuildTerrain(): void {
+    this.world.removeCollider(this.terrainCollider, true);
+    this.world.removeRigidBody(this.terrainBody);
+    const built = this.buildTerrain(this.terrain);
+    this.terrainBody = built.body;
+    this.terrainCollider = built.collider;
   }
 
   spawnVehicle(id: string, spawn: VehicleSpawn): Vehicle {

@@ -6,11 +6,27 @@ export type ClientMessage =
   | { t: 'input'; input: PlayerInput }
   | { t: 'ping'; clientTimeMs: number };
 
+export interface TerrainHandshake {
+  seed: number;
+  size: number;
+  resolution: number;
+  /** Optional rut deltas applied since terrain was generated (for late-joiners). */
+  rutVersion?: number;
+}
+
 // Server -> Client
 export type ServerMessage =
-  | { t: 'welcome'; you: PlayerId; tick: number; serverTimeMs: number }
+  | {
+      t: 'welcome';
+      you: PlayerId;
+      tick: number;
+      serverTimeMs: number;
+      terrain: TerrainHandshake;
+    }
   | { t: 'snapshot'; snap: WorldSnapshot }
   | { t: 'pong'; clientTimeMs: number; serverTimeMs: number }
+  /** Broadcast when the heightmap mutates (ruts deepen). Coalesced by version. */
+  | { t: 'rut'; version: number; cells: { i: number; dy: number }[] }
   | { t: 'bye'; reason: string };
 
 // Wire format: JSON for now (simple, debuggable). Can swap to msgpack later by
