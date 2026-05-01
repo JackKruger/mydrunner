@@ -1,0 +1,531 @@
+// Custom solid-axle vehicle. Drops Rapier's DynamicRayCastVehicleController
+// in favour of: chassis = Rapier RigidBody, two software AxleStates each
+// with two software WheelKinematics, per-tick raycasts from chassis-fixed
+// wheel-end positions to read terrain heights, then spring/damper forces
+// applied as impulses on the chassis at the axle anchors.
+//
+// The solid-axle behaviour comes from coupling both wheels of an axle
+// through the axle's two DOFs (rideY + rollAngle). When one wheel hits a
+// rock, the axle articulates - the other wheel either follows down to
+// stay planted (within maxArticulation) or pushes the chassis over
+// (beyond the cap). That's the rock-crawler flex pose.
+//
+// Determinism rules:
+//   1. Read body.translation()/rotation()/linvel()/angvel() ONCE per
+//      preStep, at the top. Do not re-read mid-loop.
+//   2. Iterate axles in fixed [front, rear] order, wheels [FL, FR, RL, RR].
+//   3. World-down rays (gravity-aligned), not chassis-down: matters on
+//      steep slopes where chassis-down would miss the actual ground.
+//   4. Diff-lock equalise BEFORE slip computation, so the slip uses the
+//      locked angVel.
+//
+// See the matching Phase 1 plan in CLAUDE.md / the suspension overhaul plan.
+
+import RAPIER from '@dimforge/rapier3d-compat';
+import {
+  FIXED_DT,
+  GRAVITY_Y,
+  TIRE_LATERAL,
+  VEHICLE,
+} from '../constants.js';
+import { TUNING } from '../tuning.js';
+import {
+  EMPTY_INPUT,
+  type CarKind,
+  type PlayerInput,
+  type VehicleState,
+  type WheelState,
+} from '../types.js';
+import { Surface, sampleSurface } from './terrain.js';
+import { createEngineState, stepEngine, type EngineState } from './engine.js';
+import { slipRatio, gripFromSlip } from './tire.js';
+import { rotateVecByQuat } from './util.js';
+import { geomFor, type VehicleGeom } from './vehicleGeom.js';
+import {
+  applyAxleSnap,
+  axleSnap,
+  createAxleState,
+  resetAxleState,
+  stepAxle,
+  type AxleSnap,
+  type AxleState,
+} from './axle.js';
+import {
+  createWheelKinematic,
+  integrateWheelSpin,
+  resetWheelKinematic,
+  type WheelKinematic,
+} from './wheelDynamics.js';
+import type {
+  VehicleLike,
+  VehicleSpawn,
+  WheelSample,
+} from './vehicleTypes.js';
+import type { World } from './world.js';
+
+// Effective longitudinal friction coefficient for the new model. With
+// per-wheel normal load ~3700N (1500kg / 4 wheels), this gives ~3700N of
+// grip per wheel on road - around 1g of acceleration available across
+// the four wheels combined. Surface multiplier scales below this.
+const LONG_FRICTION = 1.0;
+
+type Vec3 = { x: number; y: number; z: number };
+
+export class SolidAxleVehicle implements VehicleLike {
+  private readonly world: World;
+  readonly id: string;
+  readonly body: RAPIER.RigidBody;
+  readonly chassis: RAPIER.Collider;
+  readonly geom: VehicleGeom;
+
+  private input: PlayerInput = { ...EMPTY_INPUT };
+  private currentSteer = 0;
+
+  private readonly axles: [AxleState, AxleState];
+  private readonly wheels: [WheelKinematic, WheelKinematic, WheelKinematic, WheelKinematic];
+
+  private engine: EngineState = createEngineState();
+  private lastRpm = 0;
+  private lastGear = 0;
+
+  constructor(world: World, id: string, spawn: VehicleSpawn, kind: CarKind = 'patrol') {
+    this.world = world;
+    this.id = id;
+    this.geom = geomFor(kind);
+
+    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(spawn.position.x, spawn.position.y, spawn.position.z)
+      .setLinearDamping(0.1)
+      .setAngularDamping(0.5)
+      .setCanSleep(false);
+    if (spawn.yaw) {
+      const half = spawn.yaw / 2;
+      bodyDesc.setRotation({ x: 0, y: Math.sin(half), z: 0, w: Math.cos(half) });
+    }
+    this.body = world.world.createRigidBody(bodyDesc);
+
+    const ext = this.geom.chassisHalfExtents;
+    const colDesc = RAPIER.ColliderDesc.cuboid(ext.x, ext.y, ext.z)
+      .setDensity(VEHICLE.mass / (8 * ext.x * ext.y * ext.z))
+      .setFriction(0.3);
+    this.chassis = world.world.createCollider(colDesc, this.body);
+    // Same low CoM trick the legacy Vehicle uses: pull principal moments
+    // toward a low centre so the chassis feels bottom-heavy and resists
+    // rollovers despite the tall visual cabin.
+    this.body.setAdditionalMassProperties(
+      0,
+      { x: 0, y: -ext.y * 0.6, z: 0 },
+      { x: VEHICLE.mass * 0.6, y: VEHICLE.mass * 0.5, z: VEHICLE.mass * 0.6 },
+      { x: 0, y: 0, z: 0, w: 1 },
+      true,
+    );
+
+    this.axles = [
+      createAxleState(this.geom.front),
+      createAxleState(this.geom.rear),
+    ];
+    this.wheels = [
+      createWheelKinematic(),
+      createWheelKinematic(),
+      createWheelKinematic(),
+      createWheelKinematic(),
+    ];
+  }
+
+  setInput(input: PlayerInput): void {
+    this.input = input;
+  }
+
+  setSteerAngle(angle: number): void {
+    this.currentSteer = angle;
+  }
+
+  resetTo(spawn: VehicleSpawn): void {
+    this.body.setTranslation(
+      { x: spawn.position.x, y: spawn.position.y, z: spawn.position.z },
+      true,
+    );
+    if (spawn.yaw !== undefined) {
+      const half = spawn.yaw / 2;
+      this.body.setRotation({ x: 0, y: Math.sin(half), z: 0, w: Math.cos(half) }, true);
+    } else {
+      this.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    }
+    this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this.currentSteer = 0;
+    this.input = { ...EMPTY_INPUT };
+    for (const a of this.axles) resetAxleState(a);
+    for (const w of this.wheels) resetWheelKinematic(w);
+    this.engine = createEngineState();
+    this.lastRpm = 0;
+    this.lastGear = 0;
+  }
+
+  preStep(): void {
+    const dt = FIXED_DT;
+
+    // CRITICAL: Rapier accumulates external forces across step() calls
+    // until reset. Without these calls, last tick's spring force would
+    // add to this tick's, causing a runaway upward force after a few
+    // ticks of contact. Reset here so each tick's force is fresh.
+    this.body.resetForces(false);
+    this.body.resetTorques(false);
+
+    // 1. Capture chassis pose ONCE (determinism rule).
+    const t = this.body.translation();
+    const r = this.body.rotation();
+    const lv = this.body.linvel();
+    const av = this.body.angvel();
+    const fwd = rotateVecByQuat({ x: 0, y: 0, z: 1 }, r);
+    const right = rotateVecByQuat({ x: 1, y: 0, z: 0 }, r);
+    const up = rotateVecByQuat({ x: 0, y: 1, z: 0 }, r);
+
+    // 2. Smooth steering.
+    const targetSteer = this.input.steer * TUNING.maxSteer;
+    const steerDelta = targetSteer - this.currentSteer;
+    const maxStep = TUNING.steerSpeed * dt;
+    this.currentSteer +=
+      Math.abs(steerDelta) < maxStep ? steerDelta : Math.sign(steerDelta) * maxStep;
+
+    // 3. Per axle: raycast wheel-ends, integrate axle DOFs, apply chassis
+    //    reaction forces. Raycast origins are FIXED in chassis-local space
+    //    (do NOT include axle articulation) - this avoids a feedback loop
+    //    where the axle's roll changes the rays which changes the target
+    //    roll which changes the rays again.
+    for (let aIdx = 0; aIdx < 2; aIdx++) {
+      const axle = this.axles[aIdx]!;
+      const ag = axle.geom;
+
+      const wIdxL = aIdx * 2;
+      const wIdxR = aIdx * 2 + 1;
+      const wL = this.wheels[wIdxL]!;
+      const wR = this.wheels[wIdxR]!;
+
+      const leftLocal = { x: -ag.trackHalf, y: ag.centerLocalY, z: ag.centerLocalZ };
+      const rightLocal = { x: +ag.trackHalf, y: ag.centerLocalY, z: ag.centerLocalZ };
+      const leftWorld = addVec(t, rotateVecByQuat(leftLocal, r));
+      const rightWorld = addVec(t, rotateVecByQuat(rightLocal, r));
+
+      const rayDir: Vec3 = { x: 0, y: -1, z: 0 };
+      const maxToi = ag.suspensionRestLength + this.geom.wheelRadius + 0.10;
+
+      castWheelRay(this.world, this.body, leftWorld, rayDir, maxToi, ag.suspensionRestLength, this.geom.wheelRadius, wL);
+      castWheelRay(this.world, this.body, rightWorld, rayDir, maxToi, ag.suspensionRestLength, this.geom.wheelRadius, wR);
+
+      wL.surface = sampleSurface(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
+      wR.surface = sampleSurface(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
+
+      // Chassis vertical velocity at the axle anchor (world frame).
+      const anchorWorld = addVec(t, rotateVecByQuat(
+        { x: 0, y: ag.centerLocalY, z: ag.centerLocalZ },
+        r,
+      ));
+      const armX = anchorWorld.x - t.x;
+      const armY = anchorWorld.y - t.y;
+      const armZ = anchorWorld.z - t.z;
+      const vpX = lv.x + av.y * armZ - av.z * armY;
+      const vpY = lv.y + av.z * armX - av.x * armZ;
+      const vpZ = lv.z + av.x * armY - av.y * armX;
+      const vertVel = vpX * up.x + vpY * up.y + vpZ * up.z;
+
+      const result = stepAxle(axle, {
+        leftDepth: wL.contactDepth,
+        rightDepth: wR.contactDepth,
+        leftContact: wL.contact,
+        rightContact: wR.contact,
+        chassisVertVelAtAnchor: vertVel,
+        dt,
+      });
+
+      // Apply ride force at axle anchor along chassis-up.
+      const F = result.chassisRideForce;
+      this.body.addForceAtPoint(
+        { x: up.x * F, y: up.y * F, z: up.z * F },
+        anchorWorld,
+        true,
+      );
+
+      // Roll torque dump when articulation is clamped.
+      if (Math.abs(result.chassisRollTorque) > 1e-6) {
+        const tq = result.chassisRollTorque;
+        this.body.addTorque(
+          { x: fwd.x * tq, y: fwd.y * tq, z: fwd.z * tq },
+          true,
+        );
+      }
+    }
+
+    // 4. Engine + gearbox.
+    const avgAngVel = (this.wheels[0]!.angVel + this.wheels[1]!.angVel + this.wheels[2]!.angVel + this.wheels[3]!.angVel) / 4;
+    const longSpeed = lv.x * fwd.x + lv.y * fwd.y + lv.z * fwd.z;
+    const signedAvg = Math.sign(longSpeed || avgAngVel) * Math.abs(avgAngVel);
+    const engineOut = stepEngine(this.engine, signedAvg, this.input.throttle, dt);
+    this.lastRpm = engineOut.rpm;
+    this.lastGear = engineOut.gear;
+    const drivePerWheelTorque = engineOut.wheelForce; // engine.ts returns torque-shaped values
+
+    // Incline assist (matches legacy semantics).
+    const climb = Math.min(0.5, Math.max(0, fwd.y));
+    const inclineMult = 1 + (climb / 0.5) * TUNING.inclineAssistMax;
+
+    // 5. Diff lock equalisation (per axle, before slip).
+    if (TUNING.diffLockFront) {
+      const a = this.wheels[0]!, b = this.wheels[1]!;
+      const avg = 0.5 * (a.angVel + b.angVel);
+      a.angVel = avg; b.angVel = avg;
+    }
+    if (TUNING.diffLockRear) {
+      const a = this.wheels[2]!, b = this.wheels[3]!;
+      const avg = 0.5 * (a.angVel + b.angVel);
+      a.angVel = avg; b.angVel = avg;
+    }
+
+    // 6. Per wheel tire forces + spin integration.
+    const frontShare = VEHICLE.driveSplit.front;
+    const rearShare = VEHICLE.driveSplit.rear;
+
+    for (let wIdx = 0; wIdx < 4; wIdx++) {
+      const w = this.wheels[wIdx]!;
+      const isFront = wIdx < 2;
+      const axle = isFront ? this.axles[0]! : this.axles[1]!;
+      const ag = axle.geom;
+
+      // Wheel forward direction (steered for front wheels). Steering
+      // rotates fwd about chassis-up by currentSteer.
+      let wheelFwd = fwd;
+      let wheelRight = right;
+      if (ag.hasSteering && Math.abs(this.currentSteer) > 1e-6) {
+        const c = Math.cos(this.currentSteer);
+        const s = Math.sin(this.currentSteer);
+        const upDotFwd = up.x * fwd.x + up.y * fwd.y + up.z * fwd.z;
+        const cross = {
+          x: up.y * fwd.z - up.z * fwd.y,
+          y: up.z * fwd.x - up.x * fwd.z,
+          z: up.x * fwd.y - up.y * fwd.x,
+        };
+        wheelFwd = {
+          x: fwd.x * c + cross.x * s + up.x * upDotFwd * (1 - c),
+          y: fwd.y * c + cross.y * s + up.y * upDotFwd * (1 - c),
+          z: fwd.z * c + cross.z * s + up.z * upDotFwd * (1 - c),
+        };
+        wheelRight = {
+          x: up.y * wheelFwd.z - up.z * wheelFwd.y,
+          y: up.z * wheelFwd.x - up.x * wheelFwd.z,
+          z: up.x * wheelFwd.y - up.y * wheelFwd.x,
+        };
+      }
+
+      const driveShare = (isFront ? frontShare : rearShare) * 0.5; // per wheel
+      const driveTq = ag.hasDrive ? drivePerWheelTorque * driveShare : 0;
+      const brakeForceN =
+        this.input.brake * TUNING.brakeForce
+        + (isFront ? 0 : this.input.handbrake * TUNING.brakeForce * 1.5);
+      const brakeTq = brakeForceN * this.geom.wheelRadius;
+
+      if (!w.contact) {
+        // No ground reaction on a free wheel - drive/brake/rolling only.
+        integrateWheelSpin(w, driveTq, brakeTq, 0, dt);
+        continue;
+      }
+
+      // Velocity of the chassis at the contact point.
+      const cp = w.contactPoint;
+      const armX = cp.x - t.x;
+      const armY = cp.y - t.y;
+      const armZ = cp.z - t.z;
+      const cvX = lv.x + av.y * armZ - av.z * armY;
+      const cvY = lv.y + av.z * armX - av.x * armZ;
+      const cvZ = lv.z + av.x * armY - av.y * armX;
+      const longV = cvX * wheelFwd.x + cvY * wheelFwd.y + cvZ * wheelFwd.z;
+      const latV = cvX * wheelRight.x + cvY * wheelRight.y + cvZ * wheelRight.z;
+
+      // Slip ratio + grip multiplier.
+      const slip = slipRatio(w.angVel, this.geom.wheelRadius, longV);
+      const surfMult = surfaceGrip(w.surface);
+      const slipMult = gripFromSlip(slip);
+      const axleGripMult = isFront ? TUNING.frontGripMult : TUNING.rearGripMult;
+      // Normal load estimate: even chassis-weight share + extra from
+      // spring compression at this wheel-end. The compression term gives
+      // higher grip on the wheel that's actually pressed into the ground
+      // (load transfer through the axle).
+      const baseLoad = VEHICLE.mass * Math.abs(GRAVITY_Y) / 4;
+      const loadFromSpring = ag.rideStiffness * Math.max(0, w.contactDepth) * 0.25;
+      const normalLoad = baseLoad + loadFromSpring;
+
+      const longGripCap =
+        LONG_FRICTION * surfMult * axleGripMult * inclineMult * normalLoad;
+      const longForceMag = slipMult * longGripCap;
+      const longForceSigned = Math.sign(slip) * longForceMag;
+
+      // Ground torque on the wheel = -F_long * R (decelerates a driving
+      // wheel; spins up a locked wheel).
+      const groundTq = -longForceSigned * this.geom.wheelRadius;
+      integrateWheelSpin(w, driveTq, brakeTq, groundTq, dt);
+
+      // Longitudinal force on the chassis at the contact point.
+      this.body.addForceAtPoint(
+        {
+          x: wheelFwd.x * longForceSigned,
+          y: wheelFwd.y * longForceSigned,
+          z: wheelFwd.z * longForceSigned,
+        },
+        cp,
+        true,
+      );
+
+      // Lateral force: linear in lateral velocity, clamped by friction
+      // circle (longRatio of the longitudinal cap).
+      const latStiff = TUNING.tireLatStiffness;
+      const latMax = longGripCap * TIRE_LATERAL.longRatio;
+      const latForceMag = clamp(-latStiff * latV, -latMax, latMax);
+      this.body.addForceAtPoint(
+        {
+          x: wheelRight.x * latForceMag,
+          y: wheelRight.y * latForceMag,
+          z: wheelRight.z * latForceMag,
+        },
+        cp,
+        true,
+      );
+    }
+  }
+
+  postStep(): void {
+    const lv = this.body.linvel();
+    const groundSpeed = Math.hypot(lv.x, lv.z);
+    const STATIONARY = 0.3;
+    for (let i = 0; i < 4; i++) {
+      const w = this.wheels[i]!;
+      if (groundSpeed < STATIONARY && Math.abs(w.angVel) < 1.0) continue;
+      w.spin += w.angVel * FIXED_DT;
+    }
+  }
+
+  wheelSamples(): WheelSample[] {
+    const t = this.body.translation();
+    const r = this.body.rotation();
+    const throttle = Math.abs(this.input.throttle);
+    const brake = this.input.brake + this.input.handbrake;
+    const passive = 0.15;
+    const slip = Math.min(1, Math.max(passive, throttle, brake));
+    const out: WheelSample[] = [];
+    for (let aIdx = 0; aIdx < 2; aIdx++) {
+      const ag = this.axles[aIdx]!.geom;
+      for (let side = 0; side < 2; side++) {
+        const wIdx = aIdx * 2 + side;
+        const w = this.wheels[wIdx]!;
+        const localX = side === 0 ? -ag.trackHalf : +ag.trackHalf;
+        const local = { x: localX, y: ag.centerLocalY, z: ag.centerLocalZ };
+        const wp = addVec(t, rotateVecByQuat(local, r));
+        out.push({ x: wp.x, z: wp.z, contact: w.contact, slip });
+      }
+    }
+    return out;
+  }
+
+  getState(): VehicleState {
+    const t = this.body.translation();
+    const r = this.body.rotation();
+    const lv = this.body.linvel();
+    const av = this.body.angvel();
+    const wheels: WheelState[] = [];
+    for (let i = 0; i < 4; i++) {
+      const w = this.wheels[i]!;
+      const axle = i < 2 ? this.axles[0]! : this.axles[1]!;
+      const susp = Math.max(0, axle.geom.suspensionRestLength - w.contactDepth);
+      wheels.push({
+        steer: i < 2 ? this.currentSteer : 0,
+        spin: w.spin,
+        contact: w.contact,
+        suspensionLength: susp,
+      });
+    }
+    return {
+      position: { x: t.x, y: t.y, z: t.z },
+      rotation: { x: r.x, y: r.y, z: r.z, w: r.w },
+      linVel: { x: lv.x, y: lv.y, z: lv.z },
+      angVel: { x: av.x, y: av.y, z: av.z },
+      rpm: this.lastRpm,
+      gear: this.lastGear,
+      throttle: this.input.throttle,
+      wheels,
+    };
+  }
+
+  axleSnaps(): [AxleSnap, AxleSnap] {
+    return [axleSnap(this.axles[0]!), axleSnap(this.axles[1]!)];
+  }
+
+  applyAxleSnaps(snaps: [AxleSnap, AxleSnap]): void {
+    applyAxleSnap(this.axles[0]!, snaps[0]);
+    applyAxleSnap(this.axles[1]!, snaps[1]);
+  }
+
+  dispose(): void {
+    this.world.world.removeRigidBody(this.body);
+  }
+}
+
+function castWheelRay(
+  world: World,
+  ownBody: RAPIER.RigidBody,
+  origin: Vec3,
+  dir: Vec3,
+  maxToi: number,
+  restLength: number,
+  wheelRadius: number,
+  out: WheelKinematic,
+): void {
+  const ray = new world.rapier.Ray(origin, dir);
+  const hit = world.world.castRayAndGetNormal(
+    ray,
+    maxToi,
+    true,
+    undefined,
+    undefined,
+    undefined,
+    ownBody,
+  );
+  if (hit) {
+    const toi = hit.timeOfImpact;
+    out.contact = true;
+    out.contactDepth = Math.max(0, restLength - (toi - wheelRadius));
+    out.contactPoint = {
+      x: origin.x + dir.x * toi,
+      y: origin.y + dir.y * toi,
+      z: origin.z + dir.z * toi,
+    };
+    out.contactNormal = { x: hit.normal.x, y: hit.normal.y, z: hit.normal.z };
+  } else {
+    out.contact = false;
+    out.contactDepth = 0;
+    out.contactPoint = {
+      x: origin.x + dir.x * maxToi,
+      y: origin.y + dir.y * maxToi,
+      z: origin.z + dir.z * maxToi,
+    };
+    out.contactNormal = { x: 0, y: 1, z: 0 };
+  }
+}
+
+function addVec(a: Vec3, b: Vec3): Vec3 {
+  return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+function surfaceGrip(s: number): number {
+  switch (s) {
+    case Surface.Road: return TUNING.surfaceFriction.road;
+    case Surface.Dirt: return TUNING.surfaceFriction.dirt;
+    case Surface.Mud: return TUNING.surfaceFriction.mud;
+    case Surface.DeepMud: return TUNING.surfaceFriction.deepMud;
+    case Surface.Grass: return TUNING.surfaceFriction.grass;
+    case Surface.Gravel: return TUNING.surfaceFriction.gravel;
+    case Surface.Concrete: return TUNING.surfaceFriction.concrete;
+    default: return TUNING.surfaceFriction.dirt;
+  }
+}

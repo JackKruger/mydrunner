@@ -26,7 +26,7 @@ interface QueuedInput {
 
 export class Prediction {
   private world: Physics.World;
-  private vehicle: Physics.Vehicle;
+  private vehicle: Physics.VehicleLike;
   private queue: QueuedInput[] = [];
   private acc = 0;
   /** Highest seq we've ever stepped locally. */

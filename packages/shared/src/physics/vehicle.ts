@@ -11,11 +11,7 @@ import { createEngineState, stepEngine, type EngineState } from './engine.js';
 import { slipRatio, gripFromSlip } from './tire.js';
 import { rotateVecByQuat } from './util.js';
 import type { World } from './world.js';
-
-export interface VehicleSpawn {
-  position: { x: number; y: number; z: number };
-  yaw?: number;
-}
+import type { VehicleSpawn } from './vehicleTypes.js';
 
 export class Vehicle {
   private readonly world: World;

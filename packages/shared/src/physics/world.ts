@@ -5,8 +5,11 @@
 // a World - Rapier is WASM and needs to load.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { GRAVITY_Y } from '../constants.js';
-import { Vehicle, type VehicleSpawn } from './vehicle.js';
+import { GRAVITY_Y, VEHICLE_MODEL } from '../constants.js';
+import { Vehicle } from './vehicle.js';
+import { SolidAxleVehicle } from './solidAxleVehicle.js';
+import type { CarKind } from '../types.js';
+import type { VehicleLike, VehicleSpawn } from './vehicleTypes.js';
 import { generateTerrain, type TerrainData, type TerrainOptions } from './terrain.js';
 import { generateObstacles, spawnObstacleColliders, type Obstacle } from './obstacles.js';
 import { landmarksFor, spawnLandmarkColliders, type Landmarks } from './landmarks.js';
@@ -27,7 +30,7 @@ export interface WorldOptions {
 export class World {
   readonly rapier: typeof RAPIER;
   readonly world: RAPIER.World;
-  readonly vehicles = new Map<string, Vehicle>();
+  readonly vehicles = new Map<string, VehicleLike>();
   readonly terrain: TerrainData;
   readonly obstacles: Obstacle[];
   readonly landmarks: Landmarks;
@@ -85,8 +88,10 @@ export class World {
     this.terrainCollider = built.collider;
   }
 
-  spawnVehicle(id: string, spawn: VehicleSpawn): Vehicle {
-    const v = new Vehicle(this, id, spawn);
+  spawnVehicle(id: string, spawn: VehicleSpawn, kind: CarKind = 'patrol'): VehicleLike {
+    const v: VehicleLike = VEHICLE_MODEL === 'solidAxle'
+      ? new SolidAxleVehicle(this, id, spawn, kind)
+      : new Vehicle(this, id, spawn);
     this.vehicles.set(id, v);
     return v;
   }

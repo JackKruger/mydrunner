@@ -26,7 +26,7 @@ export interface PlayerHandle {
 
 interface InternalPlayer {
   handle: PlayerHandle;
-  vehicle: Physics.Vehicle;
+  vehicle: Physics.VehicleLike;
   pendingInput: PlayerInput;
   lastAckSeq: number;
   spawn: { position: { x: number; y: number; z: number }; yaw: number };
