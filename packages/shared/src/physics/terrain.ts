@@ -10,6 +10,7 @@ export const Surface = {
   DeepMud: 3,
   Grass: 4,
   Gravel: 5,
+  Concrete: 6,
 } as const;
 export type Surface = (typeof Surface)[keyof typeof Surface];
 
@@ -57,6 +58,34 @@ export function mountainFor(size: number): MountainSpec {
   return { x: size * 0.22, z: size * 0.28, peak: 32, sigma: size * 0.11 };
 }
 
+/** Petrol-station pad. Defined here (not in landmarks.ts) so the
+ *  terrain generator can flatten + concrete this region without
+ *  creating a circular dependency on the landmarks module. World
+ *  coordinates; halfW / halfD are half-extents along world X / Z. */
+export interface PetrolStationPad {
+  cx: number;
+  cz: number;
+  halfW: number;
+  halfD: number;
+  /** Soft outer fade (m) where the flat pad blends back into natural
+   *  terrain so there's no vertical cliff at the edge. */
+  fade: number;
+  /** Yaw (rad) - 0 means the station's local +Z faces the road. */
+  yaw: number;
+}
+
+export function petrolStationPadFor(size: number): PetrolStationPad {
+  // West of spawn, well clear of the mountain (which sits +X / +Z).
+  return {
+    cx: -size * 0.20,
+    cz: 14,
+    halfW: 14,
+    halfD: 13,
+    fade: 4,
+    yaw: 0,
+  };
+}
+
 /** Generates a heightmap and matching surface map.
  *
  *  Layout:
@@ -100,6 +129,10 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const mtnCz = mtn.z;
   const mtnPeak = mtn.peak;
   const mtnSigma = mtn.sigma;
+
+  // Petrol-station pad. We flatten the heightmap and force surface to
+  // Concrete inside the pad so vehicles can drive on level ground.
+  const pad = petrolStationPadFor(size);
 
   // Mud bogs: a few Gaussian dips so mud isn't just the radial valleys.
   // Positions are deterministic from the seed so client + server agree.
@@ -148,6 +181,19 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
         hNat -= b.depth * Math.exp(-(dx * dx + dz * dz) / (2 * b.sigma * b.sigma));
       }
 
+      // Pad-blend: smoothstep that reaches 1 inside the pad and fades
+      // to 0 over `pad.fade` metres outside. We rotate the world point
+      // into pad-local coordinates so non-axis-aligned pads still work.
+      const cosY = Math.cos(pad.yaw);
+      const sinY = Math.sin(pad.yaw);
+      const dx = x - pad.cx;
+      const dz = z - pad.cz;
+      const lx = cosY * dx + sinY * dz;
+      const lz = -sinY * dx + cosY * dz;
+      const padX = smoothFalloff(Math.abs(lx), pad.halfW, pad.fade);
+      const padZ = smoothFalloff(Math.abs(lz), pad.halfD, pad.fade);
+      const padW = padX * padZ; // 1 inside, smoothly to 0 outside
+
       let h: number;
       if (az < roadCore) {
         h = 0;
@@ -159,6 +205,9 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
       } else {
         h = hNat;
       }
+
+      // Pad blends the natural height toward 0 (concrete is at road-level).
+      if (padW > 0) h = h * (1 - padW);
 
       const idx = r * n + c;
       heights[idx] = h;
@@ -175,6 +224,11 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
       const onMtn = distMtn2 < (mtnSigma * 1.2) ** 2;
 
       let surf: Surface = Surface.Dirt;
+      // Pad surface wins over everything else when we're inside it.
+      if (padW > 0.5) {
+        surfaces[idx] = Surface.Concrete;
+        continue;
+      }
       if (az < roadCore) {
         surf = Surface.Road;
       } else if (az < roadShoulder) {
@@ -214,4 +268,15 @@ export function sampleSurface(t: TerrainData, x: number, z: number): Surface {
   const idx = worldToTerrainIndex(t, x, z);
   if (idx < 0) return Surface.Dirt;
   return (t.surfaces[idx] ?? Surface.Dirt) as Surface;
+}
+
+/** Returns 1 inside [0, halfExtent], smoothly falling to 0 over the
+ *  next `fade` metres past the boundary. Used to blend a flat pad
+ *  back into natural terrain at its edges. */
+function smoothFalloff(absCoord: number, halfExtent: number, fade: number): number {
+  if (absCoord <= halfExtent) return 1;
+  const t = (absCoord - halfExtent) / fade;
+  if (t >= 1) return 0;
+  // Smoothstep falloff (3t² - 2t³ inverted).
+  return 1 - t * t * (3 - 2 * t);
 }

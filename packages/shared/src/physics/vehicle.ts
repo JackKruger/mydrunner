@@ -314,5 +314,6 @@ function surfaceGrip(s: Surface): number {
     case Surface.DeepMud: return TUNING.surfaceFriction.deepMud;
     case Surface.Grass: return TUNING.surfaceFriction.grass;
     case Surface.Gravel: return TUNING.surfaceFriction.gravel;
+    case Surface.Concrete: return TUNING.surfaceFriction.concrete;
   }
 }

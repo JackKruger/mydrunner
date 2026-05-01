@@ -27,6 +27,7 @@ export interface Tuning {
     deepMud: number;
     grass: number;
     gravel: number;
+    concrete: number;
   };
   suspensionStiffness: number;
   suspensionDamping: number;
@@ -46,7 +47,7 @@ export interface Tuning {
 export const TUNING: Tuning = {
   tireBaseGrip: TIRE_BASE_GRIP,
   inclineAssistMax: INCLINE_ASSIST_MAX,
-  surfaceFriction: { ...SURFACE_FRICTION },
+  surfaceFriction: { ...SURFACE_FRICTION } as Tuning['surfaceFriction'],
   suspensionStiffness: VEHICLE.suspensionStiffness,
   suspensionDamping: VEHICLE.suspensionDamping,
   suspensionCompression: VEHICLE.suspensionCompression,

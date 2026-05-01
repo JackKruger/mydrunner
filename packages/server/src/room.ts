@@ -65,18 +65,19 @@ export class Room {
     return Date.now() - this.startedAtMs;
   }
 
-  /** Spawn on the flat road strip (z near 0), facing along the road (+X)
-   *  so the chase camera looks down the road instead of into a hill.
-   *  Y clearance is generous: chassis-center must clear chassis half-extent
-   *  + suspension + wheel radius. */
+  /** Spawn at the start of the road (the -X end of the world), facing
+   *  along +X so pressing W drives toward the petrol station and then
+   *  the mountain. Y clearance is generous: chassis-center must clear
+   *  chassis half-extent + suspension + wheel radius. */
   private nextSpawn(): { position: { x: number; y: number; z: number }; yaw: number } {
     const n = this.players.size;
     const slot = n % 16;
     const col = slot % 8;
     const row = Math.floor(slot / 8);
-    const x = (col - 3.5) * 4; // -14 .. +14 along the road
-    const z = row === 0 ? -1.2 : 1.2; // two lanes
-    // yaw = pi/2 rotates local +Z (vehicle forward) to world +X (road direction).
+    const startX = -this.world.terrain.size / 2 + 24; // 24m in from the world edge
+    const x = startX + col * 3;                       // 24..45 along the road
+    const z = row === 0 ? -1.2 : 1.2;                 // two lanes
+    // yaw = pi/2 rotates local +Z (vehicle forward) to world +X.
     const yaw = Math.PI / 2;
     const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);
     const ground = idx >= 0 ? (this.world.terrain.heights[idx] ?? 0) : 0;

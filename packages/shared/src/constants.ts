@@ -100,6 +100,7 @@ export const SURFACE_FRICTION = {
   deepMud: 0.15,
   grass: 0.68,
   gravel: 0.62,
+  concrete: 1.05, // tarmac/concrete pad - the most planted surface
 } as const;
 
 // Base Rapier wheel friction-slip before surface / axle / slip-curve
