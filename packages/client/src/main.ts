@@ -15,6 +15,7 @@ import { initInput, sampleInput } from './input.js';
 import { NetClient } from './net.js';
 import { Scene } from './scene.js';
 import { Prediction } from './prediction.js';
+import { initTouchInput, onTouchEdge } from './touchInput.js';
 
 function getServerUrl(): string {
   const explicit = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -62,6 +63,7 @@ const hud = document.getElementById('hud')!;
 const app = document.getElementById('app')!;
 
 initInput();
+initTouchInput();
 const scene = new Scene(app);
 const engineAudio = new EngineAudio();
 
@@ -77,10 +79,11 @@ window.addEventListener('keydown', startAudioOnce);
 window.addEventListener('mousedown', startAudioOnce);
 window.addEventListener('touchstart', startAudioOnce);
 
-// Mute toggle on M.
+// Mute toggle on M (or the on-screen mute button).
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyM') engineAudio.toggleMute();
 });
+onTouchEdge('mute', () => engineAudio.toggleMute());
 
 // Expose scene + prediction for E2E diagnostics.
 // Diagnostic hooks for E2E / browser debugging. Only exposed in dev (Vite
@@ -154,7 +157,7 @@ async function start(): Promise<void> {
   });
   net.connect();
 
-  // Camera-cycle hotkey (C). Edge-triggered.
+  // Camera-cycle hotkey (C) or the on-screen "cam" button. Edge-triggered.
   let cPrev = false;
   window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyC' && !cPrev) {
@@ -165,6 +168,7 @@ async function start(): Promise<void> {
   window.addEventListener('keyup', (e) => {
     if (e.code === 'KeyC') cPrev = false;
   });
+  onTouchEdge('cam', () => scene.cycleCameraMode());
 
   // Input + prediction loop. Sample at TICK_RATE; each sample also drives
   // exactly one local physics step so prediction and server stay locked.
