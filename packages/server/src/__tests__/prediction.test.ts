@@ -56,10 +56,12 @@ describe('client prediction', () => {
 
   it('reset returns vehicle to spawn pose with zero velocity', () => {
     const { world, vehicle } = makeWorld();
-    // Drive forward a bit.
+    // Drive forward a bit. With the engine + gearbox model the car needs a
+    // moment to shift out of neutral into 1st before it accelerates -
+    // 0.5m in 2 seconds is still conclusive evidence it drove.
     vehicle.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1 });
     for (let i = 0; i < 120; i++) world.step();
-    expect(Math.abs(vehicle.getState().position.z)).toBeGreaterThan(1);
+    expect(Math.abs(vehicle.getState().position.z)).toBeGreaterThan(0.5);
 
     vehicle.resetTo({ position: { x: 0, y: 1.5, z: 0 }, yaw: 0 });
     const s = vehicle.getState();

@@ -7,6 +7,7 @@ import { VEHICLE, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
 import { RENDER_DELAY_MS } from './net.js';
 import { TerrainMesh } from './terrain.js';
 import { buildCarMesh, colorHash } from './carMesh.js';
+import { createNameplate, disposeNameplate } from './nameplate.js';
 
 interface SnapshotEntry {
   recvAtMs: number;
@@ -16,6 +17,8 @@ interface SnapshotEntry {
 interface VehicleVisual {
   group: THREE.Group;
   wheels: THREE.Object3D[];
+  nameplate: THREE.Sprite | null;
+  nameplateText: string;
 }
 
 export class Scene {
@@ -134,15 +137,33 @@ export class Scene {
     if (v) return v;
     const built = buildCarMesh(isLocal, colorHash(id));
     this.scene.add(built.group);
-    v = built;
+    v = { group: built.group, wheels: built.wheels, nameplate: null, nameplateText: '' };
     this.vehicles.set(id, v);
     return v;
+  }
+
+  /** Add or update the nameplate above a vehicle. Local player gets none -
+   *  no point labeling yourself. */
+  private setNameplate(v: VehicleVisual, name: string, isLocal: boolean): void {
+    if (isLocal) return;
+    if (v.nameplateText === name) return;
+    if (v.nameplate) {
+      v.group.remove(v.nameplate);
+      disposeNameplate(v.nameplate);
+    }
+    const sprite = createNameplate(name);
+    // Sit above the roof rack.
+    sprite.position.set(0, VEHICLE.chassisHalfExtents.y * 2 + 1.4, 0);
+    v.group.add(sprite);
+    v.nameplate = sprite;
+    v.nameplateText = name;
   }
 
   private removeMissing(snapPlayers: Set<PlayerId>): void {
     for (const id of [...this.vehicles.keys()]) {
       if (!snapPlayers.has(id)) {
         const v = this.vehicles.get(id)!;
+        if (v.nameplate) disposeNameplate(v.nameplate);
         this.scene.remove(v.group);
         this.vehicles.delete(id);
       }
@@ -183,6 +204,7 @@ export class Scene {
         present.add(pa.id);
         const isLocal = pa.id === this.localId;
         const vis = this.ensureVehicle(pa.id, isLocal);
+        this.setNameplate(vis, pa.name, isLocal);
 
         // Local vehicle is overridden by setLocalVehiclePose() once prediction
         // is active; only update remotes here.

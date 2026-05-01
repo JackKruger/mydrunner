@@ -46,6 +46,31 @@ export const VEHICLE = {
   rearGripMult: 1.0,
 } as const;
 
+// Engine + gearbox. Torque curve modeled as a piecewise cubic that peaks
+// in the 3000-4500 RPM band. Off the band the engine produces less force
+// regardless of throttle - lugging in 5th at low RPM crawls; revving in
+// 1st screams toward redline. Auto-gearbox shifts on RPM thresholds.
+export const ENGINE = {
+  idleRpm: 850,
+  redlineRpm: 5800,
+  peakTorqueRpm: 3500,
+  peakTorqueNm: 320,
+  // Final drive ratio (differential) and per-gear ratios.
+  finalDrive: 3.7,
+  gears: [-3.2, 0, 3.6, 2.1, 1.4, 1.0, 0.78], // [reverse, neutral, 1, 2, 3, 4, 5]
+  // Index 0 = reverse, 1 = neutral, 2 = first.
+  reverseGear: 0,
+  neutralGear: 1,
+  firstGear: 2,
+  shiftUpRpm: 4600,
+  shiftDownRpm: 1700,
+  // Engine braking when off throttle: torque opposing motion proportional to
+  // (rpm - idle).
+  engineBrakeCoef: 0.04,
+  // Torque drop above redline (acts as a soft rev limiter).
+  rpmLimiterFalloff: 800,
+} as const;
+
 // Mud / surface friction. Higher = more grip.
 export const SURFACE_FRICTION = {
   road: 1.0,

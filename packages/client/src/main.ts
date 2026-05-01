@@ -2,6 +2,13 @@
 // the local prediction sim.
 
 import { Physics, TICK_RATE, type PlayerId } from '@mydrunner/shared';
+
+const SURFACE_LABELS: Record<number, string> = {
+  [Physics.Surface.Road]: 'road',
+  [Physics.Surface.Dirt]: 'dirt',
+  [Physics.Surface.Mud]: 'mud',
+  [Physics.Surface.DeepMud]: 'deep mud',
+};
 import { initInput, sampleInput } from './input.js';
 import { NetClient } from './net.js';
 import { Scene } from './scene.js';
@@ -30,8 +37,11 @@ let localId: PlayerId | null = null;
 let connected = false;
 let lastSnapTick = 0;
 let lastSpeed = 0;
+let lastRpm = 0;
+let lastGear = 0;
 let prediction: Prediction | null = null;
 let lastFrameTimeMs = performance.now();
+let terrainData: Physics.TerrainData | null = null;
 
 async function start(): Promise<void> {
   // Rapier WASM init - prediction depends on the same physics as the server.
@@ -45,6 +55,13 @@ async function start(): Promise<void> {
       localId = id;
       scene.setLocalPlayer(id);
       scene.setTerrain(terrain.seed, terrain.size, terrain.resolution);
+      // Cache terrain data for surface HUD lookups (cheap - we already
+      // generate it for the prediction sim).
+      terrainData = Physics.generateTerrain({
+        seed: terrain.seed,
+        size: terrain.size,
+        resolution: terrain.resolution,
+      });
       // Build local prediction world with the same seed + spawn.
       prediction?.dispose();
       prediction = new Prediction(terrain.seed, terrain.size, terrain.resolution, spawn);
@@ -62,6 +79,8 @@ async function start(): Promise<void> {
         if (me) {
           const lv = me.vehicle.linVel;
           lastSpeed = Math.hypot(lv.x, lv.z);
+          lastRpm = me.vehicle.rpm;
+          lastGear = me.vehicle.gear;
         }
       }
     },
@@ -116,7 +135,16 @@ async function start(): Promise<void> {
     scene.render(now);
     if (connected) {
       const kmh = (lastSpeed * 3.6).toFixed(0);
-      hud.textContent = `connected · id=${localId?.slice(0, 8) ?? '?'} · tick=${lastSnapTick} · ${kmh} km/h`;
+      let surfaceLabel = '';
+      if (terrainData && prediction) {
+        const p = prediction.state().position;
+        const s = Physics.sampleSurface(terrainData, p.x, p.z);
+        surfaceLabel = ` · ${SURFACE_LABELS[s] ?? '?'}`;
+      }
+      const gearLabel = lastGear === -1 ? 'R' : lastGear === 0 ? 'N' : String(lastGear);
+      hud.textContent =
+        `connected · tick=${lastSnapTick} · ${kmh} km/h · ` +
+        `${lastRpm.toFixed(0)} RPM · gear ${gearLabel}${surfaceLabel}`;
     }
     requestAnimationFrame(frame);
   }

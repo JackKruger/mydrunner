@@ -6,6 +6,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { VEHICLE, SURFACE_FRICTION } from '../constants.js';
 import { EMPTY_INPUT, type PlayerInput, type VehicleState, type WheelState } from '../types.js';
 import { Surface, sampleSurface } from './terrain.js';
+import { createEngineState, stepEngine, type EngineState } from './engine.js';
 import type { World } from './world.js';
 
 export interface VehicleSpawn {
@@ -23,6 +24,9 @@ export class Vehicle {
   private currentSteer = 0;
   private wheelSpin: number[] = [0, 0, 0, 0];
   private wheelSurface: Surface[] = [Surface.Dirt, Surface.Dirt, Surface.Dirt, Surface.Dirt];
+  private engine: EngineState = createEngineState();
+  private lastRpm = 0;
+  private lastGear = 0;
 
   constructor(world: World, id: string, spawn: VehicleSpawn) {
     this.world = world;
@@ -127,18 +131,31 @@ export class Vehicle {
       this.controller.setWheelFrictionSlip(i, 2.0 * grip * axleMult);
     }
 
-    // 4x4 / AWD. Each wheel gets its share of engine torque, scaled by that
-    // wheel's grip - so a wheel in deep mud spins less of the budget away
-    // and the others can still pull the car. This is the classic 4x4 win
-    // over RWD on bad surfaces.
-    const torque = this.input.throttle * VEHICLE.engineForce;
+    // Engine + gearbox: average wheel angular velocity (signed, with sign
+    // taken from the chassis longitudinal velocity so a wheel-spin in
+    // mud doesn't lie about which gear we want).
+    const wheelAngVels = [0, 1, 2, 3].map((i) => this.controller.wheelRotation(i) ?? 0);
+    const avgDriveAng = (wheelAngVels[0]! + wheelAngVels[1]! + wheelAngVels[2]! + wheelAngVels[3]!) / 4;
+    const fwd = this.body.linvel();
+    const yaw = this.body.rotation();
+    const forwardX = 2 * (yaw.x * yaw.z + yaw.w * yaw.y);
+    const forwardZ = 1 - 2 * (yaw.x * yaw.x + yaw.y * yaw.y);
+    const longitudinal = fwd.x * forwardX + fwd.z * forwardZ;
+    const signedAngVel = Math.sign(longitudinal || avgDriveAng) * Math.abs(avgDriveAng);
+
+    const out = stepEngine(this.engine, signedAngVel, this.input.throttle, dt);
+    this.lastRpm = out.rpm;
+    this.lastGear = out.gear;
+
+    // Distribute torque across axles. Per-wheel grip still gates how much
+    // gets applied - a wheel in deep mud can't push as much.
     const frontShare = VEHICLE.driveSplit.front;
     const rearShare = VEHICLE.driveSplit.rear;
     for (let i = 0; i < 4; i++) {
       const isFront = i < 2;
       const share = isFront ? frontShare / 2 : rearShare / 2;
       const grip = surfaceGrip(this.wheelSurface[i] ?? Surface.Dirt);
-      this.controller.setWheelEngineForce(i, torque * share * grip);
+      this.controller.setWheelEngineForce(i, out.wheelForce * share * grip);
     }
 
     // Brakes on all four. Handbrake locks rears for slides.
@@ -220,6 +237,9 @@ export class Vehicle {
       rotation: { x: r.x, y: r.y, z: r.z, w: r.w },
       linVel: { x: lv.x, y: lv.y, z: lv.z },
       angVel: { x: av.x, y: av.y, z: av.z },
+      rpm: this.lastRpm,
+      gear: this.lastGear,
+      throttle: this.input.throttle,
       wheels,
     };
   }

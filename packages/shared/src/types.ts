@@ -39,6 +39,12 @@ export interface VehicleState {
   rotation: Quat;
   linVel: Vec3;
   angVel: Vec3;
+  // Drivetrain telemetry. rpm + gear drive the tachometer HUD and (later)
+  // engine sound; throttle is mirrored back so spectators can see whether
+  // a remote player has the pedal down.
+  rpm: number;
+  gear: number; // signed: -1 reverse, 0 neutral, 1..5 forward
+  throttle: number;
   // Per-wheel data for visual representation
   wheels: WheelState[];
 }
