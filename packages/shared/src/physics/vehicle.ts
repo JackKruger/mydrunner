@@ -147,16 +147,23 @@ export class Vehicle {
     this.lastRpm = out.rpm;
     this.lastGear = out.gear;
 
-    // Distribute torque across axles. Per-wheel grip still gates how much
-    // gets applied - a wheel in deep mud can't push as much.
+    // Distribute torque across axles. Per-wheel grip gates how much
+    // torque the surface can absorb (mud transmits less than road).
+    //
+    // Slip-curve modulation on top of this is *also* implemented in
+    // tire.ts but not yet wired here - applying it to engine force
+    // directly creates a chicken-and-egg at standstill (zero slip ->
+    // zero force -> no movement -> still zero slip). The right place
+    // is on Rapier's wheelFrictionSlip per step; left for a follow-up.
     const frontShare = VEHICLE.driveSplit.front;
     const rearShare = VEHICLE.driveSplit.rear;
     for (let i = 0; i < 4; i++) {
       const isFront = i < 2;
       const share = isFront ? frontShare / 2 : rearShare / 2;
-      const grip = surfaceGrip(this.wheelSurface[i] ?? Surface.Dirt);
-      this.controller.setWheelEngineForce(i, out.wheelForce * share * grip);
+      const surfaceMult = surfaceGrip(this.wheelSurface[i] ?? Surface.Dirt);
+      this.controller.setWheelEngineForce(i, out.wheelForce * share * surfaceMult);
     }
+    void wheelAngVels; // wired to setWheelFrictionSlip in a future pass
 
     // Brakes on all four. Handbrake locks rears for slides.
     const brake = this.input.brake * VEHICLE.brakeForce;

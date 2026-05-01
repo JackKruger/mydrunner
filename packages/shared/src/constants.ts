@@ -46,6 +46,22 @@ export const VEHICLE = {
   rearGripMult: 1.0,
 } as const;
 
+// Tire slip model. Real tires have a Pacejka-style "magic formula"
+// grip-vs-slip curve: grip rises with slip up to ~10-20% slip, then
+// falls off as the tire breaks loose. We approximate it cheaply: peak
+// grip at SLIP_PEAK, falls off either side. Force scales the chassis
+// throttle output by this curve so wheel-spin actually loses traction
+// (you'll spin out from a hard launch on mud, then have to back off).
+export const TIRE = {
+  // Slip ratio at peak grip. Beyond this the tire is sliding.
+  slipPeak: 0.12,
+  // Sharpness of the falloff after peak (higher = more sudden loss).
+  slipFalloff: 4.0,
+  // Minimum grip retained after the tire is fully sliding (so you can
+  // still recover from a slide instead of losing all traction).
+  slipFloor: 0.45,
+} as const;
+
 // Engine + gearbox. Torque curve modeled as a piecewise cubic that peaks
 // in the 3000-4500 RPM band. Off the band the engine produces less force
 // regardless of throttle - lugging in 5th at low RPM crawls; revving in
