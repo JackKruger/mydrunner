@@ -23,9 +23,21 @@ export class Obstacles {
   private build(list: Obstacle[]): void {
     const trunkMat = new THREE.MeshStandardMaterial({ color: TRUNK_COLOR, roughness: 0.95 });
     const pineTrunkMat = new THREE.MeshStandardMaterial({ color: 0x3c2a18, roughness: 0.95 });
+    const rampMat = new THREE.MeshStandardMaterial({ color: 0x6b4f2a, roughness: 0.85 });
     for (const o of list) {
       if (o.kind === 'pine') {
         this.buildPine(o, pineTrunkMat);
+        continue;
+      }
+      if (o.kind === 'ramp') {
+        const t = Physics.rampTransform(o);
+        const geo = new THREE.BoxGeometry(t.halfLength * 2, t.halfThick * 2, t.halfWidth * 2);
+        const mesh = new THREE.Mesh(geo, rampMat);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.position.set(t.cx, t.cy, t.cz);
+        mesh.quaternion.set(t.qx, t.qy, t.qz, t.qw);
+        this.group.add(mesh);
         continue;
       }
       if (o.kind === 'rock') {

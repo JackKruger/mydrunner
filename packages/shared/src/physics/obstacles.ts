@@ -11,16 +11,22 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Surface, type TerrainData, worldToTerrainIndex, mountainFor } from './terrain.js';
 
-export type ObstacleKind = 'rock' | 'tree' | 'pine';
+export type ObstacleKind = 'rock' | 'tree' | 'pine' | 'ramp';
 
 export interface Obstacle {
   kind: ObstacleKind;
   x: number;
   y: number;
   z: number;
+  // Per-kind meaning: rock = radius; tree/pine = trunk radius;
+  //                   ramp = half-width (perpendicular to driving dir).
   size: number;
+  // Per-kind meaning: tree/pine = total height; ramp = rise of the
+  //                   high edge above the low edge; rocks ignore.
   height: number;
   yaw: number;
+  // Ramp only: full length along the driving direction (pre-yaw, local X).
+  length?: number;
 }
 
 // Compact tuple format to keep the data tables readable.
@@ -64,6 +70,27 @@ const TREES: readonly TreeSpec[] = [
   [85, 50, 0.24, 4.4], [120, 42, 0.21, 3.9], [-115, -60, 0.22, 4.0],
   [-75, -55, 0.20, 3.6], [-30, -75, 0.22, 4.2], [20, -65, 0.20, 3.8],
   [60, -75, 0.24, 4.4], [105, -65, 0.21, 4.0], [135, 65, 0.22, 4.2],
+];
+
+// Wheel-articulation test fixtures: short tilted planks the truck
+// drives over to flex the suspension. The plank is rotated around its
+// own length axis so one long edge sits on the ground and the other
+// rises by `rise` metres - driving onto it puts the left wheels at one
+// height and the right wheels at another, twisting the chassis.
+//
+// Placed just east of the spawn cluster (spawn x ranges from -136 to
+// -101), one truck-length north of the road, on natural ground so it's
+// reachable in a couple of seconds without driving on the pad.
+interface RampSpec {
+  x: number;
+  z: number;
+  length: number; // along the truck's driving direction (local X pre-yaw)
+  width: number;  // perpendicular (local Z pre-yaw)
+  rise: number;   // high edge sits this far above the low edge
+  yaw: number;    // 0 = length along world +X
+}
+const FLEX_RAMPS: readonly RampSpec[] = [
+  { x: -95, z: 11, length: 3.0, width: 2.5, rise: 1.0, yaw: 0 },
 ];
 
 // Pine forest centred around (-90, 60). Hand-placed cluster in a
@@ -226,11 +253,61 @@ export function generateObstacles(terrain: TerrainData): Obstacle[] {
     out.push({ kind: 'pine', x, y, z, size, height, yaw: i * 0.29 });
   }
 
+  // Flex ramps. Placed unconditionally on the terrain height at their
+  // anchor (no surface filter): they're test fixtures, not scatter, so
+  // they should always spawn even if the cell happens to be mud or grass.
+  for (const r of FLEX_RAMPS) {
+    const idx = worldToTerrainIndex(terrain, r.x, r.z);
+    if (idx < 0) continue;
+    const y = terrain.heights[idx] ?? 0;
+    out.push({
+      kind: 'ramp',
+      x: r.x, y, z: r.z,
+      size: r.width / 2,
+      height: r.rise,
+      length: r.length,
+      yaw: r.yaw,
+    });
+  }
+
   // Programmatic-but-fixed passes that depend on terrain layout.
   out.push(...hillClimbBoulders(terrain));
   out.push(...perimeterObstacles(terrain));
 
   return out;
+}
+
+// Geometry for a flex ramp: tilted cuboid placed so the low long edge
+// rests on the ground at `groundY` and the opposite long edge sits
+// `rise` metres above. Returns the centroid + orientation quaternion
+// the renderer also needs, so client visuals stay aligned with the
+// collider without re-deriving the math.
+const RAMP_HALF_THICK = 0.06;
+export function rampTransform(o: Obstacle): {
+  cx: number; cy: number; cz: number;
+  qx: number; qy: number; qz: number; qw: number;
+  halfLength: number; halfWidth: number; halfThick: number;
+  tilt: number;
+} {
+  const halfLength = (o.length ?? 3) / 2;
+  const halfWidth = o.size;
+  const halfThick = RAMP_HALF_THICK;
+  const tilt = Math.atan2(o.height, halfWidth * 2);
+  // Lift centroid so the low edge rests on the ground after tilt:
+  // bottom-most corner Y = cy - halfWidth*sin(tilt) - halfThick*cos(tilt).
+  const cy = o.y + halfWidth * Math.sin(tilt) + halfThick * Math.cos(tilt);
+  // Composite quat: yaw (around world Y) then tilt (around local X).
+  // Pre-multiplied form: q = q_yaw * q_tilt.
+  const sty = Math.sin(o.yaw / 2), cty = Math.cos(o.yaw / 2);
+  const sta = Math.sin(tilt / 2), cta = Math.cos(tilt / 2);
+  return {
+    cx: o.x, cy, cz: o.z,
+    qx: cty * sta,
+    qy: sty * cta,
+    qz: -sty * sta,
+    qw: cty * cta,
+    halfLength, halfWidth, halfThick, tilt,
+  };
 }
 
 /** Spawn the obstacles into a Rapier world as static colliders. Returns
@@ -247,6 +324,11 @@ export function spawnObstacleColliders(
     if (o.kind === 'rock') {
       colDesc = RAPIER.ColliderDesc.ball(o.size).setFriction(0.9);
       body.setTranslation({ x: o.x, y: o.y + o.size * 0.6, z: o.z }, true);
+    } else if (o.kind === 'ramp') {
+      const t = rampTransform(o);
+      body.setTranslation({ x: t.cx, y: t.cy, z: t.cz }, true);
+      body.setRotation({ x: t.qx, y: t.qy, z: t.qz, w: t.qw }, true);
+      colDesc = RAPIER.ColliderDesc.cuboid(t.halfLength, t.halfThick, t.halfWidth).setFriction(1.0);
     } else {
       const halfHeight = Math.max(0.1, (o.height - 2 * o.size) / 2);
       colDesc = RAPIER.ColliderDesc.capsule(halfHeight, o.size).setFriction(0.6);
