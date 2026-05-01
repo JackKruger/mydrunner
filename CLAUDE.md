@@ -4,13 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-mydrunner is a browser-based, multiplayer, physics-driven off-road truck game inspired by MudRunner. The fun comes from the physics: suspension, slip, mud, and getting unstuck. Treat the physics as the product — gameplay, content, and polish all live downstream of it feeling good.
+mydrunner is a browser-based, multiplayer, physics-driven off-road 4x4 game inspired by MudRunner. The fun comes from the physics: suspension, slip, mud, deformable terrain, and getting unstuck. Treat the physics as the product — gameplay, content, and polish all live downstream of it feeling good.
+
+The vehicle is a Nissan-Patrol-GQ-style boxy 4x4 (AWD, roof rack, bullbar, snorkel). Built procedurally from Three.js primitives so the codebase has no asset dependencies. Rollover is intentionally a real risk on slopes and at-speed turns into ruts — it's tuned to be controllable on the road but punishing off it.
 
 ## Stack
 
 - **TypeScript everywhere**, ESM, Node 22+, pnpm workspaces.
-- **Physics:** Rapier (`@dimforge/rapier3d-compat`, WASM). Same library on client and server, same fixed timestep, same `World` / `Vehicle` classes — they live in `packages/shared/src/physics/`.
-- **Client:** Vite + Three.js. No React. The render loop is a plain `requestAnimationFrame` driving `Scene.render()` in `packages/client/src/scene.ts`.
+- **Physics:** Rapier (`@dimforge/rapier3d-compat`, WASM). Same library on client and server, same fixed timestep, same `World` / `Vehicle` classes. Lives in `packages/shared/src/physics/`.
+- **Client:** Vite + Three.js. No React. Render loop is `requestAnimationFrame` driving `Scene.render()` in `packages/client/src/scene.ts`. Local prediction sim runs alongside the renderer in `packages/client/src/prediction.ts`.
 - **Server:** Node + `ws` + `http`. Single authoritative `Room` running a fixed 60Hz physics loop, broadcasting 30Hz JSON snapshots. Lives in `packages/server/src/`.
 - **Wire format:** JSON for now. Encode/decode is centralised in `packages/shared/src/net/messages.ts` so swapping to msgpack/binary is a one-file change.
 - **Tests:** Vitest for unit + Rapier integration; Playwright for browser smoke + multiplayer.
@@ -27,7 +29,7 @@ pnpm dev:server               # server only
 pnpm dev:client               # client only
 
 pnpm typecheck                # tsc --noEmit across all workspace packages
-pnpm test                     # vitest across shared + server (client has --passWithNoTests)
+pnpm test                     # vitest across shared + server + e2e (client has --passWithNoTests)
 pnpm test:e2e                 # playwright (boots both servers itself)
 pnpm build                    # tsc + vite build for client; tsc for server
 pnpm lint                     # alias for typecheck (no separate linter yet)
@@ -41,6 +43,14 @@ pnpm --filter @mydrunner/server exec vitest run -t "drives forward"
 pnpm --filter @mydrunner/e2e exec playwright test tests/smoke.spec.ts
 ```
 
+Generate a fresh visual changelog:
+
+```bash
+pnpm --filter @mydrunner/e2e exec playwright test tests/screenshot.spec.ts
+```
+
+This drives the car through a short scripted sequence and writes PNGs to `packages/e2e/screenshots/`. They are committed to the repo so each commit's screenshots reflect the game state at that point in history.
+
 Playwright browsers: in sandboxed environments without internet, the config auto-points at `/opt/pw-browsers` if it exists. Otherwise: `pnpm --filter @mydrunner/e2e exec playwright install chromium`.
 
 ## Architecture
@@ -49,119 +59,148 @@ Playwright browsers: in sandboxed environments without internet, the config auto
 
 ```
 packages/
-  shared/   types, constants, net protocol, fixed-step runner, World+Vehicle physics
-  server/   WS+HTTP entry point, Room (one world, all players, fixed loop)
-  client/   Vite app: input -> NetClient -> Scene (Three.js render + interpolation buffer)
-  e2e/      Playwright tests (boots client + server via webServer config)
+  shared/   types, constants, net protocol, fixed-step runner, World+Vehicle+terrain+ruts physics
+  server/   WS+HTTP entry point, Room (one world, all players, fixed loop, rut buffer)
+  client/   Vite app: input -> NetClient -> Scene (Three.js) + Prediction (local Rapier sim)
+  e2e/      Playwright tests + screenshot capture (boots client + server via webServer config)
 ```
 
-`shared` is consumed via TypeScript source (`"main": "./src/index.ts"`) — no build step needed for inter-package use during dev. Only when `tsc -b` runs for distribution.
+`shared` is consumed via TypeScript source (`"main": "./src/index.ts"`) — no build step needed for inter-package use during dev.
 
-### Authoritative server, interpolated client (current design)
+### Authoritative server, client-side prediction
 
-The server is the only source of truth for physics. Each tick:
+The server is the source of truth for physics. Each tick (60Hz):
 
-1. Read pending input for each player (last received `PlayerInput`).
-2. `vehicle.preStep()` applies steer/throttle/brake to the Rapier vehicle controller and calls `controller.updateVehicle(dt)`.
+1. Read pending input for each player.
+2. `vehicle.preStep()` applies steer/throttle/brake to the Rapier vehicle controller, performs **per-wheel surface lookup** (sample terrain texel under each wheel → modulate friction slip), then `controller.updateVehicle(dt)`.
 3. `world.step()` advances Rapier.
 4. `vehicle.postStep()` accumulates wheel spin for visuals.
-5. Every other tick (30Hz), broadcast a `WorldSnapshot` to every player.
+5. Each driven wheel's pass is recorded into the **rut buffer** (server-side erosion accumulator).
+6. Every `RUT_REBUILD_INTERVAL_TICKS` (~0.5s), drained rut deltas mutate the heightfield, the collider is rebuilt, and the changes are broadcast to clients.
+7. Every other tick (30Hz), broadcast a `WorldSnapshot` to every player.
 
-Clients **do not run physics yet**. They:
+The client runs a parallel local Rapier world that simulates **only the local player's vehicle**, in lockstep with the server's fixed timestep. On every input sample:
 
-1. Sample keyboard input each frame, send it as a `ClientMessage.input` at ~60Hz.
-2. Receive snapshots, push into a buffer keyed by client receive time.
-3. Render at `now - INTERPOLATION_DELAY_MS` (100ms) by linearly interpolating between the two straddling snapshots — both for chassis transform and wheel suspension/spin.
+1. Send the input to the server.
+2. Append it to the local prediction queue.
+3. Step the local sim once with that input.
 
-This is intentionally simple. It feels slightly laggy (input → server → snapshot → render = ~100ms+ RTT/2). The next milestone is **client-side prediction with reconciliation** — see roadmap.
+When a snapshot arrives:
+
+1. Drop all queued inputs `<= snap.lastAckSeq` (server has consumed them).
+2. Snap the local body to the authoritative pose for our player.
+3. Replay remaining queued inputs to fast-forward to "now".
+
+Other players are still rendered by interpolating between buffered snapshots ~100ms in the past. The local car responds the same frame as a key press; the rest of the world is gracefully smoothed.
 
 ### Key files
 
-- `packages/shared/src/constants.ts` — every tunable: tick rate, vehicle mass, suspension, engine force, surface friction. Tuning lives here, code does not.
-- `packages/shared/src/types.ts` — `PlayerInput`, `VehicleState`, `WorldSnapshot`. Wire-shape contract between client and server.
-- `packages/shared/src/net/messages.ts` — `ClientMessage` / `ServerMessage` discriminated unions, `encode` / `decodeClient` / `decodeServer`. **Change format here only.**
-- `packages/shared/src/physics/world.ts` — `World` wraps a `RAPIER.World`, owns the heightfield collider, and the map of vehicles. `initRapier()` must be awaited once before constructing.
-- `packages/shared/src/physics/vehicle.ts` — `Vehicle` wraps `RAPIER.DynamicRayCastVehicleController`. This is where mud/surface friction will be modulated per-wheel using raycast hits in the future.
-- `packages/shared/src/physics/fixedStep.ts` — Glenn-Fiedler style accumulator. Used for any future client-side prediction loop.
-- `packages/server/src/room.ts` — owns `World`, `setInterval` driven 60Hz tick, broadcasts snapshots at 30Hz, manages players.
+- `packages/shared/src/constants.ts` — every tunable: tick rate, vehicle mass / suspension / drive split, surface friction, rut rate. Tuning lives here, code does not.
+- `packages/shared/src/types.ts` — `PlayerInput`, `VehicleState`, `WorldSnapshot`. Wire-shape contract.
+- `packages/shared/src/net/messages.ts` — `ClientMessage` / `ServerMessage` discriminated unions, `encode` / `decode*`. Welcome carries terrain seed + spawn pose; `rut` messages carry per-cell deltas.
+- `packages/shared/src/physics/world.ts` — `World` wraps a `RAPIER.World`, owns the heightfield collider + map of vehicles. **Note: heights are transposed before being handed to Rapier** (Rapier reads column-major; our generator is row-major).
+- `packages/shared/src/physics/vehicle.ts` — `Vehicle` wraps `RAPIER.DynamicRayCastVehicleController`. `preStep` does per-wheel surface lookup, AWD torque distribution, and friction modulation.
+- `packages/shared/src/physics/terrain.ts` — deterministic FBM-noise heightmap + Surface enum. `roadCore=5` strict-flat, `roadCore..roadShoulder=8` smoothstep into natural terrain.
+- `packages/shared/src/physics/ruts.ts` — `RutBuffer` accumulates per-cell erosion, capped at `RUT_MAX_DEPTH`. Only Mud / DeepMud cells erode.
+- `packages/server/src/room.ts` — owns `World` + `RutBuffer`, 60Hz tick, 30Hz snapshots, rut flush every 0.5s, player spawns on the road grid.
 - `packages/server/src/index.ts` — HTTP+WS bootstrap, route messages into `Room`, expose `/health`.
-- `packages/client/src/scene.ts` — Three.js scene, snapshot buffer, render-time interpolation, camera follow.
-- `packages/client/src/net.ts` — thin `WebSocket` wrapper.
-- `packages/client/src/input.ts` — keyboard → `PlayerInput`.
+- `packages/client/src/scene.ts` — Three.js scene, snapshot interpolation, terrain replication, camera modes (chase/hood/free) with terrain-clearance clamping.
+- `packages/client/src/prediction.ts` — local Rapier sim, input queue, reconcile-on-snapshot.
+- `packages/client/src/carMesh.ts` — procedural GQ-Patrol-style 4x4 visual.
+- `packages/client/src/terrain.ts` — Three.js terrain mesh built from the same generator the server uses; `applyRut(i, dy)` deforms it as ruts arrive.
 
 ### Determinism note
 
-Rapier in single-threaded mode is **deterministic given the same inputs and step order**. We do not yet rely on this, but the physics package is structured so client and server can run the exact same simulation — required for prediction/rollback. Do not introduce non-deterministic state (`Date.now()` in step, `Math.random()` outside seeded RNG, floating-point reductions across iteration order) inside `World.step()` or `Vehicle.preStep()/postStep()`.
+Rapier in single-threaded mode is deterministic given identical inputs and step order. The shared physics package is structured so client and server run the exact same code path — that's the foundation of the prediction/reconciliation. Do not introduce non-deterministic state (`Date.now()` inside `step`, unseeded `Math.random()`, floating-point reductions across non-deterministic iteration order) inside `World.step()` or `Vehicle.preStep()/postStep()`.
+
+`packages/server/src/__tests__/prediction.test.ts` enforces this with a "two worlds, same seed, same inputs → same state" assertion.
 
 ## Conventions
 
 - **Tunables in `constants.ts`.** Magic numbers in physics or networking code are bugs in waiting.
-- **Shared types are the wire contract.** When you change `PlayerInput` or `VehicleState`, both client and server pick it up via TypeScript — but you still need to confirm the JSON shape is compatible (or bump a protocol version).
-- **No comments that restate code.** Comments explain *why*: a constraint, a tradeoff, a workaround. The vehicle controller has several — read them before changing tuning.
-- **Tests as feedback loop.** Server tests use real Rapier. Browser tests use real Playwright. There is no mocked physics or mocked socket — it's not worth the maintenance, and bugs love mocks. If you need to test something new, prefer a real integration test over a mock.
+- **Shared types are the wire contract.** When you change `PlayerInput` or `VehicleState`, both client and server pick it up via TypeScript.
+- **No comments that restate code.** Comments explain *why*: a constraint, a tradeoff, a workaround.
+- **Tests use real components.** Server tests use real Rapier. Browser tests use real Playwright. There is no mocked physics or socket — bugs love mocks.
+- **Diagnostic hooks are dev-only.** `window.__scene` and `window.__prediction` are guarded by `import.meta.env.DEV`. Production bundles do not expose them.
 - **Branching:** all development goes on `claude/add-claude-documentation-b6LkY` until told otherwise. Do not push to other branches without explicit user approval.
-- **No PRs unless asked.** The user has not requested one.
+- **No PRs unless asked.**
+- **Commit screenshots with each visual milestone** (`packages/e2e/screenshots/` is tracked) so the repo carries a visual changelog alongside the code one.
+
+## Periodic architecture review
+
+The codebase grows fastest in the first weeks of a feature game. To keep it from sprawling:
+
+- After every ~5 feature commits, do a structural pass:
+  - Are any single files trending past ~250 lines? If so, look for a natural split (e.g. camera vs. scene).
+  - Are there constants leaking into code? Promote them to `constants.ts`.
+  - Are there parallel switches/lookups for the same concept (e.g. surface → grip)? Consolidate into a helper.
+  - Has any module grown a "miscellaneous" responsibility? Either rename it to reflect what it actually does, or extract.
+  - Is the wire protocol still the only crossing point between client and server? If something else has snuck across, name it.
+- Stop and refactor when:
+  - Two changes in the same week needed parallel edits in three files. That's coupling — find the missing abstraction.
+  - A bug took longer to find than to fix. Usually means responsibility is unclear in the affected module.
+  - Tests are slow because they boot too much of the world. Carve out a smaller fixture.
+- Don't refactor when:
+  - It's premature (a single instance of a pattern is not a pattern).
+  - You don't have tests covering the area you're changing — write them first.
+
+This file should be updated when the architecture changes. If you (future Claude) make a structural change without updating CLAUDE.md, you've created drift.
 
 ## Roadmap
 
-The MVP loop (client connects, drives a truck on terrain, sees other players) **works today** as of this CLAUDE.md. Next priorities, roughly in order:
+The MVP loop is **complete**: connect → drive a 4x4 with AWD physics on procedural terrain → cross mud at low traction → carve ruts that persist → see other players move with smooth interpolation → respond instantly thanks to client-side prediction. Next priorities, roughly in order:
 
-### 1. Make the physics actually feel like mud (high value, contained)
-- Per-wheel surface lookup: raycast result → terrain texel → `SURFACE_FRICTION` → `setWheelFrictionSlip`. Needs a `SurfaceMap` (Uint8Array of surface IDs, same resolution as heightmap) in `World`.
-- Wheel slip ratio → reduce engine force, lengthen acceleration. Tune via `constants.VEHICLE`.
-- Visible deep-tread differentiation: front wheels lock-able, rear wheels drive.
-- *Test:* extend `physics.test.ts` with a "vehicle on mud surface accelerates slower than on road" assertion.
+### Polish (small, valuable)
+- Surface-name HUD (so you know when you're in mud).
+- Minimap / map overview.
+- Engine sound (RPM-driven via `AudioContext`).
+- Mud splatter particles when wheels spin in deep mud.
+- Player nameplate above each vehicle.
 
-### 2. Heightmap replication + real terrain on the client
-- Server seeds a heightmap (Perlin / FBM) at world start, sends it to clients in `welcome`.
-- Client builds a `THREE.PlaneGeometry` displaced by those heights, replaces the placeholder ground.
-- *Test:* Playwright check that there's no shadow flicker / vehicle-sinks-through-floor regressions.
+### Content
+- More than one road. A real "course" with stretches of dirt, mud, water crossings.
+- Cargo objective: spawn a crate to deliver from A to B; mass affects vehicle handling.
+- Multiple truck loadouts (light, heavy, winch-equipped).
 
-### 3. Client-side prediction with server reconciliation
-- Client runs its own `World` (just for the local player) using `createFixedStep`.
-- On each input, store `(seq, input)` in a queue.
-- On snapshot: snap the local vehicle to authoritative state, replay all unacknowledged inputs.
-- Other players continue to use snapshot interpolation.
-- *Test:* a deterministic integration test that asserts predicted state == authoritative state when no packets are dropped.
+### Multiplayer depth
+- Lobby / room codes (currently single global room).
+- Lag compensation for inputs the server processes (server interpolates back).
+- Voice / text chat.
 
-### 4. Deformable mud / ruts (the "MudRunner" feel)
-- Maintain a per-cell "rut depth" array on the server.
-- Each tick, for each contacting wheel, increase rut depth at that texel by a function of normal force and slip.
-- Modify the heightmap collider locally (Rapier supports heightfield mutation) and broadcast deltas.
-- This is the hardest piece. Keep behind a feature flag in `constants.ts` until it's stable.
+### Wire-format optimisation
+- Move snapshots to msgpack or binary deltas — only changed players, only changed fields.
+- Quantize positions/quaternions for snapshots (1cm position, ~0.001 rad rotation are plenty).
+- Coalesce rut deltas into a single message per flush rather than N entries.
 
-### 5. Polish / UX
-- Camera modes (chase, hood, free).
-- Engine sound (`AudioContext`, RPM-driven).
-- Reset / respawn (`buttons & 1` already wired in input).
-- Trucks list / lobby / room codes.
-
-### 6. Wire format optimisation
-- Move snapshots to msgpack or a custom binary format. Keep the JSON path for debug logging.
-- Snapshot delta compression: send only changed players.
-- All of this lives in `messages.ts`; do not bleed binary concerns into `Room` or `Scene`.
+### Stretch
+- Winch (rope constraint between vehicles, physics-driven recovery).
+- Destructible terrain features (trees, fences) on top of mud-deformation.
+- Physics-driven water bodies that the chassis floats in / bogs down in.
+- Day/night cycle + headlight illumination.
 
 ## How to add a feature, end to end
 
 1. **Touch types first.** Add fields to `PlayerInput` / `VehicleState` / `WorldSnapshot` in `packages/shared/src/types.ts`. TypeScript will tell you everywhere that needs to change.
-2. **Update the simulator.** Modify `Vehicle` or `World` in `packages/shared/src/physics/`.
+2. **Update the simulator.** Modify `Vehicle` / `World` / `RutBuffer` in `packages/shared/src/physics/`.
 3. **Tune in constants.** Don't hardcode in step code.
-4. **Update the renderer.** `Scene.render()` reads from snapshots — make sure it interpolates new fields correctly.
+4. **Update the renderer / prediction.** `Scene.render()` and `Prediction.state()` read from snapshots — make sure they interpolate / re-export new fields correctly.
 5. **Write a test.** Server-side: `vitest` against the real `World`. Client-side: Playwright if it's user-visible.
 6. **Run the gauntlet:** `pnpm typecheck && pnpm test && pnpm test:e2e && pnpm build`.
+7. **Re-run the screenshot capture** if the change is visual: `pnpm --filter @mydrunner/e2e exec playwright test tests/screenshot.spec.ts`. Commit the new PNGs alongside the code.
 
 ## Known limitations / gotchas
 
-- **No client-side physics yet.** Local player driving feels ~100-150ms laggy. This is the first-priority fix, see roadmap step 3.
-- **Heightmap is flat zeroes.** `World` accepts a `heights: Float32Array` but nothing seeds one. Terrain feels boring until step 2.
-- **Tick on `setInterval`.** Will drift under Node GC pauses. Acceptable for MVP; move to `setImmediate`-driven loop if drift becomes visible.
-- **No anti-cheat.** Inputs are trusted — clamp them in `Room.applyInput` if cheating becomes a real concern. The throttle/steer fields are not currently bounded.
+- **`@dimforge/rapier3d-compat 0.14` exposes `setWheelRollInfluence` in TypeScript types but the WASM binding throws at runtime.** Don't use it; tune via CoM offset, track width, friction multipliers, and steer rate instead.
+- **Rapier heightfield is column-major.** `World.buildTerrain()` transposes our row-major heights before calling `ColliderDesc.heightfield`. If you change the generator's indexing, update the transpose.
 - **Single global room.** `Room` is instantiated once in `index.ts`. Sharding requires a `RoomManager` — straightforward but unbuilt.
+- **Tick on `setInterval`.** Will drift under Node GC pauses. Acceptable for MVP; move to `setImmediate`-driven loop with sleep-to-deadline if drift becomes visible.
+- **Inputs are clamped server-side** (`Room.applyInput`) but otherwise trusted. No anti-cheat beyond range clamping.
 - **Rapier `compat` build bundles WASM as base64.** This is why `optimizeDeps.exclude` is set in `vite.config.ts`. Don't switch to `@dimforge/rapier3d` (non-compat) without revisiting Vite config.
+- **Prediction divergence is not visually smoothed.** A reconcile snaps the body. If divergence becomes large under packet loss, this will pop. Add a small-error LERP and a large-error snap when needed.
 
 ## Operating notes
 
 - **Server logs** go to stdout. There is no logger abstraction yet; use `console.log` with a `[mydrunner-server]` prefix to match existing style.
 - **Client errors** surface in the browser console. The Playwright smoke test asserts there are zero `pageerror` events — keep that bar.
 - **Ports:** server `2567` (env `PORT` overrides), client `5173`. Override server URL on the client with `VITE_SERVER_URL`.
-- **Health endpoint:** `GET /health` on the server returns `{ ok, players }`. Used by Playwright's `webServer` probe and is fine for any future load balancer.
+- **Health endpoint:** `GET /health` on the server returns `{ ok, players }`. Used by Playwright's `webServer` probe.

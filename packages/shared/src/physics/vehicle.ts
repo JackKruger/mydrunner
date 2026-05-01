@@ -122,16 +122,8 @@ export class Vehicle {
       const wp = this.wheelWorldPos(i);
       const surf = sampleSurface(this.world.terrain, wp.x, wp.z);
       this.wheelSurface[i] = surf;
-      const grip =
-        surf === Surface.Road
-          ? SURFACE_FRICTION.road
-          : surf === Surface.Dirt
-            ? SURFACE_FRICTION.dirt
-            : surf === Surface.Mud
-              ? SURFACE_FRICTION.mud
-              : SURFACE_FRICTION.deepMud;
-      const isFront = i < 2;
-      const axleMult = isFront ? VEHICLE.frontGripMult : VEHICLE.rearGripMult;
+      const grip = surfaceGrip(surf);
+      const axleMult = i < 2 ? VEHICLE.frontGripMult : VEHICLE.rearGripMult;
       this.controller.setWheelFrictionSlip(i, 2.0 * grip * axleMult);
     }
 

@@ -19,8 +19,12 @@ const app = document.getElementById('app')!;
 
 initInput();
 const scene = new Scene(app);
-// Expose scene + prediction for E2E diagnostics.
-(window as unknown as { __scene: unknown }).__scene = scene;
+// Diagnostic hooks for E2E / browser debugging. Only exposed in dev (Vite
+// sets DEV; production builds skip this) so production bundles do not ship
+// the internals to the window object.
+if (import.meta.env.DEV) {
+  (window as unknown as { __scene: unknown }).__scene = scene;
+}
 
 let localId: PlayerId | null = null;
 let connected = false;
@@ -44,7 +48,9 @@ async function start(): Promise<void> {
       // Build local prediction world with the same seed + spawn.
       prediction?.dispose();
       prediction = new Prediction(terrain.seed, terrain.size, terrain.resolution, spawn);
-      (window as unknown as { __prediction: unknown }).__prediction = prediction;
+      if (import.meta.env.DEV) {
+        (window as unknown as { __prediction: unknown }).__prediction = prediction;
+      }
       scene.markLocalOverridden();
     },
     onSnapshot(snap, recvAtMs) {
