@@ -242,7 +242,11 @@ export class Scene {
       // wheel center at rest - that's not what Rapier expects, and
       // produced a ~restLength visual hover.)
       w.position.set(wp.x, wp.y - susp - sink, wp.z);
-      w.rotation.set(ws ? ws.spin : 0, ws ? ws.steer : 0, 0);
+      // Negate steer for the mesh: snapshot.steer carries player-intent
+      // sign (positive = right). With Three.js's right-hand Y-up frame,
+      // positive rotation.y rotates +Z forward toward -X (left), so the
+      // mesh needs the opposite sign to visually match driver intent.
+      w.rotation.set(ws ? ws.spin : 0, ws ? -ws.steer : 0, 0);
     }
     // Position target tracks the car directly with a light lerp - kills
     // chassis-wobble high-frequency jitter without lag. Yaw uses an
@@ -314,7 +318,7 @@ export class Scene {
             wheel.position.set(wp.x, wp.y - (susp - VEHICLE.suspensionRestLength) - sink, wp.z);
             const steer = wa ? wa.steer : 0;
             const spin = wa && wb ? wa.spin + (wb.spin - wa.spin) * t : 0;
-            wheel.rotation.set(spin, steer, 0);
+            wheel.rotation.set(spin, -steer, 0);
           }
         }
 

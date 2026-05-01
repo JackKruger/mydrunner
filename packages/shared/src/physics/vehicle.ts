@@ -196,9 +196,14 @@ export class Vehicle {
   }
 
   postStep(): void {
-    // Accumulate wheel spin for visual rotation.
+    // Accumulate wheel spin for visual rotation. Tiny per-tick increments
+    // (suspension micro-settling, contact jitter) get filtered out via
+    // the dead-zone - otherwise wheelSpin slowly drifts at idle and the
+    // spoked tyres visibly rotate while the truck is parked.
+    const SPIN_DEADZONE = 0.002; // rad/tick; ~0.2 km/h ground speed for r=0.46
     for (let i = 0; i < 4; i++) {
       const angVel = this.controller.wheelRotation(i) ?? 0;
+      if (Math.abs(angVel) <= SPIN_DEADZONE) continue;
       this.wheelSpin[i] = (this.wheelSpin[i] ?? 0) + angVel;
     }
   }
