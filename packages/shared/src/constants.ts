@@ -48,3 +48,11 @@ export const SURFACE_FRICTION = {
 export const DEFAULT_PORT = 2567;
 export const MAX_INPUT_QUEUE = 64;
 export const INTERPOLATION_DELAY_MS = 100;
+
+// Rut formation. Each driven wheel in mud carves the heightmap each tick:
+//   delta_y = RUT_RATE * (1 - grip) * |throttle| * wheelInContact
+// Capped to RUT_MAX_DEPTH per cell. Heightfield collider is rebuilt every
+// RUT_REBUILD_INTERVAL_TICKS to keep physics in sync with visuals.
+export const RUT_RATE = 0.0035;        // m per tick at full slip
+export const RUT_MAX_DEPTH = 0.6;      // m below original height
+export const RUT_REBUILD_INTERVAL_TICKS = 30;

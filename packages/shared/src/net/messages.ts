@@ -14,6 +14,11 @@ export interface TerrainHandshake {
   rutVersion?: number;
 }
 
+export interface SpawnHandshake {
+  position: { x: number; y: number; z: number };
+  yaw: number;
+}
+
 // Server -> Client
 export type ServerMessage =
   | {
@@ -22,6 +27,7 @@ export type ServerMessage =
       tick: number;
       serverTimeMs: number;
       terrain: TerrainHandshake;
+      spawn: SpawnHandshake;
     }
   | { t: 'snapshot'; snap: WorldSnapshot }
   | { t: 'pong'; clientTimeMs: number; serverTimeMs: number }

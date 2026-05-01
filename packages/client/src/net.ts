@@ -1,10 +1,10 @@
 // Tiny client wrapper around the shared message protocol.
 
 import { Net, INTERPOLATION_DELAY_MS, type WorldSnapshot, type PlayerInput, type PlayerId } from '@mydrunner/shared';
-import type { TerrainHandshake } from '@mydrunner/shared/net';
+import type { TerrainHandshake, SpawnHandshake } from '@mydrunner/shared/net';
 
 export interface NetEvents {
-  onWelcome(id: PlayerId, serverTimeMs: number, terrain: TerrainHandshake): void;
+  onWelcome(id: PlayerId, serverTimeMs: number, terrain: TerrainHandshake, spawn: SpawnHandshake): void;
   onSnapshot(snap: WorldSnapshot, recvAtMs: number): void;
   onRut(version: number, cells: { i: number; dy: number }[]): void;
   onClose(reason: string): void;
@@ -39,7 +39,7 @@ export class NetClient {
       }
       switch (msg.t) {
         case 'welcome':
-          this.events.onWelcome(msg.you, msg.serverTimeMs, msg.terrain);
+          this.events.onWelcome(msg.you, msg.serverTimeMs, msg.terrain, msg.spawn);
           break;
         case 'snapshot':
           this.events.onSnapshot(msg.snap, performance.now());

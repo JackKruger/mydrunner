@@ -5,6 +5,7 @@ import {
   FIXED_DT,
   TICK_RATE,
   SNAPSHOT_INTERVAL_MS,
+  RUT_REBUILD_INTERVAL_TICKS,
   EMPTY_INPUT,
   Net,
   Physics,
@@ -25,7 +26,6 @@ interface InternalPlayer {
   vehicle: Physics.Vehicle;
   pendingInput: PlayerInput;
   lastAckSeq: number;
-  /** Spawn pose remembered for resets. */
   spawn: { position: { x: number; y: number; z: number }; yaw: number };
 }
 
@@ -36,10 +36,13 @@ export class Room {
   private startedAtMs = Date.now();
   private snapAccumMs = 0;
   private loopHandle: NodeJS.Timeout | null = null;
+  private rutBuffer: Physics.RutBuffer;
   private rutVersion = 0;
+  private ticksSinceRutFlush = 0;
 
   constructor(seed = 1337) {
     this.world = new Physics.World({ generate: { size: 200, resolution: 64, seed } });
+    this.rutBuffer = new Physics.RutBuffer(this.world.terrain);
   }
 
   start(): void {
@@ -57,15 +60,12 @@ export class Room {
     return Date.now() - this.startedAtMs;
   }
 
-  /** Find a safe spawn position: ring around the road strip, snapped to
-   *  terrain height + clearance. */
   private nextSpawn(): { position: { x: number; y: number; z: number }; yaw: number } {
     const n = this.players.size;
-    const lane = (n % 4) - 1.5; // -1.5, -0.5, 0.5, 1.5
+    const lane = (n % 4) - 1.5;
     const back = -20 - Math.floor(n / 4) * 6;
     const x = lane * 2.5;
     const z = back;
-    // Sample terrain height at this point to avoid spawning underground.
     const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);
     const ground = idx >= 0 ? (this.world.terrain.heights[idx] ?? 0) : 0;
     return { position: { x, y: ground + 1.5, z }, yaw: 0 };
@@ -93,6 +93,7 @@ export class Room {
           resolution: this.world.terrain.resolution,
           rutVersion: this.rutVersion,
         },
+        spawn: { position: spawn.position, yaw: spawn.yaw },
       }),
     );
   }
@@ -108,7 +109,6 @@ export class Room {
     const p = this.players.get(id);
     if (!p) return;
     if (input.seq <= p.lastAckSeq) return;
-    // Clamp out-of-range inputs (anti-cheat / bad client).
     p.pendingInput = {
       seq: input.seq,
       throttle: clamp(input.throttle, -1, 1),
@@ -122,7 +122,6 @@ export class Room {
 
   private tickOnce(): void {
     for (const p of this.players.values()) {
-      // Reset request: button bit 0.
       if ((p.pendingInput.buttons & 1) !== 0) {
         p.vehicle.resetTo(p.spawn);
       }
@@ -130,6 +129,28 @@ export class Room {
     }
     this.world.step();
     this.tick += 1;
+
+    // Record rut accumulation from each vehicle's wheels.
+    for (const p of this.players.values()) {
+      for (const w of p.vehicle.wheelSamples()) {
+        this.rutBuffer.recordWheel(w.x, w.z, w.slip, w.contact);
+      }
+    }
+    this.ticksSinceRutFlush += 1;
+    if (this.ticksSinceRutFlush >= RUT_REBUILD_INTERVAL_TICKS) {
+      this.ticksSinceRutFlush = 0;
+      const deltas = this.rutBuffer.flush();
+      if (deltas.length > 0) {
+        this.world.rebuildTerrain();
+        this.rutVersion += 1;
+        const msg = Net.encode({
+          t: 'rut',
+          version: this.rutVersion,
+          cells: deltas,
+        });
+        for (const p of this.players.values()) p.handle.send(msg);
+      }
+    }
 
     this.snapAccumMs += FIXED_DT * 1000;
     if (this.snapAccumMs >= SNAPSHOT_INTERVAL_MS) {

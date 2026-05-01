@@ -156,6 +156,28 @@ export class Vehicle {
     }
   }
 
+  /** Per-wheel snapshot for rut accumulation. We model erosion as
+   *  proportional to the energy the wheel is dumping into the ground -
+   *  approximated by max(|throttle|, |brake|) when the wheel is in contact.
+   *  Cruising over mud still carves ruts (a wheel with weight on it
+   *  compresses the surface); spinning under throttle carves more. */
+  wheelSamples(): {
+    x: number; z: number; contact: boolean; slip: number;
+  }[] {
+    const out: { x: number; z: number; contact: boolean; slip: number }[] = [];
+    const throttle = Math.abs(this.input.throttle);
+    const brake = this.input.brake + this.input.handbrake;
+    // Even passive rolling carves a small rut from chassis weight.
+    const passive = 0.15;
+    const slip = Math.min(1, Math.max(passive, throttle, brake));
+    for (let i = 0; i < 4; i++) {
+      const wp = this.wheelWorldPos(i);
+      const contact = this.controller.wheelIsInContact(i) ?? false;
+      out.push({ x: wp.x, z: wp.z, contact, slip });
+    }
+    return out;
+  }
+
   /** Reset to a spawn pose. Called when player presses R (or hits map edge). */
   resetTo(spawn: VehicleSpawn): void {
     this.body.setTranslation(

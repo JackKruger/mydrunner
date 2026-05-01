@@ -12,6 +12,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.14.0",
     "@mydrunner/shared": "workspace:*",
     "three": "^0.171.0"
   },
