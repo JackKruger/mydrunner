@@ -1,6 +1,11 @@
 import { defineConfig } from 'vite';
 
+// On GitHub Pages, assets live at /<repo>/ unless a custom domain is set.
+// Configurable via env so a custom-domain deploy can use base=/.
+const base = process.env.VITE_BASE ?? '/';
+
 export default defineConfig({
+  base,
   server: {
     port: 5173,
     strictPort: false,
