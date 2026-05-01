@@ -157,6 +157,11 @@ function perimeterObstacles(terrain: TerrainData): Obstacle[] {
       else                 { px = -half + inset; pz = tAlong; }
       const idx = worldToTerrainIndex(terrain, px, pz);
       if (idx < 0) continue;
+      const surf = terrain.surfaces[idx];
+      // Skip the cells where the road meets the world edge - players
+      // need a clear path to the boundary so they can trigger the
+      // off-map ejector. Same goes for the concrete pad just in case.
+      if (surf === Surface.Road || surf === Surface.Concrete) continue;
       const py = terrain.heights[idx] ?? 0;
       // Every 5th obstacle along the perimeter is a pine; rest are big
       // boulders. Yaw cycles for visual variety without RNG.
