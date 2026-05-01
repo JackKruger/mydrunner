@@ -68,12 +68,22 @@ export function stepEngine(
   const gIdx = state.gearIndex;
   const ratio = ENGINE.gears[gIdx] ?? 0;
   if (gIdx === ENGINE.neutralGear || ratio === 0) {
-    // Free-revving in neutral: spool toward (idle + throttle * (redline - idle)).
+    // Free-revving in neutral.
     const target = ENGINE.idleRpm + Math.max(0, throttle) * (ENGINE.redlineRpm - ENGINE.idleRpm);
     rpm = state.rpm + (target - state.rpm) * Math.min(1, dt * 4);
   } else {
+    // Wheel-derived RPM (rigid coupling). At low wheel speed a real auto
+    // is decoupled from the wheels by a torque converter / slipping
+    // clutch - the engine "blips" up toward the throttle target while
+    // the wheels lag. Without modeling this, launches lug at idle and
+    // the car crawls forever before the wheels catch up.
     const wheelRpm = (Math.abs(wheelAngVel) * 60) / (2 * Math.PI);
-    rpm = wheelRpm * Math.abs(ratio) * ENGINE.finalDrive;
+    const lockedRpm = wheelRpm * Math.abs(ratio) * ENGINE.finalDrive;
+    // Blend: at zero wheel speed use throttle target; full lock around
+    // 8 rad/s wheel speed (~3 m/s).
+    const blend = Math.min(1, Math.abs(wheelAngVel) / 8);
+    const throttleTarget = ENGINE.idleRpm + Math.abs(throttle) * (ENGINE.peakTorqueRpm - ENGINE.idleRpm);
+    rpm = lockedRpm * blend + throttleTarget * (1 - blend);
     if (rpm < ENGINE.idleRpm) rpm = ENGINE.idleRpm;
   }
 

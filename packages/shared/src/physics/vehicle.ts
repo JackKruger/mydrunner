@@ -115,16 +115,21 @@ export class Vehicle {
   /** Apply input to wheels - called before world.step(). */
   preStep(): void {
     const dt = 1 / 60;
-    // Smooth steering toward target so input doesn't snap the wheels.
+    // Smooth steering toward target. currentSteer keeps the player's
+    // intent sign (positive = right) so the wheel visual rotates the
+    // way the player expects. The Rapier setWheelSteering call below
+    // negates because flipping the axle to (-1,0,0) (which fixed the
+    // throttle direction) also flipped the steering-positive direction.
     const targetSteer = this.input.steer * VEHICLE.maxSteer;
     const steerDelta = targetSteer - this.currentSteer;
     const maxStep = VEHICLE.steerSpeed * dt;
     this.currentSteer +=
       Math.abs(steerDelta) < maxStep ? steerDelta : Math.sign(steerDelta) * maxStep;
 
-    // Front wheels steer (indices 0, 1).
-    this.controller.setWheelSteering(0, this.currentSteer);
-    this.controller.setWheelSteering(1, this.currentSteer);
+    // Front wheels steer (indices 0, 1). Negate to convert "player intent
+    // sign" to "Rapier wheel-steer sign" given the (-1,0,0) axle.
+    this.controller.setWheelSteering(0, -this.currentSteer);
+    this.controller.setWheelSteering(1, -this.currentSteer);
 
     // Per-wheel grip computation. Three multipliers stack:
     //   surface  - mud has less peak grip than road

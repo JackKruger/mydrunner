@@ -205,22 +205,27 @@ export class Scene {
       const ws = wheels[i];
       const susp = ws ? ws.suspensionLength : VEHICLE.suspensionRestLength;
       const sink = this.wheelSinkAt(v.group, wp);
-      w.position.set(wp.x, wp.y - (susp - VEHICLE.suspensionRestLength) - sink, wp.z);
+      // Wheel center = chassis-connection-point + suspensionDir * suspensionLength.
+      // suspensionDir is (0,-1,0), so wheel center y = wp.y - susp.
+      // (Earlier code had wp.y - (susp - rest) which assumed wp was the
+      // wheel center at rest - that's not what Rapier expects, and
+      // produced a ~restLength visual hover.)
+      w.position.set(wp.x, wp.y - susp - sink, wp.z);
       w.rotation.set(ws ? ws.spin : 0, ws ? ws.steer : 0, 0);
     }
-    // Smooth camera target instead of snapping. Position is filtered with
-    // a low-pass; yaw is derived from the quaternion's actual forward
-    // axis (more stable than Euler.y on a pitched chassis).
-    this.cameraTarget.lerp(v.group.position, 0.25);
-    // Forward = local +Z rotated by chassis quaternion.
+    // Smooth target + yaw with reasonably high alphas so the camera
+    // stays close to the action; the camera position itself is then
+    // computed directly (no further lerp) which avoids compounded lag.
+    // Result: minimal bounce (target/yaw filter the high-frequency
+    // chassis wobble) without sluggish chase.
+    this.cameraTarget.lerp(v.group.position, 0.4);
     const fX = 2 * (rot.x * rot.z + rot.w * rot.y);
     const fZ = 1 - 2 * (rot.x * rot.x + rot.y * rot.y);
     const targetYaw = Math.atan2(fX, fZ);
-    // Shortest-arc lerp on yaw to avoid ±π wraps.
     let dy = targetYaw - this.cameraYaw;
     if (dy > Math.PI) dy -= 2 * Math.PI;
     if (dy < -Math.PI) dy += 2 * Math.PI;
-    this.cameraYaw += dy * 0.12;
+    this.cameraYaw += dy * 0.25;
   }
 
   render(nowMs: number): void {
@@ -353,9 +358,6 @@ export class Scene {
   private updateCamera(): void {
     const target = this.cameraTarget;
     if (this.cameraMode === 'chase') {
-      // Lower chase angle so we see the side profile + wheels, not just
-      // the roof. 8m back, 3m up. Position lerped softly to remove
-      // high-frequency suspension bounce.
       const offset = new THREE.Vector3(
         -Math.sin(this.cameraYaw) * 8,
         3,
@@ -364,7 +366,8 @@ export class Scene {
       const desired = target.clone().add(offset);
       const minY = (this.terrain ? this.terrainHeightAt(desired.x, desired.z) : 0) + 1.5;
       if (desired.y < minY) desired.y = minY;
-      this.camera.position.lerp(desired, 0.06);
+      // Set position directly. Smoothing already happened on target+yaw.
+      this.camera.position.copy(desired);
       const lookTarget = target.clone();
       lookTarget.y += 0.5;
       this.camera.lookAt(lookTarget);

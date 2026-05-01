@@ -15,20 +15,22 @@ export const VEHICLE = {
   chassisHalfExtents: { x: 0.85, y: 0.45, z: 1.9 }, // ~1.7m wide, 3.8m long
   wheelRadius: 0.36,
   wheelWidth: 0.25,
-  suspensionRestLength: 0.45,
-  suspensionStiffness: 32,
+  // Suspension geometry. Chassis-connection points (wp.y) sit at the
+  // chassis bottom edge; wheels hang below at restLength. With chassis
+  // half-y = 0.45 and wheel radius 0.36, the chassis bottom rests
+  // roughly (restLength - wheelRadius) above ground at equilibrium -
+  // a typical SUV ground clearance.
+  suspensionRestLength: 0.4,
+  suspensionStiffness: 35,
   suspensionDamping: 4.5,
-  suspensionCompression: 0.85,
-  maxSuspensionForce: 6000,
-  maxSuspensionTravel: 0.4,
-  // Wheel positions relative to chassis center. Track widened slightly
-  // for stability; wheels sit further below the chassis to lower the
-  // effective CoM.
+  suspensionCompression: 0.83,
+  maxSuspensionForce: 9000,
+  maxSuspensionTravel: 0.3,
   wheelPositions: [
-    { x: -0.92, y: -0.4, z: 1.3 },  // FL
-    { x: 0.92, y: -0.4, z: 1.3 },   // FR
-    { x: -0.92, y: -0.4, z: -1.3 }, // RL
-    { x: 0.92, y: -0.4, z: -1.3 },  // RR
+    { x: -0.92, y: -0.45, z: 1.3 },  // FL (chassis-connection: bottom edge)
+    { x: 0.92, y: -0.45, z: 1.3 },   // FR
+    { x: -0.92, y: -0.45, z: -1.3 }, // RL
+    { x: 0.92, y: -0.45, z: -1.3 },  // RR
   ],
   // AWD torque split front:rear. 0.5/0.5 for symmetric 4x4 feel.
   engineForce: 3200,
