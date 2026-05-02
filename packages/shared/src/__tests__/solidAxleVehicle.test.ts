@@ -121,6 +121,30 @@ describe('solid-axle vehicle: drivetrain', () => {
     expect(Math.abs(angleDiff(endYaw, startYaw))).toBeGreaterThan(0.05);
     world.dispose();
   });
+
+  it('steers in the correct direction (positive input = right turn)', () => {
+    // Regression test: a Rodrigues sign flip in solidAxleVehicle.preStep
+    // would silently reverse steering. The yaw-magnitude test above
+    // wouldn't catch it. Drive forward briefly with steady positive
+    // steer; assert the chassis rotated the way that turns the chassis
+    // nose toward chassis-right.
+    //
+    // Convention check: chassis spawned with no yaw (identity rotation)
+    // has chassis-forward = world +Z. A right turn yaws nose from +Z
+    // toward +X, which is positive rotation about world +Y by
+    // right-hand rule (verified against the Y-rotation matrix).
+    const { world, vehicle } = makeWorld();
+    settle(world, 60);
+    const startYaw = quatYaw(vehicle.getState().rotation);
+    for (let i = 1; i <= 300; i++) {
+      vehicle.setInput({ ...EMPTY_INPUT, seq: i, throttle: 1, steer: 1 });
+      world.step();
+    }
+    const endYaw = quatYaw(vehicle.getState().rotation);
+    const dyaw = angleDiff(endYaw, startYaw);
+    expect(dyaw).toBeGreaterThan(0);
+    world.dispose();
+  });
 });
 
 describe('solid-axle vehicle: determinism', () => {
