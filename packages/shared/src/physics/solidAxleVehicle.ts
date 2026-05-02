@@ -69,6 +69,16 @@ import type { World } from './world.js';
 // the four wheels combined. Surface multiplier scales below this.
 const LONG_FRICTION = 1.0;
 
+// Anti-roll bar: chassis-frame torque proportional to world-roll about
+// the chassis-forward axis. The per-wheel-end ride forces already give
+// static roll stability, but cornering hard unloads (or lifts) the
+// inside wheels and that loses much of the restoring torque exactly
+// when the chassis needs it. The sway bar fills the gap. Damping is
+// at ~70% critical for the chassis roll inertia (~900 kg*m^2):
+// c_crit = 2*sqrt(k*I) ~ 2*sqrt(120000*900) ~ 20800 N*m*s/rad.
+const ANTI_ROLL_STIFFNESS = 120_000;
+const ANTI_ROLL_DAMPING = 14_000;
+
 type Vec3 = { x: number; y: number; z: number };
 
 export class SolidAxleVehicle implements VehicleLike {
@@ -285,6 +295,34 @@ export class SolidAxleVehicle implements VehicleLike {
       }
     }
 
+    // 3b. Anti-roll bar. The per-wheel-end ride forces give static roll
+    //     stability, but in hard cornering the inside wheels unload
+    //     (or lift) so their share of the restoring torque vanishes
+    //     just when you need it most. A real off-roader fits a sway bar
+    //     to keep some roll resistance even when the inside is in the
+    //     air. Modelled here as a chassis-frame torque proportional to
+    //     the chassis's world-roll angle about its forward axis, plus a
+    //     velocity damping term.
+    //
+    //     world-roll proxy: chassis-up dotted with chassis-right gives
+    //     ~sin(roll) for small angles - both vectors are world-frame and
+    //     orthogonal at zero roll, so their dot product is zero only
+    //     when the chassis is upright relative to its yaw heading.
+    {
+      // chassisUp dotted with chassisRight gives sin(rollAngle) for the
+      // chassis's world-frame roll about its own forward axis. Both
+      // vectors are world-frame and orthogonal when the chassis is
+      // upright (relative to its yaw heading), so this is zero at rest
+      // and grows linearly with roll for small angles.
+      const rollSin = up.x * right.x + up.y * right.y + up.z * right.z;
+      const rollVel = av.x * fwd.x + av.y * fwd.y + av.z * fwd.z;
+      const tq = -ANTI_ROLL_STIFFNESS * rollSin - ANTI_ROLL_DAMPING * rollVel;
+      this.body.addTorque(
+        { x: fwd.x * tq, y: fwd.y * tq, z: fwd.z * tq },
+        true,
+      );
+    }
+
     // 4. Engine + gearbox.
     const avgAngVel = (this.wheels[0]!.angVel + this.wheels[1]!.angVel + this.wheels[2]!.angVel + this.wheels[3]!.angVel) / 4;
     const longSpeed = lv.x * fwd.x + lv.y * fwd.y + lv.z * fwd.z;
@@ -321,12 +359,17 @@ export class SolidAxleVehicle implements VehicleLike {
       const ag = axle.geom;
 
       // Wheel forward direction (steered for front wheels). Steering
-      // rotates fwd about chassis-up by currentSteer.
+      // rotates fwd about chassis-up by -currentSteer. The sign matches
+      // what the legacy renderer applies to the wheel mesh and what
+      // Rapier's vehicle controller does internally given the (-1,0,0)
+      // axle convention - positive player intent (D / right arrow) yaws
+      // the chassis right via a force pointing into chassis-right.
       let wheelFwd = fwd;
       let wheelRight = right;
       if (ag.hasSteering && Math.abs(this.currentSteer) > 1e-6) {
-        const c = Math.cos(this.currentSteer);
-        const s = Math.sin(this.currentSteer);
+        const ang = -this.currentSteer;
+        const c = Math.cos(ang);
+        const s = Math.sin(ang);
         const upDotFwd = up.x * fwd.x + up.y * fwd.y + up.z * fwd.z;
         const cross = {
           x: up.y * fwd.z - up.z * fwd.y,
