@@ -255,8 +255,16 @@ export class SolidAxleVehicle implements VehicleLike {
 
       // Per-wheel-end ride forces. Compression is read directly from
       // each wheel's raycast (capped at bumpMax to mirror the axle's
-      // travel limit). Damping scales with engagement so a wheel just
-      // kissing ground doesn't apply a parachute force.
+      // travel limit). Damping scales with an engagement curve that
+      // ramps from 0 to 1 over the first ~80 mm of compression - so a
+      // wheel just kissing ground still feels soft, but typical
+      // equilibrium (~87 mm of compression under chassis weight) is
+      // already at full damping. The earlier `comp / restLength` curve
+      // only reached 16% engagement at equilibrium, leaving the
+      // chassis vertical mode at ~12% critical - that's the source of
+      // the visible 1.7 Hz body bob the user reported as stutter while
+      // driving. Saturating earlier brings it to ~critical without
+      // hardening the first-contact response.
       const sides: Array<{ wheel: WheelKinematic; localX: number; world: Vec3 }> = [
         { wheel: wL, localX: -ag.trackHalf, world: leftWorld },
         { wheel: wR, localX: +ag.trackHalf, world: rightWorld },
@@ -274,7 +282,7 @@ export class SolidAxleVehicle implements VehicleLike {
         const vpY = lv.y + av.z * armX - av.x * armZ;
         const vpZ = lv.z + av.x * armY - av.y * armX;
         const vertVel = vpX * up.x + vpY * up.y + vpZ * up.z;
-        const engagement = Math.min(1, comp / ag.suspensionRestLength);
+        const engagement = Math.min(1, comp * 12);
         // Per-wheel-end stiffness is HALF the axle's total because both
         // wheels share the load (parallel springs sum to k_total).
         const F = 0.5 * ag.rideStiffness * comp

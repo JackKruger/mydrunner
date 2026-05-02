@@ -128,10 +128,15 @@ export const AXLE = {
     droopMax: 0.30,
     bumpMax: 0.20,
     rideStiffness: 80_000,
-    // c_critical = 2*sqrt(k*m_chassis_share) ~ 2*sqrt(80000*750) ~ 15500 N*s/m
-    // per axle (one axle supports half the chassis). 12000 is ~75% of
-    // critical: settles in roughly one cycle without feeling rigid.
-    rideDamping: 12_000,
+    // c_critical for vertical bob = 2*sqrt(k_total*m) ~ 2*sqrt(170000*1500)
+    // ~ 31900 N*s/m total. Per axle that's ~16000 each. Sums with the
+    // saturating engagement curve in solidAxleVehicle.ts to land at
+    // ~critical at typical equilibrium compression - body settles in
+    // half a cycle instead of bobbing visibly while the wheels stay
+    // planted (the previous 75%-critical claim was correct on paper but
+    // the engagement scaling collapsed it to ~12% effective in steady
+    // state, hence the visible "body stutters while driving" feel).
+    rideDamping: 16_000,
     rollStiffness: 35_000,
     rollDamping: 1_800,
     maxArticulation: 0.45,
@@ -149,7 +154,9 @@ export const AXLE = {
     droopMax: 0.32,
     bumpMax: 0.20,
     rideStiffness: 90_000,
-    rideDamping: 13_000,
+    // Sized to match the front for a near-critical chassis vertical
+    // bob mode. See front.rideDamping comment for the math.
+    rideDamping: 17_000,
     rollStiffness: 28_000,
     rollDamping: 1_500,
     maxArticulation: 0.50,
