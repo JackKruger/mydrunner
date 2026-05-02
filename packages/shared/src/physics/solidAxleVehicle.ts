@@ -66,18 +66,24 @@ import type { World } from './world.js';
 // Effective longitudinal friction coefficient for the new model. With
 // per-wheel normal load ~3700N (1500kg / 4 wheels), this gives ~3700N of
 // grip per wheel on road - around 1g of acceleration available across
-// the four wheels combined. Surface multiplier scales below this.
-const LONG_FRICTION = 1.0;
+// the four wheels combined. Surface multiplier scales below this. 1.15
+// (was 1.0) gives a touch more bite at low speed so launching off the
+// line + tight cornering both feel less greasy.
+const LONG_FRICTION = 1.15;
 
 // Anti-roll bar: chassis-frame torque proportional to world-roll about
 // the chassis-forward axis. The per-wheel-end ride forces already give
 // static roll stability, but cornering hard unloads (or lifts) the
 // inside wheels and that loses much of the restoring torque exactly
-// when the chassis needs it. The sway bar fills the gap. Damping is
-// at ~70% critical for the chassis roll inertia (~900 kg*m^2):
-// c_crit = 2*sqrt(k*I) ~ 2*sqrt(120000*900) ~ 20800 N*m*s/rad.
+// when the chassis needs it. The sway bar fills the gap. Damping
+// targets just past critical so cornering body roll settles in a
+// single half-cycle instead of oscillating - the previous 67% critical
+// rate left a ~1.8 Hz body-roll bounce that read as "body stutter while
+// the wheels stay smooth" because it only fires when wheels are
+// loading the chassis.
+//   c_crit = 2*sqrt(k*I) ~ 2*sqrt(120000*900) ~ 20800 N*m*s/rad.
 const ANTI_ROLL_STIFFNESS = 120_000;
-const ANTI_ROLL_DAMPING = 14_000;
+const ANTI_ROLL_DAMPING = 22_000;
 
 type Vec3 = { x: number; y: number; z: number };
 
