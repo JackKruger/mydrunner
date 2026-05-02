@@ -60,6 +60,20 @@ export interface VehicleState {
   throttle: number;
   // Per-wheel data for visual representation
   wheels: WheelState[];
+  /** Solid-axle state, ordered [front, rear]. Optional so the legacy
+   *  raycast vehicle (which has no axle DOFs) can still produce snapshots
+   *  this type accepts, and so old clients can ignore the field on
+   *  receive without crashing. The new visual layout (axle groups, beam
+   *  pose) reads these instead of the per-wheel suspensionLength. */
+  axles?: [AxleSnapWire, AxleSnapWire];
+}
+
+/** Wire shape of an axle's two DOFs. Matches Physics.AxleSnap from the
+ *  shared package; duplicated here so types.ts stays free of physics
+ *  imports. */
+export interface AxleSnapWire {
+  rideY: number;
+  rollAngle: number;
 }
 
 export interface WheelState {

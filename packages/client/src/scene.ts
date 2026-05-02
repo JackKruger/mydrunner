@@ -29,6 +29,11 @@ interface SnapshotEntry {
 interface VehicleVisual {
   group: THREE.Group;
   wheels: THREE.Object3D[];
+  /** Solid-axle group meshes [front, rear]. Posed each frame from the
+   *  vehicle's axle DOFs (rideY + rollAngle). Wheels are children of
+   *  these groups, so moving the axle moves both wheels as one rigid
+   *  beam - the visual signature of solid-axle articulation. */
+  axles: [THREE.Group, THREE.Group];
   nameplate: THREE.Sprite | null;
   nameplateText: string;
   carKind: CarKind;
@@ -195,6 +200,7 @@ export class Scene {
     v = {
       group: built.group,
       wheels: built.wheels,
+      axles: built.axles,
       nameplate: null,
       nameplateText: '',
       carKind: kind,
@@ -234,24 +240,27 @@ export class Scene {
   }
 
   /** Override the local vehicle visual transform - used by client-side
-   *  prediction so the local truck doesn't lag the snapshot buffer. */
-  setLocalVehiclePose(pos: { x: number; y: number; z: number }, rot: { x: number; y: number; z: number; w: number }, wheels: { steer: number; spin: number; suspensionLength: number }[]): void {
+   *  prediction so the local truck doesn't lag the snapshot buffer.
+   *  Axles pose the wheels (which are children of axle groups); steer
+   *  and spin are still applied per-wheel for steering animation and
+   *  rotation cues. */
+  setLocalVehiclePose(
+    pos: { x: number; y: number; z: number },
+    rot: { x: number; y: number; z: number; w: number },
+    wheels: { steer: number; spin: number; suspensionLength: number }[],
+    axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
+  ): void {
     if (!this.localId) return;
     const v = this.ensureVehicle(this.localId, true, this.localCarKind);
     v.group.position.set(pos.x, pos.y, pos.z);
     v.group.quaternion.set(rot.x, rot.y, rot.z, rot.w);
+    this.poseAxles(v, axles);
     for (let i = 0; i < 4; i++) {
-      const wp = VEHICLE.wheelPositions[i]!;
       const w = v.wheels[i]!;
       const ws = wheels[i];
-      const susp = ws ? ws.suspensionLength : VEHICLE.suspensionRestLength;
-      const sink = this.wheelSinkAt(v.group, wp);
-      // Wheel center = chassis-connection-point + suspensionDir * suspensionLength.
-      // suspensionDir is (0,-1,0), so wheel center y = wp.y - susp.
-      // (Earlier code had wp.y - (susp - rest) which assumed wp was the
-      // wheel center at rest - that's not what Rapier expects, and
-      // produced a ~restLength visual hover.)
-      w.position.set(wp.x, wp.y - susp - sink, wp.z);
+      // Wheels are children of axle groups at (+/- trackHalf, 0, 0); the
+      // axle's rideY+rollAngle moves them as a unit. Per-wheel rotation
+      // still encodes steer (front only) and accumulated spin.
       // Negate steer for the mesh: snapshot.steer carries player-intent
       // sign (positive = right). With Three.js's right-hand Y-up frame,
       // positive rotation.y rotates +Z forward toward -X (left), so the
@@ -261,6 +270,33 @@ export class Scene {
     // Hand the chase camera the latest chassis pose; it owns the yaw
     // spring + pitch lerp internally.
     this.cam.follow(v.group.position, rot);
+  }
+
+  /** Pose the two axle groups from per-axle (rideY, rollAngle) state.
+   *  The axle beam sits at wheel-centre height: chassis-local
+   *  (centerLocalY - suspensionRestLength) at rest, plus rideY when the
+   *  spring is compressed. Rotation is rollAngle about chassis-forward
+   *  (local +Z). Mud sink is applied here at the axle level - both
+   *  wheels of a beam axle drop into mud together, matching the
+   *  rigid-beam coupling. */
+  private poseAxles(
+    v: VehicleVisual,
+    axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
+  ): void {
+    const geom = Physics.geomFor(v.carKind);
+    for (let i = 0; i < 2; i++) {
+      const ag = i === 0 ? geom.front : geom.rear;
+      const ax = axles[i]!;
+      const sink = this.axleSinkAt(v.group, { centerLocalY: ag.centerLocalY, centerLocalZ: ag.centerLocalZ });
+      v.axles[i]!.position.set(
+        0,
+        ag.centerLocalY - ag.suspensionRestLength + ax.rideY - sink,
+        ag.centerLocalZ,
+      );
+      // Roll about chassis-forward (local +Z). YXZ ordering keeps the
+      // small-angle visual stable - rollAngle is the dominant DOF.
+      v.axles[i]!.rotation.set(0, 0, ax.rollAngle);
+    }
   }
 
   render(nowMs: number): void {
@@ -291,20 +327,27 @@ export class Scene {
           qa.slerp(qb, t);
           vis.group.quaternion.copy(qa);
 
+          // Interpolate axle DOFs from the snapshot pair. Falls back to
+          // rest if the server omitted axles (legacy raycast vehicle).
+          const axA = pa.vehicle.axles ?? null;
+          const axB = pb.vehicle.axles ?? axA;
+          const axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] = [
+            { rideY: 0, rollAngle: 0 },
+            { rideY: 0, rollAngle: 0 },
+          ];
+          if (axA && axB) {
+            for (let i = 0; i < 2; i++) {
+              const a0 = axA[i]!, a1 = axB[i]!;
+              axles[i]!.rideY = a0.rideY + (a1.rideY - a0.rideY) * t;
+              axles[i]!.rollAngle = a0.rollAngle + (a1.rollAngle - a0.rollAngle) * t;
+            }
+          }
+          this.poseAxles(vis, axles);
+
           for (let i = 0; i < 4; i++) {
-            const wp = VEHICLE.wheelPositions[i]!;
             const wheel = vis.wheels[i]!;
             const wa = pa.vehicle.wheels[i];
             const wb = pb.vehicle.wheels[i];
-            const susp = wa && wb
-              ? wa.suspensionLength + (wb.suspensionLength - wa.suspensionLength) * t
-              : VEHICLE.suspensionRestLength;
-            const sink = this.wheelSinkAt(vis.group, wp);
-            // wp.y is the chassis-connection point (chassis bottom edge);
-            // wheel hangs below at the current suspension extension. The
-            // earlier `wp.y - (susp - rest)` form assumed wp was the wheel
-            // center at rest, which Rapier doesn't.
-            wheel.position.set(wp.x, wp.y - susp - sink, wp.z);
             const steer = wa ? wa.steer : 0;
             const spin = wa && wb ? wa.spin + (wb.spin - wa.spin) * t : 0;
             wheel.rotation.set(spin, -steer, 0);
@@ -350,6 +393,7 @@ export class Scene {
     for (const p of snap.players) {
       const vis = this.vehicles.get(p.id);
       if (!vis) continue;
+      const wheelPositions = Physics.restWheelPositions(p.carKind);
       // Vehicle ground speed (horizontal magnitude).
       const groundSpeed = Math.hypot(p.vehicle.linVel.x, p.vehicle.linVel.z);
       const dtMs = recvAtMs - vis.lastSpinAtMs;
@@ -369,7 +413,7 @@ export class Scene {
         // World-space wheel contact point: rotate the local wheel position
         // (lowered slightly so particles emit near the ground) by the
         // chassis quaternion, then add the chassis world position.
-        const wp = VEHICLE.wheelPositions[i]!;
+        const wp = wheelPositions[i]!;
         const t = vis.group.position;
         const q = vis.group.quaternion;
         const local = { x: wp.x, y: wp.y - VEHICLE.wheelRadius * 0.6, z: wp.z };
@@ -393,18 +437,22 @@ export class Scene {
   private localOverridden = false;
   markLocalOverridden(): void { this.localOverridden = true; }
 
-  /** Compute how far below its physics-resolved position a wheel visual
-   *  should drop because the ground beneath it is soft (mud). Pure
-   *  visual; the chassis still rides at its physics-determined height.
-   *  Returns 0 on road / dirt. */
-  private wheelSinkAt(group: THREE.Group, wp: { x: number; y: number; z: number }): number {
+  /** Compute how far below its physics-resolved position an axle visual
+   *  should drop because the ground beneath it is soft (mud). Both
+   *  wheels of a solid axle share the beam, so the sink applies to the
+   *  whole axle - one wheel digging in pulls its partner down too,
+   *  matching the rigid coupling. Pure visual; chassis still rides at
+   *  its physics-determined height. Returns 0 on road / dirt. */
+  private axleSinkAt(group: THREE.Group, anchor: { centerLocalY: number; centerLocalZ: number }): number {
     if (!this.terrain) return 0;
     const q = group.quaternion;
-    const v = Physics.rotateVecByQuat(wp, { x: q.x, y: q.y, z: q.z, w: q.w });
+    // Sample at the axle centre - in chassis-local that's (0, anchor.centerLocalY, anchor.centerLocalZ).
+    const local = { x: 0, y: anchor.centerLocalY, z: anchor.centerLocalZ };
+    const w = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
     const surf = Physics.sampleSurface(
       this.terrain.terrain,
-      group.position.x + v.x,
-      group.position.z + v.z,
+      group.position.x + w.x,
+      group.position.z + w.z,
     );
     if (surf === Physics.Surface.Mud) return VEHICLE.wheelRadius * 0.18;
     if (surf === Physics.Surface.DeepMud) return VEHICLE.wheelRadius * 0.35;

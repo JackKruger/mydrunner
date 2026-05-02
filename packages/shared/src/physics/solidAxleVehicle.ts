@@ -513,6 +513,8 @@ export class SolidAxleVehicle implements VehicleLike {
         suspensionLength: susp,
       });
     }
+    const aFront = this.axles[0]!;
+    const aRear = this.axles[1]!;
     return {
       position: { x: t.x, y: t.y, z: t.z },
       rotation: { x: r.x, y: r.y, z: r.z, w: r.w },
@@ -522,6 +524,10 @@ export class SolidAxleVehicle implements VehicleLike {
       gear: this.lastGear,
       throttle: this.input.throttle,
       wheels,
+      axles: [
+        { rideY: aFront.rideY, rollAngle: aFront.rollAngle },
+        { rideY: aRear.rideY, rollAngle: aRear.rollAngle },
+      ],
     };
   }
 

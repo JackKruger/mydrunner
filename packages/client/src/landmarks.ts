@@ -4,7 +4,7 @@
 // laid into the heightfield by the terrain generator.
 
 import * as THREE from 'three';
-import { Physics, VEHICLE } from '@mydrunner/shared';
+import { Physics } from '@mydrunner/shared';
 import { buildCarMesh, colorHash } from './carMesh.js';
 
 export class LandmarkMeshes {
@@ -139,17 +139,14 @@ export class LandmarkMeshes {
     root.add(back);
 
     // Parked Hilux in the middle parking bay. Reuse buildCarMesh so it
-    // looks identical to a player vehicle, and manually position the
-    // wheels at suspension rest (no physics body to drive them).
+    // looks identical to a player vehicle. No physics body - axle groups
+    // sit at their rest pose (rideY=0, rollAngle=0), which buildAxles
+    // already initialises. Wheels stay at their fixed (+/- trackHalf, 0,
+    // 0) positions inside each axle group.
     const pk = STATION.parkedCar;
     const car = buildCarMesh('hilux', false, colorHash(pk.visualHashSeed));
     car.group.position.set(pk.x, pk.y, pk.z);
     car.group.rotation.y = pk.yawLocal;
-    for (let i = 0; i < 4; i++) {
-      const wp = VEHICLE.wheelPositions[i]!;
-      const wheel = car.wheels[i]!;
-      wheel.position.set(wp.x, wp.y - VEHICLE.suspensionRestLength, wp.z);
-    }
     root.add(car.group);
 
     // Sign pole + sign by the road.

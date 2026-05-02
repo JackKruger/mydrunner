@@ -41,7 +41,7 @@ export interface VehicleGeom {
   rear: AxleGeom;
 }
 
-const baseGeom: VehicleGeom = {
+const patrolGeom: VehicleGeom = {
   chassisHalfExtents: { ...VEHICLE.chassisHalfExtents },
   wheelRadius: VEHICLE.wheelRadius,
   wheelWidth: VEHICLE.wheelWidth,
@@ -49,9 +49,28 @@ const baseGeom: VehicleGeom = {
   rear: { ...AXLE.rear },
 };
 
+// Hilux: ute proportions = longer wheelbase (rear axle pushed back to
+// support the bed) + softer rear ride for cargo articulation. Front
+// axle is unchanged so the cabin sits where the existing carMesh.ts
+// body geometry expects it. Rear track and articulation match Patrol
+// because the chassis body and bed widths are identical.
+const hiluxGeom: VehicleGeom = {
+  chassisHalfExtents: { ...VEHICLE.chassisHalfExtents },
+  wheelRadius: VEHICLE.wheelRadius,
+  wheelWidth: VEHICLE.wheelWidth,
+  front: { ...AXLE.front },
+  rear: {
+    ...AXLE.rear,
+    centerLocalZ: -1.4,           // 0.1m rearward of Patrol's -1.3
+    rideStiffness: 75_000,        // softer than Patrol's 90k for cargo
+    rideDamping: 11_000,          // damping scales with stiffness
+    maxArticulation: 0.55,        // a little more rear flex
+  },
+};
+
 export const VEHICLE_GEOM: Record<CarKind, VehicleGeom> = {
-  patrol: baseGeom,
-  hilux: baseGeom,
+  patrol: patrolGeom,
+  hilux: hiluxGeom,
 };
 
 export function geomFor(kind: CarKind): VehicleGeom {

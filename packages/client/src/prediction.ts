@@ -38,6 +38,20 @@ export class Prediction {
    *  this offset so state() can return a smoothly-converging visual
    *  position. Hides 30Hz reconcile stutter when divergence is small. */
   private visualOffset = { x: 0, y: 0, z: 0 };
+  /** Axle visual offset, mirrored from `visualOffset` but for the
+   *  solid-axle DOFs (rideY in metres, rollAngle in radians). On
+   *  reconcile we snap the axle to the server's pose and re-integrate
+   *  through replay; any leftover visual jump is captured here and
+   *  decays each step so the flex pose doesn't pop at 30Hz. Caps:
+   *  rideY +/- 0.2 m, rollAngle +/- 0.2 rad - beyond that the divergence
+   *  is large enough to be worth snapping rather than smoothing. */
+  private axleVisualOffset: [
+    { rideY: number; rollAngle: number },
+    { rideY: number; rollAngle: number },
+  ] = [
+    { rideY: 0, rollAngle: 0 },
+    { rideY: 0, rollAngle: 0 },
+  ];
   /** Body pose at the start of the most recent physics step. Together
    *  with the body's current pose, lets state(alpha) return an
    *  interpolated state - smooth motion when the rAF accumulator runs
@@ -51,6 +65,10 @@ export class Prediction {
       { steer: 0, spin: 0, suspensionLength: 0 },
       { steer: 0, spin: 0, suspensionLength: 0 },
     ],
+    axles: [
+      { rideY: 0, rollAngle: 0 },
+      { rideY: 0, rollAngle: 0 },
+    ] as [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
   };
 
   constructor(seed: number, size: number, resolution: number, spawn: { position: { x: number; y: number; z: number }; yaw?: number }) {
@@ -79,6 +97,10 @@ export class Prediction {
     this.visualOffset.x *= 0.82;
     this.visualOffset.y *= 0.82;
     this.visualOffset.z *= 0.82;
+    for (const a of this.axleVisualOffset) {
+      a.rideY *= 0.82;
+      a.rollAngle *= 0.82;
+    }
   }
 
   private capturePrev(): void {
@@ -99,6 +121,16 @@ export class Prediction {
         pw.spin = w.spin;
         pw.suspensionLength = w.suspensionLength;
       }
+    }
+    // Axle DOFs follow the same pattern - capture for inter-step
+    // interpolation. Only present for solid-axle vehicles; the legacy
+    // raycast path doesn't expose axleSnaps.
+    if (this.vehicle.axleSnaps) {
+      const ax = this.vehicle.axleSnaps();
+      this.prev.axles[0].rideY = ax[0].rideY;
+      this.prev.axles[0].rollAngle = ax[0].rollAngle;
+      this.prev.axles[1].rideY = ax[1].rideY;
+      this.prev.axles[1].rollAngle = ax[1].rollAngle;
     }
   }
 
@@ -126,6 +158,8 @@ export class Prediction {
     // visual offset. Decay in pushAndStep then fades it out.
     const before = this.vehicle.body.translation();
     const beforeX = before.x, beforeY = before.y, beforeZ = before.z;
+    const supportsAxles = this.vehicle.axleSnaps && this.vehicle.applyAxleSnaps;
+    const beforeAxles = supportsAxles ? this.vehicle.axleSnaps!() : null;
 
     // Snap to authoritative state. Includes the smoothed steering angle:
     // without this, replay would double-step currentSteer (since
@@ -137,6 +171,17 @@ export class Prediction {
     this.vehicle.body.setLinvel(v.linVel, true);
     this.vehicle.body.setAngvel(v.angVel, true);
     if (v.wheels[0]) this.vehicle.setSteerAngle(v.wheels[0].steer);
+    // Solid-axle vehicles also reconcile their per-axle DOFs. Without
+    // this the replay would re-integrate the axle from the previous
+    // tick's predicted state, so the local truck's flex pose would drift
+    // off the server's authoritative state until the next cell-aligned
+    // perturbation snapped them back together.
+    if (supportsAxles && v.axles) {
+      this.vehicle.applyAxleSnaps!([
+        { rideY: v.axles[0].rideY, rollAngle: v.axles[0].rollAngle },
+        { rideY: v.axles[1].rideY, rollAngle: v.axles[1].rollAngle },
+      ]);
+    }
 
     // Replay remaining queue to fast-forward to prediction time.
     for (const q of this.queue) {
@@ -158,6 +203,23 @@ export class Prediction {
     this.visualOffset.x = Math.max(-CAP, Math.min(CAP, this.visualOffset.x + dx));
     this.visualOffset.y = Math.max(-CAP, Math.min(CAP, this.visualOffset.y + dy));
     this.visualOffset.z = Math.max(-CAP, Math.min(CAP, this.visualOffset.z + dz));
+
+    // Same idea for axle DOFs. Tighter caps because axle articulation
+    // is a small-amplitude effect; if we'd diverged more than +/- 0.2 m
+    // in rideY or rollAngle radians we're better off snapping than
+    // smoothing for that long.
+    if (supportsAxles && beforeAxles) {
+      const afterAxles = this.vehicle.axleSnaps!();
+      const AX_CAP_RIDE = 0.2;
+      const AX_CAP_ROLL = 0.2;
+      for (let i = 0; i < 2; i++) {
+        const off = this.axleVisualOffset[i]!;
+        const dRide = beforeAxles[i]!.rideY - afterAxles[i]!.rideY;
+        const dRoll = beforeAxles[i]!.rollAngle - afterAxles[i]!.rollAngle;
+        off.rideY = Math.max(-AX_CAP_RIDE, Math.min(AX_CAP_RIDE, off.rideY + dRide));
+        off.rollAngle = Math.max(-AX_CAP_ROLL, Math.min(AX_CAP_ROLL, off.rollAngle + dRoll));
+      }
+    }
   }
 
   /** Read the predicted vehicle state for rendering. `alpha` in [0, 1]
@@ -170,6 +232,10 @@ export class Prediction {
     position: { x: number; y: number; z: number };
     rotation: { x: number; y: number; z: number; w: number };
     wheels: { steer: number; spin: number; suspensionLength: number }[];
+    axles: [
+      { rideY: number; rollAngle: number },
+      { rideY: number; rollAngle: number },
+    ];
   } {
     const s = this.vehicle.getState();
     const a = Math.max(0, Math.min(1, alpha));
@@ -186,6 +252,24 @@ export class Prediction {
     let rw = pr.w + (s.rotation.w * sgn - pr.w) * a;
     const rl = Math.hypot(rx, ry, rz, rw) || 1;
     rx /= rl; ry /= rl; rz /= rl; rw /= rl;
+    const axCurrent = s.axles ?? [
+      { rideY: 0, rollAngle: 0 },
+      { rideY: 0, rollAngle: 0 },
+    ];
+    const axles: [
+      { rideY: number; rollAngle: number },
+      { rideY: number; rollAngle: number },
+    ] = [
+      { rideY: 0, rollAngle: 0 },
+      { rideY: 0, rollAngle: 0 },
+    ];
+    for (let i = 0; i < 2; i++) {
+      const cur = axCurrent[i] ?? { rideY: 0, rollAngle: 0 };
+      const prev = this.prev.axles[i]!;
+      const off = this.axleVisualOffset[i]!;
+      axles[i]!.rideY = prev.rideY + (cur.rideY - prev.rideY) * a + off.rideY;
+      axles[i]!.rollAngle = prev.rollAngle + (cur.rollAngle - prev.rollAngle) * a + off.rollAngle;
+    }
     return {
       position: {
         x: p.x + (s.position.x - p.x) * a + this.visualOffset.x,
@@ -201,6 +285,7 @@ export class Prediction {
           suspensionLength: pw.suspensionLength + (w.suspensionLength - pw.suspensionLength) * a,
         };
       }),
+      axles,
     };
   }
 

@@ -288,6 +288,24 @@ export class Vehicle {
           this.controller.wheelSuspensionLength(i) ?? VEHICLE.suspensionRestLength,
       });
     }
+    // Synthesise axle DOFs from the per-wheel suspension lengths so the
+    // new (axle-group-based) renderer keeps working when this legacy
+    // raycast path is selected via VEHICLE_MODEL='raycast'. rideY = how
+    // far the spring is compressed past rest (positive = compressed);
+    // rollAngle around chassis-forward = atan2(L_susp - R_susp, 2 * track)
+    // since L_susp > R_susp means right wheel is closer to chassis (more
+    // compressed), which by the axle convention puts rollAngle > 0
+    // (right wheel up, left wheel down).
+    const restLen = VEHICLE.suspensionRestLength;
+    const trackHalf = Math.abs(VEHICLE.wheelPositions[0]!.x);
+    const axleFromPair = (li: number, ri: number) => {
+      const lSusp = wheels[li]!.suspensionLength;
+      const rSusp = wheels[ri]!.suspensionLength;
+      return {
+        rideY: Math.max(0, restLen - 0.5 * (lSusp + rSusp)),
+        rollAngle: Math.atan2(lSusp - rSusp, 2 * trackHalf),
+      };
+    };
     return {
       position: { x: t.x, y: t.y, z: t.z },
       rotation: { x: r.x, y: r.y, z: r.z, w: r.w },
@@ -297,6 +315,7 @@ export class Vehicle {
       gear: this.lastGear,
       throttle: this.input.throttle,
       wheels,
+      axles: [axleFromPair(0, 1), axleFromPair(2, 3)],
     };
   }
 

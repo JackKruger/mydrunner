@@ -93,53 +93,54 @@ In `constants.ts` `AXLE.front` / `AXLE.rear`:
 - `axleMass` / `axleRollInertia` — currently unused (kinematic axle).
   Kept on the type for a future dynamic axle model.
 
-### Phase 2 — wire format + multiplayer reconcile (NOT YET DONE)
+### Phase 2 — wire format + multiplayer reconcile (DONE)
 
-The new model populates `VehicleState.wheels[].suspensionLength`
-correctly so remote vehicles render fine in current snapshots. But
-`AxleState` (rideY, rollAngle) is NOT on the wire, which means:
+The new model now ships axle DOFs on the wire so remote vehicles
+animate the flex pose and the local player reconciles axle state from
+the server.
 
-- [ ] Add `AxleSnap` to `packages/shared/src/types.ts` (`{ rideY, rollAngle }`)
-      and `axles?: [AxleSnap, AxleSnap]` to `VehicleState`. Optional so
-      old clients can still parse new snapshots.
-- [ ] `solidAxleVehicle.ts.getState()` populates `axles` from
-      `axleSnaps()`.
-- [ ] `solidAxleVehicle.ts.applyAxleSnaps()` already exists; wire it
-      into `Prediction.reconcile` in `packages/client/src/prediction.ts`
-      so client rebuilds axle state from authoritative snapshots
-      instead of replaying axle integration from zero each reconcile
-      (which would visibly bounce in flex pose).
-- [ ] Add a smoothed `axleVisualOffset` decay (mirror the existing
-      `visualOffset` for position) so reconcile doesn't pop the flex
-      pose at 30Hz. Cap at ±0.2 rad — beyond that, snap.
+- [x] `AxleSnapWire { rideY, rollAngle }` added to
+      `packages/shared/src/types.ts`; `axles?: [AxleSnapWire, AxleSnapWire]`
+      hangs off `VehicleState` (optional so legacy raycast snapshots
+      still parse).
+- [x] `SolidAxleVehicle.getState()` populates `axles` from the live
+      `axleSnaps()` values.
+- [x] `Prediction.reconcile` calls `applyAxleSnaps` on the snap and
+      replays the queue from there, so the local truck's flex pose
+      tracks the server.
+- [x] `axleVisualOffset` mirrors the existing position `visualOffset`:
+      pre-snap vs post-replay axle delta is captured, capped at
+      ±0.2 m / ±0.2 rad, and decays at 0.82/step (~80ms half-life).
+- [x] Wire round-trip is covered by
+      `server/__tests__/axle-wire.test.ts` (3 cases: getState matches
+      axleSnaps, JSON encode/decode preserves values, applyAxleSnaps
+      restores the pose end-to-end).
 
-Until this lands, single-player and multiplayer-with-only-the-local-
-player both work fine; the gap is multiplayer reconcile of the local
-player's *axle* state (chassis pose reconciles correctly already).
+### Phase 3 — visuals (DONE)
 
-### Phase 3 — visuals (NOT YET DONE)
+Wheels are now children of axle groups, so the rigid-beam articulation
+shows in the mesh: hit a rock with one wheel and the partner is
+visibly pulled with it, axle tilts, chassis can lean.
 
-Right now the wheels still look independent because `carMesh.ts` and
-`scene.ts` have not been updated to reflect the solid-axle structure.
-Physics is solid-axle but the mesh shows independent wheels.
-
-- [ ] `packages/client/src/carMesh.ts`: build axle groups
-      `axleGroup → [beam mesh + diff pumpkin + leftWheelGroup +
-      rightWheelGroup]`, beam as `CylinderGeometry` along chassis-X.
-      Expose `axles: [Group, Group]` on the `CarMesh` interface.
-- [ ] `packages/client/src/scene.ts`: pose axle group at
-      `(0, centerLocalY + rideY, centerLocalZ)` with rotation
-      `(0, 0, rollAngle)`. Wheels as children at `(±trackHalf, 0, 0)`.
-      Steering and spin still applied to the wheel mesh. Replace the
-      current `wp.y - susp - sink` per-wheel arithmetic. Move
-      `wheelSinkAt` to be axle-level (mud sinks the whole axle, not
-      one wheel).
-- [ ] Per-kind geometry differentiation in `vehicleGeom.ts`. Hilux
-      gets a longer wheelbase + softer rear ride for cargo carrying;
-      Patrol stays current values.
-- [ ] `packages/client/src/landmarks.ts:149` reads
-      `VEHICLE.wheelPositions` — switch to `restWheelPositions(kind)`
-      from `vehicleGeom.ts`.
+- [x] `packages/client/src/carMesh.ts` builds an axle group per axle
+      (`buildAxles`): black-painted beam (`CylinderGeometry` along
+      chassis-X), diff pumpkin in the middle, two wheel groups at
+      `(±trackHalf, 0, 0)` as children. Initial Y is
+      `centerLocalY - suspensionRestLength` so the rest pose puts
+      wheel centres at correct ground-clearance height. `CarMesh`
+      gained `axles: [Group, Group]`.
+- [x] `packages/client/src/scene.ts` `poseAxles()` sets each axle
+      group to `(0, centerLocalY - suspensionRestLength + rideY - sink,
+      centerLocalZ)` with rotation `(0, 0, rollAngle)`. Per-wheel
+      arithmetic is gone; wheels just receive steer/spin via local
+      rotation. Mud sink moved to the axle (`axleSinkAt`) so both
+      wheels of a beam axle drop into mud together.
+- [x] `vehicleGeom.ts` differentiates Hilux: rear axle 0.1m further
+      back, softer rideStiffness (75k vs Patrol's 90k), softer damping,
+      and a touch more articulation (0.55 rad vs 0.50). Patrol unchanged.
+- [x] `landmarks.ts` no longer reads `VEHICLE.wheelPositions`. The
+      parked Hilux just keeps its axle groups at rest pose; `buildAxles`
+      now positions wheels at the correct height with no extra logic.
 
 ### Phase 4 — cleanup (after Phase 3 has been live one release)
 

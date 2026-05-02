@@ -277,7 +277,7 @@ async function start(): Promise<void> {
     // the start-of-step and end-of-step body poses for smoothness.
     if (prediction) {
       const s = prediction.state(alpha);
-      scene.setLocalVehiclePose(s.position, s.rotation, s.wheels);
+      scene.setLocalVehiclePose(s.position, s.rotation, s.wheels, s.axles);
     }
 
     scene.render(now);

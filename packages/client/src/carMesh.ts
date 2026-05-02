@@ -9,11 +9,20 @@
 //            hardtop canopy, low-profile bullbar, no roof rack.
 
 import * as THREE from 'three';
-import { VEHICLE, type CarKind } from '@mydrunner/shared';
+import { Physics, VEHICLE, type CarKind } from '@mydrunner/shared';
 
 export interface CarMesh {
   group: THREE.Group;
+  /** [FL, FR, RL, RR]. Spin + steer apply here. Each wheel is a child
+   *  of its axle group (axles[0] for FL/FR, axles[1] for RL/RR), so
+   *  posing the axle moves both wheels together - that's the solid-axle
+   *  rigid-beam coupling. */
   wheels: THREE.Object3D[];
+  /** [front, rear] axle groups. Each is positioned at chassis-local
+   *  (0, centerLocalY + rideY, centerLocalZ) and rotated by rollAngle
+   *  about chassis-forward (local +Z). Wheel meshes are children at
+   *  (+/- trackHalf, 0, 0). */
+  axles: [THREE.Group, THREE.Group];
 }
 
 const PATROL_COLORS = [
@@ -57,10 +66,7 @@ function makeMaterials(bodyColor: number): Materials {
   };
 }
 
-function buildWheels(group: THREE.Group): THREE.Object3D[] {
-  const wheels: THREE.Object3D[] = [];
-  const r = VEHICLE.wheelRadius;
-  const w = VEHICLE.wheelWidth;
+function buildSingleWheel(r: number, w: number): THREE.Group {
   const tireGeo = new THREE.CylinderGeometry(r, r, w, 20);
   tireGeo.rotateZ(Math.PI / 2);
   const tireMat = new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness: 0.95 });
@@ -70,51 +76,108 @@ function buildWheels(group: THREE.Group): THREE.Object3D[] {
   const hubGeo = new THREE.CylinderGeometry(r * 0.18, r * 0.18, w + 0.04, 8);
   hubGeo.rotateZ(Math.PI / 2);
   const hubMat = new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.8 });
-  // Spokes + tread lugs make rotation visible. Without them the wheels
-  // are smooth cylinders and you can't tell which way they're spinning.
   const spokeGeo = new THREE.BoxGeometry(w + 0.005, r * 0.55, 0.05);
-  const spokeMat = rimMat;
   const treadGeo = new THREE.BoxGeometry(w * 0.85, 0.04, 0.08);
   const treadMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.95 });
-  for (let i = 0; i < 4; i++) {
-    const wheelGroup = new THREE.Group();
-    // YXZ rotation order so the renderer composes turn-then-roll correctly:
-    // rotation.y is applied AFTER rotation.x, meaning the wheel rolls around
-    // its own axle FIRST, then turns. With the default XYZ order, a spinning
-    // wheel that's also steered tumbles around the world X axis (visibly
-    // shaking when driving + turning).
-    wheelGroup.rotation.order = 'YXZ';
-    const tire = new THREE.Mesh(tireGeo, tireMat);
-    tire.castShadow = true;
-    wheelGroup.add(tire);
-    wheelGroup.add(new THREE.Mesh(rimGeo, rimMat));
-    wheelGroup.add(new THREE.Mesh(hubGeo, hubMat));
-    // Five spokes equally spaced. Spoke is a thin radial box centred on
-    // the axle, length r*0.55 along Y so it crosses the rim diameter.
-    const spokeCount = 5;
-    for (let s = 0; s < spokeCount; s++) {
-      const spoke = new THREE.Mesh(spokeGeo, spokeMat);
-      spoke.rotation.x = (s / spokeCount) * Math.PI * 2;
-      wheelGroup.add(spoke);
-    }
-    // Eight tread lugs around the tire circumference. Each lug sits at
-    // angle θ on the outer surface, position = (0, r*cos θ, r*sin θ),
-    // rotated around X by θ so it lies tangent to the tire.
-    const lugCount = 8;
-    for (let l = 0; l < lugCount; l++) {
-      const lug = new THREE.Mesh(treadGeo, treadMat);
-      const a = (l / lugCount) * Math.PI * 2;
-      lug.position.set(0, r * Math.cos(a) * 1.02, r * Math.sin(a) * 1.02);
-      lug.rotation.x = a;
-      wheelGroup.add(lug);
-    }
-    group.add(wheelGroup);
-    wheels.push(wheelGroup);
+
+  const wheelGroup = new THREE.Group();
+  // YXZ rotation order so the renderer composes turn-then-roll correctly:
+  // rotation.y is applied AFTER rotation.x, meaning the wheel rolls around
+  // its own axle FIRST, then turns. With the default XYZ order, a spinning
+  // wheel that's also steered tumbles around the world X axis (visibly
+  // shaking when driving + turning).
+  wheelGroup.rotation.order = 'YXZ';
+  const tire = new THREE.Mesh(tireGeo, tireMat);
+  tire.castShadow = true;
+  wheelGroup.add(tire);
+  wheelGroup.add(new THREE.Mesh(rimGeo, rimMat));
+  wheelGroup.add(new THREE.Mesh(hubGeo, hubMat));
+  const spokeCount = 5;
+  for (let s = 0; s < spokeCount; s++) {
+    const spoke = new THREE.Mesh(spokeGeo, rimMat);
+    spoke.rotation.x = (s / spokeCount) * Math.PI * 2;
+    wheelGroup.add(spoke);
   }
-  return wheels;
+  const lugCount = 8;
+  for (let l = 0; l < lugCount; l++) {
+    const lug = new THREE.Mesh(treadGeo, treadMat);
+    const a = (l / lugCount) * Math.PI * 2;
+    lug.position.set(0, r * Math.cos(a) * 1.02, r * Math.sin(a) * 1.02);
+    lug.rotation.x = a;
+    wheelGroup.add(lug);
+  }
+  return wheelGroup;
 }
 
-function buildLowerBodyAndFlares(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExtents, mats: Materials): void {
+/** Build the two solid-axle assemblies and attach them to the chassis
+ *  group. Each axle is a child Group containing a beam + diff pumpkin
+ *  + left wheel + right wheel. The axle group is the unit posed by
+ *  scene.ts each frame using rideY (vertical) and rollAngle (twist
+ *  about chassis-forward) - the rigid-beam articulation is the visual
+ *  signature of solid-axle 4x4s. Wheels are at fixed local +/- trackHalf
+ *  inside the axle group, so steering and spin still apply per-wheel
+ *  while the axle itself moves them as one unit. */
+function buildAxles(group: THREE.Group, kind: CarKind): {
+  axles: [THREE.Group, THREE.Group];
+  wheels: THREE.Object3D[];
+} {
+  const geom = Physics.geomFor(kind);
+  const axles: [THREE.Group, THREE.Group] = [new THREE.Group(), new THREE.Group()];
+  const wheels: THREE.Object3D[] = [];
+
+  const beamMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.85 });
+  const diffMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.75, metalness: 0.2 });
+
+  for (let aIdx = 0; aIdx < 2; aIdx++) {
+    const ag = aIdx === 0 ? geom.front : geom.rear;
+    const axle = axles[aIdx]!;
+    // Initial pose at rest. The axle BEAM sits at wheel-centre height in
+    // chassis frame, which is the chassis attachment (centerLocalY) minus
+    // the spring rest length. As the spring compresses (rideY > 0) the
+    // beam moves UP toward the attachment; that's what scene.ts applies
+    // each frame from the physics axle state.
+    axle.position.set(0, ag.centerLocalY - ag.suspensionRestLength, ag.centerLocalZ);
+
+    // Beam: thin cylinder along chassis-X. Slightly shorter than full
+    // track so the wheel hubs visually overlap the beam ends.
+    const beamLen = ag.trackHalf * 2 - 0.18;
+    const beamRad = 0.07;
+    const beamGeo = new THREE.CylinderGeometry(beamRad, beamRad, beamLen, 12);
+    beamGeo.rotateZ(Math.PI / 2);
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.castShadow = true;
+    axle.add(beam);
+
+    // Diff pumpkin: a stout box at the centre of the beam, slightly
+    // offset toward the chassis side that historically housed the diff
+    // (rear axle = forward of centre). Pure visual identifier.
+    const diffSize = aIdx === 0 ? { x: 0.34, y: 0.30, z: 0.34 } : { x: 0.36, y: 0.32, z: 0.36 };
+    const diffGeo = new THREE.BoxGeometry(diffSize.x, diffSize.y, diffSize.z);
+    const diff = new THREE.Mesh(diffGeo, diffMat);
+    diff.position.set(0, 0, aIdx === 0 ? 0 : 0.04);
+    diff.castShadow = true;
+    axle.add(diff);
+
+    // Two wheels at the beam ends.
+    for (let side = 0; side < 2; side++) {
+      const wheel = buildSingleWheel(geom.wheelRadius, geom.wheelWidth);
+      wheel.position.set(side === 0 ? -ag.trackHalf : +ag.trackHalf, 0, 0);
+      axle.add(wheel);
+      wheels.push(wheel);
+    }
+
+    group.add(axle);
+  }
+
+  return { axles, wheels };
+}
+
+function buildLowerBodyAndFlares(
+  group: THREE.Group,
+  ext: typeof VEHICLE.chassisHalfExtents,
+  mats: Materials,
+  kind: CarKind,
+): void {
   // Lower body: full chassis box.
   const lower = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 2, ext.y * 2, ext.z * 2), mats.body);
   lower.castShadow = true;
@@ -127,8 +190,10 @@ function buildLowerBodyAndFlares(group: THREE.Group, ext: typeof VEHICLE.chassis
   band.position.set(0, -ext.y + bandH / 2, 0);
   group.add(band);
 
-  // Wheel flares around each wheel position.
-  for (const wp of VEHICLE.wheelPositions) {
+  // Wheel flares around each wheel position. Driven from the per-kind
+  // axle geometry so flares track wheelbase changes (e.g. a longer
+  // Hilux puts its rear flares further back than a Patrol's).
+  for (const wp of Physics.restWheelPositions(kind)) {
     const flare = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 0.85), mats.trim);
     flare.position.set(Math.sign(wp.x) * (ext.x + 0.02), -ext.y + 0.1, wp.z);
     group.add(flare);
@@ -363,14 +428,14 @@ export function buildCarMesh(kind: CarKind, isLocal: boolean, idHash: number): C
   const palette = kind === 'hilux' ? HILUX_COLORS : PATROL_COLORS;
   const mats = makeMaterials(pickColor(palette, isLocal, idHash));
 
-  buildLowerBodyAndFlares(group, ext, mats);
+  buildLowerBodyAndFlares(group, ext, mats, kind);
   if (kind === 'hilux') {
     buildHiluxBody(group, ext, mats);
   } else {
     buildPatrolBody(group, ext, mats);
   }
-  const wheels = buildWheels(group);
-  return { group, wheels };
+  const { axles, wheels } = buildAxles(group, kind);
+  return { group, wheels, axles };
 }
 
 /** Hash a player id string to a stable small int for color selection. */
