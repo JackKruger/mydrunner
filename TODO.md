@@ -32,20 +32,192 @@ Tests: 22 shared + 18 server + 9 e2e = 49 green. Run `pnpm typecheck && pnpm tes
   ~zero RTT. Get two real clients connected to Railway and watch for
   reconcile pops, wheel jitter on remote vehicles, etc.
 
+## Solid-axle suspension overhaul (active)
+
+Working branch: `claude/suspension-overhaul-plan-qpjiX`. Mirrored to
+`claude/add-claude-documentation-b6LkY` (the deployment branch) after
+each commit. Original plan lives in
+`/root/.claude/plans/the-claude-review-documentation-tidy-pelican.md`
+(session-local, may not be present in a new session — the relevant
+state is captured below).
+
+### What's shipped
+
+- New `SolidAxleVehicle` class in `packages/shared/src/physics/`:
+  - `axle.ts` — kinematic axle (rideY tracks avgComp; rollAngle tracks
+    terrain slope, clamped at maxArticulation; surplus past cap dumps
+    torque on chassis).
+  - `wheelDynamics.ts` — pure wheel angVel integrator (drive + brake +
+    rolling resistance + ground-reaction torque).
+  - `solidAxleVehicle.ts` — chassis body + 2 axles + 4 wheels. Per-tick:
+    reset Rapier force accumulators (Rapier accumulates across `step()`
+    until reset — this was a real bug), capture chassis pose ONCE,
+    raycast wheel-ends from chassis-fixed positions, apply per-wheel
+    ride forces (NOT at axle center — applying at wheel-ends is what
+    gives roll-restoring torque), apply chassis anti-roll bar, apply
+    tire long+lat forces at contact patches, integrate wheel spins.
+  - `vehicleGeom.ts` — per-CarKind axle geometry (Patrol = Hilux for
+    now; differentiation deferred to Phase 3).
+  - `vehicleTypes.ts` — `VehicleLike` interface that both legacy
+    `Vehicle` and `SolidAxleVehicle` satisfy. `World.spawnVehicle`
+    returns it.
+- `VEHICLE_MODEL` flag in `constants.ts` controls which model
+  `World.spawnVehicle` instantiates. **Currently set to `'solidAxle'`
+  on both branches** — the new model is live in production. Flipping
+  back to `'raycast'` is a one-line revert if the new model misbehaves.
+- Tests: `packages/shared/src/__tests__/axle.test.ts` (12 pure-math
+  unit tests) + `solidAxleVehicle.test.ts` (8 Rapier integration tests
+  including settle, drive forward, directional steering, two-worlds
+  determinism, axle-snap round-trip, rollover-stability regression).
+  All 53 shared + server tests green at last commit.
+
+### Tunables exposed for playtest (no rebuild needed for first three)
+
+Hardcoded near the top of `packages/shared/src/physics/solidAxleVehicle.ts`:
+- `LONG_FRICTION` (1.0) — effective tire friction coefficient. Bigger
+  = more grip, faster acceleration, sharper braking.
+- `ANTI_ROLL_STIFFNESS` (120000 N·m/rad) — sway bar. Bigger = flatter
+  cornering. Goes against rock-crawl articulation feel — too stiff and
+  the chassis stays level when one axle articulates over a rock.
+- `ANTI_ROLL_DAMPING` (14000 N·m·s/rad) — bigger = roll motion settles
+  faster, less bounce on uneven terrain. ~70% critical for I_z=900.
+
+In `constants.ts` `AXLE.front` / `AXLE.rear`:
+- `rideStiffness` (80k front, 90k rear) — vertical spring rate per axle.
+- `rideDamping` (12k / 13k) — ~75% critical for the chassis-spring
+  system, so bounce settles in roughly one cycle.
+- `rollStiffness` (35k front / 28k rear) — torque applied to chassis
+  when axle articulation hits its cap.
+- `maxArticulation` (0.45 / 0.50 rad ≈ 26° / 28°) — how far the axle
+  can flex before dumping load into the chassis.
+- `axleMass` / `axleRollInertia` — currently unused (kinematic axle).
+  Kept on the type for a future dynamic axle model.
+
+### Phase 2 — wire format + multiplayer reconcile (NOT YET DONE)
+
+The new model populates `VehicleState.wheels[].suspensionLength`
+correctly so remote vehicles render fine in current snapshots. But
+`AxleState` (rideY, rollAngle) is NOT on the wire, which means:
+
+- [ ] Add `AxleSnap` to `packages/shared/src/types.ts` (`{ rideY, rollAngle }`)
+      and `axles?: [AxleSnap, AxleSnap]` to `VehicleState`. Optional so
+      old clients can still parse new snapshots.
+- [ ] `solidAxleVehicle.ts.getState()` populates `axles` from
+      `axleSnaps()`.
+- [ ] `solidAxleVehicle.ts.applyAxleSnaps()` already exists; wire it
+      into `Prediction.reconcile` in `packages/client/src/prediction.ts`
+      so client rebuilds axle state from authoritative snapshots
+      instead of replaying axle integration from zero each reconcile
+      (which would visibly bounce in flex pose).
+- [ ] Add a smoothed `axleVisualOffset` decay (mirror the existing
+      `visualOffset` for position) so reconcile doesn't pop the flex
+      pose at 30Hz. Cap at ±0.2 rad — beyond that, snap.
+
+Until this lands, single-player and multiplayer-with-only-the-local-
+player both work fine; the gap is multiplayer reconcile of the local
+player's *axle* state (chassis pose reconciles correctly already).
+
+### Phase 3 — visuals (NOT YET DONE)
+
+Right now the wheels still look independent because `carMesh.ts` and
+`scene.ts` have not been updated to reflect the solid-axle structure.
+Physics is solid-axle but the mesh shows independent wheels.
+
+- [ ] `packages/client/src/carMesh.ts`: build axle groups
+      `axleGroup → [beam mesh + diff pumpkin + leftWheelGroup +
+      rightWheelGroup]`, beam as `CylinderGeometry` along chassis-X.
+      Expose `axles: [Group, Group]` on the `CarMesh` interface.
+- [ ] `packages/client/src/scene.ts`: pose axle group at
+      `(0, centerLocalY + rideY, centerLocalZ)` with rotation
+      `(0, 0, rollAngle)`. Wheels as children at `(±trackHalf, 0, 0)`.
+      Steering and spin still applied to the wheel mesh. Replace the
+      current `wp.y - susp - sink` per-wheel arithmetic. Move
+      `wheelSinkAt` to be axle-level (mud sinks the whole axle, not
+      one wheel).
+- [ ] Per-kind geometry differentiation in `vehicleGeom.ts`. Hilux
+      gets a longer wheelbase + softer rear ride for cargo carrying;
+      Patrol stays current values.
+- [ ] `packages/client/src/landmarks.ts:149` reads
+      `VEHICLE.wheelPositions` — switch to `restWheelPositions(kind)`
+      from `vehicleGeom.ts`.
+
+### Phase 4 — cleanup (after Phase 3 has been live one release)
+
+- [ ] Delete `packages/shared/src/physics/vehicle.ts` (legacy raycast
+      model).
+- [ ] Rename `solidAxleVehicle.ts` → `vehicle.ts`, update imports.
+- [ ] Strip `VEHICLE_MODEL` flag from `constants.ts` and the branch
+      in `World.spawnVehicle`.
+- [ ] Remove legacy `Tuning` fields (`suspensionStiffness`,
+      `suspensionDamping`, `suspensionCompression`, `maxSuspensionForce`,
+      `maxSuspensionTravel`) from `tuning.ts`.
+
+### Open follow-ups discovered during playtest
+
+- [ ] **`LONG_FRICTION` magic number** — currently hardcoded 1.0 at the
+      top of `solidAxleVehicle.ts`. Move to `constants.ts` once tuning
+      stabilises, exposed via `TUNING` so the debug panel can tweak
+      it.
+- [ ] **A/B characterisation harness** — `shared/__tests__/modelCompare.test.ts`
+      that drives both legacy and solid-axle models through identical
+      input sequences (settle → throttle → straight 5s → brake → tight
+      circle 5s) on the same terrain and asserts top-speed,
+      stopping-distance, and turn-radius all within 30% of legacy.
+      Catches regressions when tuning the new model.
+- [ ] **Diff-lock UI hookup** — `TUNING.diffLockFront` / `diffLockRear`
+      exist but no key bind. Consider Q for front lock, E for rear (or
+      a combined lockall). Useful for rock crawling demos.
+- [ ] **Live debug overlay** — print per-axle rideY/rollAngle each
+      frame next to the existing surface HUD so playtest tuning is
+      data-driven. Hook into the existing debug-user code path
+      (`isDebugUser('jack')` in `main.ts`).
+- [ ] **Lateral force model** — currently `F_lat = clamp(-latStiff*latV,
+      ±latMax)`. Linear in slip speed, capped at friction circle. A
+      slip-angle-based curve (cornering stiffness up to peak then
+      falloff) would feel more like a real tyre. Couples with the P0
+      "slip-angle component" item below.
+- [ ] **Axle inertia model** — the kinematic axle model snaps
+      `rideY = avgComp` instantaneously each tick. Real axles have
+      mass; the unsprung-mass "thump" over washboards is missing.
+      Either (a) replace with a sub-stepped dynamic integrator using
+      the real `axleMass` field, or (b) low-pass `rideY` toward the
+      target with a short tau (~30ms). (a) is more correct, (b) is
+      simpler.
+- [ ] **CoG and inertia tuning** — solid-axle physics behaves
+      differently than the legacy raycast model under hard cornering.
+      Current CoM at `-0.6 * chassisHalfY` (matching legacy) may not
+      be the sweet spot for the new force profile. Try `-0.85` if
+      rollover still feels too easy after the anti-roll bar.
+
+### Resuming this work in a new session
+
+1. `git checkout claude/suspension-overhaul-plan-qpjiX && pnpm install`.
+2. Read `packages/shared/src/physics/solidAxleVehicle.ts` end-to-end
+   and the comment at the top — it documents the determinism rules
+   and the per-wheel-end ride force decision.
+3. `pnpm test` — should be 53 green. If anything's failing, that's the
+   starting point.
+4. `pnpm dev` and drive — feel for tipiness, spongy ride, weird
+   articulation. Tune the constants block at the top of
+   `solidAxleVehicle.ts`.
+5. Pick from Phase 2 / Phase 3 / open-follow-ups above. Phase 2
+   (wire format) is the next logical step before Phase 3 visuals,
+   because the visuals depend on `AxleSnap` being on the snapshot
+   for remote players to render flex correctly.
+
 ## Prioritized next work
 
 ### P0 — physics feel polish (small, high payoff)
-- [ ] Slip-angle component to tire grip. Current `tire.ts` only models
-      longitudinal slip ratio. Lateral slip (sideways slide) would make
-      under/oversteer feel right - and would make "drifting in mud"
-      actually a thing.
+- [ ] Slip-angle component to tire grip. The new solid-axle model has a
+      simple linear+clamp lateral force; a proper slip-angle curve
+      (peak at ~6-10 deg, falls off past) would make under/oversteer
+      feel right and let "drifting in mud" be a thing.
 - [ ] Better engine braking on downhills - currently coasts faster than
       it should. Tune `ENGINE.engineBrakeCoef` or sample from chassis
       velocity not just RPM.
-- [ ] Anti-roll bar emulation - cross-couple the suspension forces of
-      paired wheels (FL+FR, RL+RR) so cornering doesn't lift the
-      inside wheels as easily. Reduces tippy feel without making the
-      car immune to rollover on rough ground.
+- [x] ~~Anti-roll bar emulation~~ — done as part of the solid-axle
+      overhaul (`ANTI_ROLL_STIFFNESS` / `ANTI_ROLL_DAMPING` at the top
+      of `solidAxleVehicle.ts`). Tunable from playtest feel.
 
 ### P1 — make the world feel less empty
 - [ ] Skybox / cloud layer (procedural, no external assets). Sky is
