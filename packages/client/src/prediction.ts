@@ -52,6 +52,13 @@ export class Prediction {
     { rideY: 0, rollAngle: 0 },
     { rideY: 0, rollAngle: 0 },
   ];
+  /** Last alpha value passed to state(). Reconcile uses this to compute
+   *  a visualOffset that keeps the actually-rendered pose continuous
+   *  across the snap, independent of where in the inter-step interval
+   *  the renderer is. Without this the offset only matches the alpha=1
+   *  endpoint, leaving a visible jump proportional to (1-alpha) and the
+   *  velocity change - the source of "stutter on snapshot tick" pops. */
+  private lastAlpha = 1;
   /** Body pose at the start of the most recent physics step. Together
    *  with the body's current pose, lets state(alpha) return an
    *  interpolated state - smooth motion when the rAF accumulator runs
@@ -144,7 +151,22 @@ export class Prediction {
     /* intentionally empty */
   }
 
-  /** Reconcile against an authoritative snapshot for the local player. */
+  /** Reconcile against an authoritative snapshot for the local player.
+   *
+   *  Visual continuity strategy: the rendered pose at the moment of
+   *  reconcile is `lerp(prev, body, lastAlpha) + visualOffset`. Snapping
+   *  body and applying server axle state changes the lerp endpoints
+   *  underneath us, which would visibly pop the truck UNLESS we set the
+   *  new visualOffset to exactly `oldRendered - newLerp(prev, body, a)`.
+   *  Then the first frame after reconcile renders the same pose as the
+   *  last frame before; the offset decays toward zero in pushAndStep so
+   *  the truck slides into the corrected trajectory over ~5 ticks
+   *  (~80 ms half-life) instead of jumping.
+   *
+   *  This replaces the older `offset += (oldEnd - newEnd)` formula,
+   *  which only matched the alpha=1 endpoint and left a residual jump
+   *  proportional to (1-alpha) and to the velocity change. That residual
+   *  is the "stutter on every snapshot" the user reported. */
   reconcile(snap: WorldSnapshot, myId: string): void {
     const me = snap.players.find((p) => p.id === myId);
     if (!me) return;
@@ -152,30 +174,23 @@ export class Prediction {
     // Drop acked inputs.
     this.queue = this.queue.filter((q) => q.input.seq > me.lastAckSeq);
 
-    // Capture the predicted pose BEFORE we snap so we can smooth the
-    // visual jump. After replaying queued inputs, we'll compare
-    // post-replay pose to pre-snap pose and add the difference to the
-    // visual offset. Decay in pushAndStep then fades it out.
-    const before = this.vehicle.body.translation();
-    const beforeX = before.x, beforeY = before.y, beforeZ = before.z;
+    const a = this.lastAlpha;
     const supportsAxles = this.vehicle.axleSnaps && this.vehicle.applyAxleSnaps;
-    const beforeAxles = supportsAxles ? this.vehicle.axleSnaps!() : null;
 
-    // Snap to authoritative state. Includes the smoothed steering angle:
-    // without this, replay would double-step currentSteer (since
-    // prediction had already advanced it for each unacked input), making
-    // the wheel visibly jitter on every snapshot.
+    // 1. Capture the actually-rendered visual pose using the current
+    //    lerp endpoints + offset. This is what was on screen the last
+    //    frame; the new offset must match it to keep continuity.
+    const renderedPos = this.computeRenderedPos(a);
+    const renderedAxles = supportsAxles ? this.computeRenderedAxles(a) : null;
+
+    // 2. Snap to authoritative state. Includes the smoothed steering
+    //    angle so replay doesn't double-step currentSteer.
     const v = me.vehicle;
     this.vehicle.body.setTranslation(v.position, true);
     this.vehicle.body.setRotation(v.rotation, true);
     this.vehicle.body.setLinvel(v.linVel, true);
     this.vehicle.body.setAngvel(v.angVel, true);
     if (v.wheels[0]) this.vehicle.setSteerAngle(v.wheels[0].steer);
-    // Solid-axle vehicles also reconcile their per-axle DOFs. Without
-    // this the replay would re-integrate the axle from the previous
-    // tick's predicted state, so the local truck's flex pose would drift
-    // off the server's authoritative state until the next cell-aligned
-    // perturbation snapped them back together.
     if (supportsAxles && v.axles) {
       this.vehicle.applyAxleSnaps!([
         { rideY: v.axles[0].rideY, rollAngle: v.axles[0].rollAngle },
@@ -183,43 +198,96 @@ export class Prediction {
       ]);
     }
 
-    // Replay remaining queue to fast-forward to prediction time.
+    // 3. Capture the post-snap state into prev (single capture; the
+    //    replay loop below does NOT call capturePrev again). With prev
+    //    fixed at the post-snap pose, lerp(prev, body, a) covers the
+    //    entire replay span, which is what we want for a smooth visual
+    //    sweep into the new trajectory.
+    this.capturePrev();
+
+    // 4. Replay queued inputs to fast-forward body to "now".
     for (const q of this.queue) {
-      this.capturePrev();
       this.vehicle.setInput(q.input);
       this.world.step();
     }
 
-    // Compare post-replay pose to the pre-snap predicted pose. Anything
-    // we couldn't fix by replay shows up as a jump - bake it into the
-    // visual offset so the rendered car drifts smoothly to the new
-    // pose instead of popping. Cap to ±1.5m so a catastrophic
-    // divergence still snaps visibly (better to teleport than fly).
-    const after = this.vehicle.body.translation();
-    const dx = beforeX - after.x;
-    const dy = beforeY - after.y;
-    const dz = beforeZ - after.z;
-    const CAP = 1.5;
-    this.visualOffset.x = Math.max(-CAP, Math.min(CAP, this.visualOffset.x + dx));
-    this.visualOffset.y = Math.max(-CAP, Math.min(CAP, this.visualOffset.y + dy));
-    this.visualOffset.z = Math.max(-CAP, Math.min(CAP, this.visualOffset.z + dz));
+    // 5. Compute the new visual pose with NO offset and at the same
+    //    alpha. The offset that makes new render == old render is
+    //    exactly (oldRendered - newRenderedNoOffset).
+    const newPosNoOffset = this.computeLerpedPos(a);
+    const dxCap = 1.5;
+    this.visualOffset.x = clampAbs(renderedPos.x - newPosNoOffset.x, dxCap);
+    this.visualOffset.y = clampAbs(renderedPos.y - newPosNoOffset.y, dxCap);
+    this.visualOffset.z = clampAbs(renderedPos.z - newPosNoOffset.z, dxCap);
 
-    // Same idea for axle DOFs. Tighter caps because axle articulation
-    // is a small-amplitude effect; if we'd diverged more than +/- 0.2 m
-    // in rideY or rollAngle radians we're better off snapping than
-    // smoothing for that long.
-    if (supportsAxles && beforeAxles) {
-      const afterAxles = this.vehicle.axleSnaps!();
+    if (supportsAxles && renderedAxles) {
+      const newAxlesNoOffset = this.computeLerpedAxles(a);
       const AX_CAP_RIDE = 0.2;
       const AX_CAP_ROLL = 0.2;
       for (let i = 0; i < 2; i++) {
         const off = this.axleVisualOffset[i]!;
-        const dRide = beforeAxles[i]!.rideY - afterAxles[i]!.rideY;
-        const dRoll = beforeAxles[i]!.rollAngle - afterAxles[i]!.rollAngle;
-        off.rideY = Math.max(-AX_CAP_RIDE, Math.min(AX_CAP_RIDE, off.rideY + dRide));
-        off.rollAngle = Math.max(-AX_CAP_ROLL, Math.min(AX_CAP_ROLL, off.rollAngle + dRoll));
+        off.rideY = clampAbs(renderedAxles[i]!.rideY - newAxlesNoOffset[i]!.rideY, AX_CAP_RIDE);
+        off.rollAngle = clampAbs(renderedAxles[i]!.rollAngle - newAxlesNoOffset[i]!.rollAngle, AX_CAP_ROLL);
       }
     }
+  }
+
+  /** Helpers below mirror the math in state(), so reconcile can compute
+   *  what state() would return at a given alpha both before and after
+   *  the snap. Kept private to avoid expanding the public surface. */
+  private computeLerpedPos(a: number): { x: number; y: number; z: number } {
+    const t = this.vehicle.body.translation();
+    const p = this.prev.pos;
+    return {
+      x: p.x + (t.x - p.x) * a,
+      y: p.y + (t.y - p.y) * a,
+      z: p.z + (t.z - p.z) * a,
+    };
+  }
+
+  private computeRenderedPos(a: number): { x: number; y: number; z: number } {
+    const lerped = this.computeLerpedPos(a);
+    return {
+      x: lerped.x + this.visualOffset.x,
+      y: lerped.y + this.visualOffset.y,
+      z: lerped.z + this.visualOffset.z,
+    };
+  }
+
+  private computeLerpedAxles(a: number): [
+    { rideY: number; rollAngle: number },
+    { rideY: number; rollAngle: number },
+  ] {
+    const cur = this.vehicle.axleSnaps ? this.vehicle.axleSnaps() : [
+      { rideY: 0, rollAngle: 0 },
+      { rideY: 0, rollAngle: 0 },
+    ] as [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }];
+    const out: [
+      { rideY: number; rollAngle: number },
+      { rideY: number; rollAngle: number },
+    ] = [
+      { rideY: 0, rollAngle: 0 },
+      { rideY: 0, rollAngle: 0 },
+    ];
+    for (let i = 0; i < 2; i++) {
+      const c = cur[i]!;
+      const p = this.prev.axles[i]!;
+      out[i]!.rideY = p.rideY + (c.rideY - p.rideY) * a;
+      out[i]!.rollAngle = p.rollAngle + (c.rollAngle - p.rollAngle) * a;
+    }
+    return out;
+  }
+
+  private computeRenderedAxles(a: number): [
+    { rideY: number; rollAngle: number },
+    { rideY: number; rollAngle: number },
+  ] {
+    const lerped = this.computeLerpedAxles(a);
+    for (let i = 0; i < 2; i++) {
+      lerped[i]!.rideY += this.axleVisualOffset[i]!.rideY;
+      lerped[i]!.rollAngle += this.axleVisualOffset[i]!.rollAngle;
+    }
+    return lerped;
   }
 
   /** Read the predicted vehicle state for rendering. `alpha` in [0, 1]
@@ -239,6 +307,7 @@ export class Prediction {
   } {
     const s = this.vehicle.getState();
     const a = Math.max(0, Math.min(1, alpha));
+    this.lastAlpha = a;
     const p = this.prev.pos;
     const pr = this.prev.rot;
     // Normalised lerp for rotation: cheap, fine for the small per-step
@@ -292,4 +361,8 @@ export class Prediction {
   dispose(): void {
     this.world.dispose();
   }
+}
+
+function clampAbs(v: number, cap: number): number {
+  return v < -cap ? -cap : v > cap ? cap : v;
 }
