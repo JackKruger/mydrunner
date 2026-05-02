@@ -310,17 +310,18 @@ export class SolidAxleVehicle implements VehicleLike {
     //     the chassis's world-roll angle about its forward axis, plus a
     //     velocity damping term.
     //
-    //     world-roll proxy: chassis-up dotted with chassis-right gives
-    //     ~sin(roll) for small angles - both vectors are world-frame and
-    //     orthogonal at zero roll, so their dot product is zero only
-    //     when the chassis is upright relative to its yaw heading.
+    //     Roll proxy: chassis-right's vertical (world-y) component.
+    //     With chassis upright that's zero; rolled right by alpha (right
+    //     side up) it's sin(alpha); independent of yaw and pitch. The
+    //     OLD formula was up.dot(right), which is identically zero for
+    //     any rotation - up and right are chassis-frame basis vectors
+    //     and stay orthogonal under any rigid rotation - so the spring
+    //     term was always zero and only the damper was firing. Body
+    //     roll under cornering had no restoring force, only velocity
+    //     decay, which read as the body being unable to settle while
+    //     wheels were loading the chassis.
     {
-      // chassisUp dotted with chassisRight gives sin(rollAngle) for the
-      // chassis's world-frame roll about its own forward axis. Both
-      // vectors are world-frame and orthogonal when the chassis is
-      // upright (relative to its yaw heading), so this is zero at rest
-      // and grows linearly with roll for small angles.
-      const rollSin = up.x * right.x + up.y * right.y + up.z * right.z;
+      const rollSin = right.y;
       const rollVel = av.x * fwd.x + av.y * fwd.y + av.z * fwd.z;
       const tq = -ANTI_ROLL_STIFFNESS * rollSin - ANTI_ROLL_DAMPING * rollVel;
       this.body.addTorque(
