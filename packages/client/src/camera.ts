@@ -78,9 +78,11 @@ export class ChaseCamera {
     this.dragging = false;
   }
 
-  /** Soft-track a chassis pose. Position is lerped; yaw uses an
-   *  under-damped spring (overshoots a touch through corners); pitch is
-   *  lerped (we don't want overshoot here, that would be queasy). */
+  /** Soft-track a chassis pose. Position snaps to the chassis (the
+   *  caller passes the prediction-lerped pose, which is already smooth);
+   *  yaw uses an under-damped spring (overshoots a touch through
+   *  corners); pitch is lerped (we don't want overshoot here, that
+   *  would be queasy). */
   follow(
     pos: { x: number; y: number; z: number },
     rot: { x: number; y: number; z: number; w: number },
@@ -88,14 +90,18 @@ export class ChaseCamera {
     const nowMs = performance.now();
     const dt = this.lastUpdateMs ? Math.min(0.05, (nowMs - this.lastUpdateMs) / 1000) : 1 / 60;
     this.lastUpdateMs = nowMs;
-    // dt-aware smoothing on the camera target. The fixed-0.4-per-frame
-    // version was frame-rate dependent: at variable fps the chassis
-    // micro-bobs would translate into visible camera bounce. Now uses
-    // 1 - exp(-rate * dt) so the smoothing constant is the same in
-    // real time regardless of how often this is called.
-    const POS_RATE = 24; // half-life ~29ms
-    const tPos = 1 - Math.exp(-POS_RATE * dt);
-    this.target.lerp(_vec.set(pos.x, pos.y, pos.z), tPos);
+    // Position: snap to the chassis pose. Earlier this was a 29 ms
+    // half-life lerp ("Tracks position with a light lerp so chassis
+    // wobble doesn't get into the camera") - but the prediction layer
+    // now already alpha-lerps between physics-tick body poses and adds
+    // a decaying reconcile offset, so the pose handed to follow() is
+    // already smooth. The extra lerp wasn't filtering noise; it was
+    // adding follow lag, which read as the truck stuttering in screen
+    // space at ride-spring frequencies while the world (locked to the
+    // smoothed camera) read as smooth. Snapping here makes the chassis
+    // stable in screen space; only the camera-induced world parallax
+    // captures the chassis bob, which is the right place for it.
+    this.target.set(pos.x, pos.y, pos.z);
     // Forward vector (local +Z) rotated by the chassis quaternion.
     const fX = 2 * (rot.x * rot.z + rot.w * rot.y);
     const fY = 2 * (rot.y * rot.z - rot.w * rot.x);
@@ -217,4 +223,3 @@ export class ChaseCamera {
 // Reused scratch vectors so apply() doesn't allocate per frame.
 const _desired = new THREE.Vector3();
 const _lookTarget = new THREE.Vector3();
-const _vec = new THREE.Vector3();
