@@ -136,7 +136,27 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
   const rng = mulberry32(Math.round(mtn.x) * 1000 + Math.round(mtn.z) * 7 + 42);
   const segments = getHillClimbSegments(mtn);
 
-  // (a) Trail-edge corridor: anchor rocks every ~9 m on each side of each segment.
+  const minDistToTrail = (x: number, z: number): number => {
+    let d = Infinity;
+    for (const seg of segments) d = Math.min(d, pointToSegmentDist(x, z, seg.ax, seg.az, seg.bx, seg.bz));
+    return d;
+  };
+
+  const tryRock = (cx: number, cz: number, size: number, trailClear: number): boolean => {
+    const idx = worldToTerrainIndex(terrain, cx, cz);
+    if (idx < 0) return false;
+    const surf = terrain.surfaces[idx];
+    if (surf === Surface.Road || surf === Surface.Concrete) return false;
+    if (minDistToTrail(cx, cz) < trailClear) return false;
+    const cy = terrain.heights[idx] ?? 0;
+    out.push({ kind: 'rock', x: cx, y: cy, z: cz, size, height: 0, yaw: rng() * Math.PI });
+    return true;
+  };
+
+  // (a) Trail-edge corridor: denser anchors (~5 m spacing), closer to the trail
+  //     (4–7 m vs the old 5.5–9 m), bimodal sizes so large boulders mix with
+  //     small pebbles instead of everything being a uniform medium rock.
+  //     Large anchors scatter 2–5 satellite pebbles around them.
   for (const seg of segments) {
     const dx = seg.bx - seg.ax;
     const dz = seg.bz - seg.az;
@@ -144,38 +164,40 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
     if (len < 1) continue;
     const ux = dx / len;
     const uz = dz / len;
-    const px = -uz; // perpendicular
+    const px = -uz;
     const pz = ux;
-    const steps = Math.max(1, Math.floor(len / 9));
+    const steps = Math.max(1, Math.floor(len / 5)); // was /9
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const cx0 = seg.ax + t * dx;
       const cz0 = seg.az + t * dz;
       for (const side of [-1, 1] as const) {
-        const offset = 5.5 + rng() * 3.5; // 5.5–9 m from trail centre
-        const jx = (rng() - 0.5) * 2.5;
-        const jz = (rng() - 0.5) * 2.5;
+        const offset = 4.0 + rng() * 3.0; // 4–7 m (was 5.5–9)
+        const jx = (rng() - 0.5) * 3.0;
+        const jz = (rng() - 0.5) * 3.0;
         const cx = cx0 + px * side * offset + jx;
         const cz = cz0 + pz * side * offset + jz;
-        const idx = worldToTerrainIndex(terrain, cx, cz);
-        if (idx < 0) continue;
-        const surf = terrain.surfaces[idx];
-        if (surf === Surface.Road || surf === Surface.Concrete) continue;
-        const cy = terrain.heights[idx] ?? 0;
-        out.push({
-          kind: 'rock',
-          x: cx, y: cy, z: cz,
-          size: 1.0 + rng() * 1.4,
-          height: 0,
-          yaw: rng() * Math.PI,
-        });
+        const isLarge = rng() > 0.45;
+        const size = isLarge ? 1.6 + rng() * 2.0 : 0.25 + rng() * 0.65;
+        const placed = tryRock(cx, cz, size, HILL_CLIMB_PATH_HALF_WIDTH);
+        if (!placed) continue;
+        if (isLarge && rng() > 0.3) {
+          const numSat = 2 + Math.floor(rng() * 4);
+          for (let s = 0; s < numSat; s++) {
+            const angle = rng() * Math.PI * 2;
+            const dist = 0.8 + rng() * 2.5;
+            tryRock(cx + Math.cos(angle) * dist, cz + Math.sin(angle) * dist, 0.15 + rng() * 0.55, HILL_CLIMB_PATH_HALF_WIDTH);
+          }
+        }
       }
     }
   }
 
-  // (b) Dense scatter across the rest of the mountain face.
-  // 16×16 grid spanning sigma*2.2 around the summit; skip trail corridor.
-  const gridN = 16;
+  // (b) Dense scatter across the mountain face — denser grid (22×22 vs 16×16),
+  //     rocky down to 3 m elevation (was 8 m) so the lower slopes look broken up,
+  //     three-band size distribution: pebbles / mid rocks / large boulders.
+  //     Large boulders anchor a rockfall cluster of small debris.
+  const gridN = 22;
   const span = mtn.sigma * 2.2;
   const cell = span / gridN;
   for (let gi = 0; gi < gridN; gi++) {
@@ -188,22 +210,30 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
       const idx = worldToTerrainIndex(terrain, cx, cz);
       if (idx < 0) continue;
       const cy = terrain.heights[idx] ?? 0;
-      if (cy < 8) continue; // only rocky above 8 m elevation
+      if (cy < 3) continue; // was 8
       const surf = terrain.surfaces[idx];
       if (surf === Surface.Road || surf === Surface.Concrete) continue;
-      // Stay clear of the carved trail
-      let minTrail = Infinity;
-      for (const seg of segments) {
-        minTrail = Math.min(minTrail, pointToSegmentDist(cx, cz, seg.ax, seg.az, seg.bx, seg.bz));
+      if (minDistToTrail(cx, cz) < HILL_CLIMB_PATH_HALF_WIDTH + 4) continue;
+      const roll = rng();
+      const size = roll < 0.35 ? 0.15 + rng() * 0.5   // pebbles
+                 : roll < 0.75 ? 0.65 + rng() * 1.4    // mid rocks
+                 :               2.2 + rng() * 1.6;    // large boulders
+      out.push({ kind: 'rock', x: cx, y: cy, z: cz, size, height: 0, yaw: rng() * Math.PI });
+      if (size > 2.5 && rng() > 0.45) {
+        const numSat = 3 + Math.floor(rng() * 5);
+        for (let s = 0; s < numSat; s++) {
+          const angle = rng() * Math.PI * 2;
+          const dist = 1.2 + rng() * 3.5;
+          const sx = cx + Math.cos(angle) * dist;
+          const sz = cz + Math.sin(angle) * dist;
+          const sidx = worldToTerrainIndex(terrain, sx, sz);
+          if (sidx < 0) continue;
+          const ssurf = terrain.surfaces[sidx];
+          if (ssurf === Surface.Road || ssurf === Surface.Concrete) continue;
+          if (minDistToTrail(sx, sz) < HILL_CLIMB_PATH_HALF_WIDTH + 2) continue;
+          out.push({ kind: 'rock', x: sx, y: terrain.heights[sidx] ?? 0, z: sz, size: 0.15 + rng() * 0.55, height: 0, yaw: rng() * Math.PI });
+        }
       }
-      if (minTrail < HILL_CLIMB_PATH_HALF_WIDTH + 4) continue;
-      out.push({
-        kind: 'rock',
-        x: cx, y: cy, z: cz,
-        size: 0.5 + rng() * 1.8,
-        height: 0,
-        yaw: rng() * Math.PI,
-      });
     }
   }
 
