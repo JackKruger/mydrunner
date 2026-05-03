@@ -77,7 +77,10 @@ function buildSingleWheel(r: number, w: number): THREE.Group {
   hubGeo.rotateZ(Math.PI / 2);
   const hubMat = new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.8 });
   const spokeGeo = new THREE.BoxGeometry(w + 0.005, r * 0.55, 0.05);
-  const treadGeo = new THREE.BoxGeometry(w * 0.85, 0.04, 0.08);
+  // 0.02m radial height keeps lugs visible but avoids digging 2.8cm into
+  // the visual terrain at each contact (the old 0.04m protrusion caused
+  // 8 visible ground-penetration bumps per wheel revolution).
+  const treadGeo = new THREE.BoxGeometry(w * 0.85, 0.02, 0.07);
   const treadMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.95 });
 
   const wheelGroup = new THREE.Group();
@@ -102,7 +105,7 @@ function buildSingleWheel(r: number, w: number): THREE.Group {
   for (let l = 0; l < lugCount; l++) {
     const lug = new THREE.Mesh(treadGeo, treadMat);
     const a = (l / lugCount) * Math.PI * 2;
-    lug.position.set(0, r * Math.cos(a) * 1.02, r * Math.sin(a) * 1.02);
+    lug.position.set(0, r * Math.cos(a) * 1.01, r * Math.sin(a) * 1.01);
     lug.rotation.x = a;
     wheelGroup.add(lug);
   }

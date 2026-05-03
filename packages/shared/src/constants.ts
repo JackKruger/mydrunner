@@ -164,9 +164,11 @@ export const AXLE = {
     droopMax: 0.32,
     bumpMax: 0.20,
     rideStiffness: 90_000,
-    // Sized to match the front for a near-critical chassis vertical
-    // bob mode. See front.rideDamping comment for the math.
-    rideDamping: 17_000,
+    // Matched to front's overdamped ratio (28k / c_crit_front ≈ 1.8×) so
+    // both ends have the same damping ratio. Mismatched ratios excited a
+    // sustained pitch oscillation that made the wheel tread lugs appear to
+    // spin even when stationary. c_crit_rear ≈ 16,400, so 1.8× ≈ 29,500.
+    rideDamping: 28_000,
     rollStiffness: 28_000,
     rollDamping: 1_500,
     maxArticulation: 0.50,
