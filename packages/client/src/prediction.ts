@@ -52,20 +52,6 @@ export class Prediction {
     { rideY: 0, rollAngle: 0 },
     { rideY: 0, rollAngle: 0 },
   ];
-  /** When the position error after reconcile is small (< SMOOTH_THRESHOLD),
-   *  we LERP the physics body toward the corrected position over several
-   *  ticks instead of snapping. This prevents visible pops when the
-   *  divergence is just a few centimetres (e.g. from minor timing
-   *  differences or tiny packet loss). Large errors still snap
-   *  immediately. */
-  private reconcileSmoothing = {
-    active: false,
-    target: { x: 0, y: 0, z: 0 },
-    startPos: { x: 0, y: 0, z: 0 },
-    startVel: { x: 0, y: 0, z: 0 },
-    stepsLeft: 0,
-    totalSteps: 0,
-  };
   /** Last alpha value passed to state(). Reconcile uses this to compute
    *  a visualOffset that keeps the actually-rendered pose continuous
    *  across the snap, independent of where in the inter-step interval
@@ -121,23 +107,6 @@ export class Prediction {
     for (const a of this.axleVisualOffset) {
       a.rideY *= 0.82;
       a.rollAngle *= 0.82;
-    }
-    // Apply reconcile smoothing if active. LERP the body position toward
-    // the target over a fixed number of steps using smoothstep so small
-    // corrections slide in invisibly.
-    const sp = this.reconcileSmoothing;
-    if (sp.active && sp.stepsLeft > 0) {
-      const t = 1 - sp.stepsLeft / sp.totalSteps;
-      const smooth = t * t * (3 - 2 * t); // smoothstep
-      const prev = this.prev.pos;
-      const cur = this.vehicle.body.translation();
-      this.vehicle.body.setTranslation({
-        x: prev.x + (cur.x - prev.x) * (1 - smooth) + sp.target.x * smooth,
-        y: prev.y + (cur.y - prev.y) * (1 - smooth) + sp.target.y * smooth,
-        z: prev.z + (cur.z - prev.z) * (1 - smooth) + sp.target.z * smooth,
-      }, true);
-      sp.stepsLeft--;
-      if (sp.stepsLeft <= 0) sp.active = false;
     }
   }
 
@@ -247,34 +216,9 @@ export class Prediction {
     //    exactly (oldRendered - newRenderedNoOffset).
     const newPosNoOffset = this.computeLerpedPos(a);
     const dxCap = 1.5;
-    const errX = renderedPos.x - newPosNoOffset.x;
-    const errY = renderedPos.y - newPosNoOffset.y;
-    const errZ = renderedPos.z - newPosNoOffset.z;
-    const errMag = Math.hypot(errX, errY, errZ);
-    // Small-error LERP: if the divergence is under 0.15 m, smoothly
-    // move the physics body toward the target over 6 ticks (~100ms).
-    // Beyond that the visualOffset handles it.
-    const SMOOTH_THRESHOLD = 0.15;
-    if (errMag < SMOOTH_THRESHOLD && errMag > 0.001) {
-      const sp = this.reconcileSmoothing;
-      sp.active = true;
-      sp.target.x = newPosNoOffset.x;
-      sp.target.y = newPosNoOffset.y;
-      sp.target.z = newPosNoOffset.z;
-      const cur = this.vehicle.body.translation();
-      sp.startPos.x = cur.x; sp.startPos.y = cur.y; sp.startPos.z = cur.z;
-      sp.stepsLeft = 6;
-      sp.totalSteps = 6;
-      // Zero out the visual offset since the body is moving smoothly.
-      this.visualOffset.x = 0;
-      this.visualOffset.y = 0;
-      this.visualOffset.z = 0;
-    } else {
-      this.reconcileSmoothing.active = false;
-      this.visualOffset.x = clampAbs(errX, dxCap);
-      this.visualOffset.y = clampAbs(errY, dxCap);
-      this.visualOffset.z = clampAbs(errZ, dxCap);
-    }
+    this.visualOffset.x = clampAbs(renderedPos.x - newPosNoOffset.x, dxCap);
+    this.visualOffset.y = clampAbs(renderedPos.y - newPosNoOffset.y, dxCap);
+    this.visualOffset.z = clampAbs(renderedPos.z - newPosNoOffset.z, dxCap);
 
     if (supportsAxles && renderedAxles) {
       const newAxlesNoOffset = this.computeLerpedAxles(a);

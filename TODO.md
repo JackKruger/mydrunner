@@ -213,15 +213,12 @@ visibly pulled with it, axle tilts, chassis can lean.
       simple linear+clamp lateral force; a proper slip-angle curve
       (peak at ~6-10 deg, falls off past) would make under/oversteer
       feel right and let "drifting in mud" be a thing.
-- [x] Better engine braking on downhills — `ENGINE.engineBrakeCoef`
-      increased from 0.04 to 0.12, threshold lowered from idle+100 to
-      idle+50 RPM so braking engages earlier and bites harder.
+- [ ] Better engine braking on downhills - currently coasts faster than
+      it should. Tune `ENGINE.engineBrakeCoef` or sample from chassis
+      velocity not just RPM.
 - [x] ~~Anti-roll bar emulation~~ — done as part of the solid-axle
       overhaul (`ANTI_ROLL_STIFFNESS` / `ANTI_ROLL_DAMPING` at the top
       of `solidAxleVehicle.ts`). Tunable from playtest feel.
-- [x] Prediction reconciliation smoothing — small errors (< 0.15m)
-      smoothly LERPed over 6 ticks in `prediction.ts`; large errors
-      still snap with visual offset decay.
 
 ### P1 — make the world feel less empty
 - [ ] Skybox / cloud layer (procedural, no external assets). Sky is

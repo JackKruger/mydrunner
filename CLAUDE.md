@@ -210,7 +210,7 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - **Tick on `setInterval`.** Will drift under Node GC pauses. Acceptable for MVP; move to `setImmediate`-driven loop with sleep-to-deadline if drift becomes visible.
 - **Inputs are clamped server-side** (`Room.applyInput`) but otherwise trusted. No anti-cheat beyond range clamping.
 - **Rapier `compat` build bundles WASM as base64.** This is why `optimizeDeps.exclude` is set in `vite.config.ts`. Don't switch to `@dimforge/rapier3d` (non-compat) without revisiting Vite config.
-- **Prediction divergence smoothing.** Small position errors (< 0.15m) are smoothly LERPed over 6 ticks (~100ms) via `reconcileSmoothing` in `prediction.ts`. Large errors still snap with visual offset decay.
+- **Prediction divergence is not visually smoothed.** A reconcile snaps the body. If divergence becomes large under packet loss, this will pop. Add a small-error LERP and a large-error snap when needed.
 
 ## Operating notes
 
