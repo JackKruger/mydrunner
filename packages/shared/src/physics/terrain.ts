@@ -492,3 +492,100 @@ export function sampleSurface(t: TerrainData, x: number, z: number): Surface {
   if (idx < 0) return Surface.Dirt;
   return (t.surfaces[idx] ?? Surface.Dirt) as Surface;
 }
+
+/** Generate ASCII surface map for debugging/visualization.
+ *  Returns a string with characters representing surface types:
+ *   R=road, D=dirt, M=mud, m=deepMud, G=grass, g=gravel, C=concrete, .=other
+ *   X=petrol station, A=mountain, B=bog
+ *   @param step - sample spacing in world units (default 4m) */
+export function asciiSurfaceMap(t: TerrainData, step = 4): string {
+  const half = t.size / 2;
+  const lines: string[] = [];
+  for (let z = half; z >= -half; z -= step) {
+    let line = '';
+    for (let x = -half; x <= half; x += step) {
+      const surf = sampleSurface(t, x, z);
+      const idx = worldToTerrainIndex(t, x, z);
+      let ch = '.';
+      if (idx >= 0) {
+        const mountain = t.mountain;
+        const distMtn2 = (x - mountain.x) ** 2 + (z - mountain.z) ** 2;
+        if (distMtn2 < (mountain.sigma * 0.8) ** 2) {
+          ch = 'A';
+        } else {
+          const pad = t.petrolStation;
+          const dx = x - pad.cx;
+          const dz = z - pad.cz;
+          const distPad = Math.hypot(dx, dz);
+          if (distPad < pad.halfW + pad.fade) {
+            ch = 'X';
+          } else if (surf === Surface.Road) {
+            ch = 'R';
+          } else if (surf === Surface.Dirt) {
+            ch = 'D';
+          } else if (surf === Surface.Mud) {
+            ch = 'M';
+          } else if (surf === Surface.DeepMud) {
+            ch = 'm';
+          } else if (surf === Surface.Grass) {
+            ch = 'G';
+          } else if (surf === Surface.Gravel) {
+            ch = 'g';
+          } else if (surf === Surface.Concrete) {
+            ch = 'C';
+          }
+        }
+      }
+      // Overlay bogs
+      for (const b of t.bogs) {
+        const dist = Math.hypot(x - b.x, z - b.z);
+        if (dist < b.sigma) { ch = 'B'; break; }
+      }
+      line += ch;
+    }
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
+      // Overlay bogs
+      for (const b of t.bogs) {
+        const dist = Math.hypot(x - b.x, z - b.z);
+        if (dist < b.sigma) { ch = 'B'; break; }
+      }
+      line += ch;
+    }
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
+
+/** Generate ASCII height map (showing relative elevation).
+ *  Characters: ' ' (low) to '~' (high)
+ *  @param step - sample spacing in world units (default 4m) */
+export function asciiHeightMap(t: TerrainData, step = 4): string {
+  const half = t.size / 2;
+  const n = t.resolution;
+  // Find min/max height
+  let minH = Infinity, maxH = -Infinity;
+  for (let i = 0; i < n * n; i++) {
+    const h = t.heights[i]!;
+    if (h < minH) minH = h;
+    if (h > maxH) maxH = h;
+  }
+  const range = maxH - minH || 1;
+  const chars = ' .-=+*#%@~';
+  const lines: string[] = [];
+  for (let z = half; z >= -half; z -= step) {
+    let line = '';
+    for (let x = -half; x <= half; x += step) {
+      const idx = worldToTerrainIndex(t, x, z);
+      if (idx < 0) { line += ' '; continue; }
+      const h = t.heights[idx]!;
+      const norm = (h - minH) / range;
+      const ci = Math.min(chars.length - 1, Math.floor(norm * chars.length));
+      line += chars[ci]!;
+    }
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
