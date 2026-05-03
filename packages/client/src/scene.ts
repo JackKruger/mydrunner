@@ -273,24 +273,40 @@ export class Scene {
   }
 
   /** Pose the two axle groups from per-axle (rideY, rollAngle) state.
-   *  The axle beam sits at wheel-centre height: chassis-local
-   *  (centerLocalY - suspensionRestLength) at rest, plus rideY when the
-   *  spring is compressed. Rotation is rollAngle about chassis-forward
-   *  (local +Z). Mud sink is applied here at the axle level - both
-   *  wheels of a beam axle drop into mud together, matching the
-   *  rigid-beam coupling. */
+   *
+   *  The physics spring extends world-down (the raycasts use dir={0,-1,0}).
+   *  To match that in the visual, the spring extension must be applied in
+   *  world-Y, then converted back into the chassis-local frame. The chassis
+   *  local-Y axis has world-Y component = up.y = cos(pitch). Dividing the
+   *  world-down extension by up.y gives the chassis-local offset that
+   *  produces exactly that world-Y displacement. Without this correction
+   *  the axle extends along chassis-Y, which on any slope is shorter than
+   *  world-down by a cos(θ) factor, causing wheels to visually float above
+   *  the terrain.
+   *
+   *  The same division applies to the mud sink so it stays a world-vertical
+   *  effect regardless of chassis roll/pitch. */
   private poseAxles(
     v: VehicleVisual,
     axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
   ): void {
     const geom = Physics.geomFor(v.carKind);
+    const q = v.group.quaternion;
+    // World-Y component of the chassis's local-Y (up) axis.
+    const chassisUp = Physics.rotateVecByQuat(
+      { x: 0, y: 1, z: 0 },
+      { x: q.x, y: q.y, z: q.z, w: q.w },
+    );
+    // Clamp away from zero so an upside-down chassis doesn't divide by near-zero.
+    const upY = Math.max(0.15, chassisUp.y);
     for (let i = 0; i < 2; i++) {
       const ag = i === 0 ? geom.front : geom.rear;
       const ax = axles[i]!;
       const sink = this.axleSinkAt(v.group, { centerLocalY: ag.centerLocalY, centerLocalZ: ag.centerLocalZ });
+      const springExt = ag.suspensionRestLength - ax.rideY;
       v.axles[i]!.position.set(
         0,
-        ag.centerLocalY - ag.suspensionRestLength + ax.rideY - sink,
+        ag.centerLocalY - (springExt + sink) / upY,
         ag.centerLocalZ,
       );
       // Roll about chassis-forward (local +Z). YXZ ordering keeps the
