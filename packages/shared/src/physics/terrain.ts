@@ -110,6 +110,16 @@ function defaultRoad(size: number): Road {
   };
 }
 
+/** Second road: diagonal branch from the main road toward the mountain base. */
+function secondRoad(size: number): Road {
+  return {
+    points: [{ x: 40, z: -60 }, { x: 90, z: 20 }],
+    width: 10,
+    surface: Surface.Dirt,
+    shoulderWidth: 4,
+  };
+}
+
 // --- Height layers ---
 
 export type HeightLayer = (
@@ -404,7 +414,7 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const mountain = mountainFor(size);
   const pad = petrolStationPadFor(size);
   const bogs = TERRAIN.bogs;
-  const roads = opts.roads ?? [defaultRoad(size)];
+  const roads = opts.roads ?? [defaultRoad(size), secondRoad(size)];
 
   const ctx: TerrainGenContext = {
     size,
