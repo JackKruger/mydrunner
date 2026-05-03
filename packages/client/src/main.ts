@@ -269,9 +269,12 @@ async function start(): Promise<void> {
       if (steps >= MAX_STEPS_PER_FRAME) predictAcc = 0;
     }
     // Fractional time left over in the accumulator becomes the alpha
-    // for state interpolation - smooths the visual motion when the
-    // render rate doesn't perfectly match the physics rate.
-    const alpha = Math.min(1, predictAcc / FIXED_DT);
+    // for state interpolation. But since beginFrame() captures prev
+    // every frame, alpha should always be 1.0 — we want to
+    // render at the current body position. The old alpha oscillation
+    // (0.41, 0.83, 0.24, 0.65...) was causing stutter
+    // on high-refresh-rate displays (144Hz+).
+    const alpha = 1.0;
 
     // Override the local vehicle pose with the predicted state so the local
     // car is responsive instead of 100ms behind. alpha lerps between

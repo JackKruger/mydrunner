@@ -136,7 +136,7 @@ export const AXLE = {
     // planted (the previous 75%-critical claim was correct on paper but
     // the engagement scaling collapsed it to ~12% effective in steady
     // state, hence the visible "body stutters while driving" feel).
-    rideDamping: 16_000,
+    rideDamping: 28_000,
     rollStiffness: 35_000,
     rollDamping: 1_800,
     maxArticulation: 0.45,

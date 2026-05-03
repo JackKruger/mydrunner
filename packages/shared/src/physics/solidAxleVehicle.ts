@@ -275,7 +275,10 @@ export class SolidAxleVehicle implements VehicleLike {
         const vpY = lv.y + av.z * armX - av.x * armZ;
         const vpZ = lv.z + av.x * armY - av.y * armX;
         const vertVel = vpX * up.x + vpY * up.y + vpZ * up.z;
-        const engagement = Math.min(1, comp * 12);
+        // Engagement ramps from 0→1 as compression reaches ~0.05m
+        // (typical equilibrium). Was comp*12 which only reached 0.55 at
+        // equilibrium, leaving the chassis underdamped and oscillatory.
+        const engagement = Math.min(1, comp / 0.05);
         // Per-wheel-end stiffness is HALF the axle's total because both
         // wheels share the load (parallel springs sum to k_total).
         const F = 0.5 * ag.rideStiffness * comp
