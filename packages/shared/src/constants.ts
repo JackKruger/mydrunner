@@ -222,6 +222,55 @@ export const DEFAULT_PORT = 2567;
 export const MAX_INPUT_QUEUE = 64;
 export const INTERPOLATION_DELAY_MS = 100;
 
+// Terrain generation tunables.
+export const TERRAIN = {
+  // Defaults
+  defaultSize: 200,
+  defaultResolution: 64,
+  defaultSeed: 1337,
+
+  // Noise
+  noiseFreq: 1 / 40,
+  detailFreq: 1 / 12,
+  baseAmpMin: 3,
+  baseAmpMax: 8,
+  roughnessDist: 60,
+
+  // Road
+  roadCore: 8,       // |z| < roadCore is exactly flat at y=0
+  roadShoulder: 14,   // roadCore <= |z| < roadShoulder eases into terrain
+  valleyAmp: 1.4,
+  valleySigma: 12,
+
+  // Mountain (ratios applied to size)
+  mtnPeak: 32,
+  mtnSigmaRatio: 0.11,
+  mtnXRatio: 0.22,
+  mtnZRatio: 0.28,
+
+  // Petrol station pad
+  padCxRatio: -0.20,
+  padCz: 16,
+  padHalfW: 14,
+  padHalfD: 18,
+  padWingDelta: 14,
+  padFade: 4,
+  padYaw: 0,
+
+  // Map edges
+  edgeRamp: 14,
+  edgeLift: 18,
+
+  // Mud bogs: world-space coords, depth (m), sigma (m)
+  bogs: [
+    { x: 30, z: -50, depth: 1.7, sigma: 8 },
+    { x: -30, z: -45, depth: 1.5, sigma: 7 },
+    { x: 110, z: 60, depth: 1.8, sigma: 9 },
+    { x: -100, z: -90, depth: 1.5, sigma: 7 },
+    { x: 50, z: -95, depth: 1.6, sigma: 8 },
+  ] as ReadonlyArray<{ x: number; z: number; depth: number; sigma: number }>,
+} as const;
+
 // Rut formation. Each driven wheel in mud carves the heightmap each tick:
 //   delta_y = RUT_RATE * (1 - grip) * |throttle| * wheelInContact
 // Capped to RUT_MAX_DEPTH per cell. Heightfield collider is rebuilt every

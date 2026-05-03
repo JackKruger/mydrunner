@@ -9,7 +9,7 @@
 // roughly x = -78..-50, z = -2..32, or in the road core z = -8..8.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { Surface, type TerrainData, worldToTerrainIndex, mountainFor } from './terrain.js';
+import { Surface, type TerrainData, worldToTerrainIndex } from './terrain.js';
 
 export type ObstacleKind = 'rock' | 'tree' | 'pine' | 'ramp';
 
@@ -118,7 +118,7 @@ const FOREST_PINES: readonly TreeSpec[] = [
 // the mountain summit at (mtn.x, mtn.z).
 function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
   const out: Obstacle[] = [];
-  const mtn = mountainFor(terrain.size);
+  const mtn = terrain.mountain;
   const baseX = mtn.x;
   const baseZ = mtn.z - mtn.sigma * 1.6;
   const dx = mtn.x - baseX;

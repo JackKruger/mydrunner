@@ -2,6 +2,7 @@
 // seed (or the raw arrays) and reconstructs the same terrain bit-for-bit.
 
 import { createNoise2D } from 'simplex-noise';
+import { TERRAIN } from '../constants.js';
 
 export const Surface = {
   Road: 0,
@@ -25,6 +26,12 @@ export interface TerrainData {
   surfaces: Uint8Array;
   /** Seed used to generate this terrain. */
   seed: number;
+  /** Landmark specs exposed for obstacle placement. */
+  mountain: MountainSpec;
+  petrolStation: PetrolStationPad;
+  bogs: ReadonlyArray<{ x: number; z: number; depth: number; sigma: number }>;
+  /** Configurable roads. */
+  roads: Road[];
 }
 
 // Mulberry32 - tiny, seedable, good enough for procedural terrain.
@@ -39,14 +46,6 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-export interface TerrainOptions {
-  size?: number;
-  resolution?: number;
-  seed?: number;
-}
-
-/** The single landmark mountain. Exposed so the obstacle generator can
- *  place rocks on its slope without duplicating the placement formula. */
 export interface MountainSpec {
   x: number;
   z: number;
@@ -55,65 +54,312 @@ export interface MountainSpec {
 }
 
 export function mountainFor(size: number): MountainSpec {
-  return { x: size * 0.22, z: size * 0.28, peak: 32, sigma: size * 0.11 };
+  return {
+    x: size * TERRAIN.mtnXRatio,
+    z: size * TERRAIN.mtnZRatio,
+    peak: TERRAIN.mtnPeak,
+    sigma: size * TERRAIN.mtnSigmaRatio,
+  };
 }
 
-/** Petrol-station pad. Defined here (not in landmarks.ts) so the
- *  terrain generator can flatten + concrete this region without
- *  creating a circular dependency on the landmarks module. World
- *  coordinates; halfW / halfD are half-extents along world X / Z. */
 export interface PetrolStationPad {
   cx: number;
   cz: number;
   halfW: number;
   halfD: number;
-  /** Extra half-width added at the road-facing edge (+Z in pad-local
-   *  coords) so the pad is trapezoidal - wider at the road, narrower
-   *  at the back. Reads as turn-in lanes flaring toward the road. */
   wingDelta: number;
-  /** Soft outer fade (m) where the flat pad blends back into natural
-   *  terrain so there's no vertical cliff at the edge. */
   fade: number;
-  /** Yaw (rad) - 0 means the station's local +Z faces the road. */
   yaw: number;
 }
 
 export function petrolStationPadFor(size: number): PetrolStationPad {
-  // West of spawn, well clear of the mountain (which sits +X / +Z).
-  // halfD=18 pushes the road-facing edge well inside the wider road
-  // core (which is now flat to |z|=8) so the pad's wings merge with
-  // the flat road area instead of partially fading to natural terrain.
-  // wingDelta=14 gives roughly a ~30 deg flare at each road-side
-  // corner - clearly reads as turn-in lanes from a passing vehicle.
   return {
-    cx: -size * 0.20,
-    cz: 16,
-    halfW: 14,
-    halfD: 18,
-    wingDelta: 14,
-    fade: 4,
-    yaw: 0,
+    cx: size * TERRAIN.padCxRatio,
+    cz: TERRAIN.padCz,
+    halfW: TERRAIN.padHalfW,
+    halfD: TERRAIN.padHalfD,
+    wingDelta: TERRAIN.padWingDelta,
+    fade: TERRAIN.padFade,
+    yaw: TERRAIN.padYaw,
   };
 }
 
-/** Generates a heightmap and matching surface map.
- *
- *  Layout:
- *    - Road: flat strip along z=0, easing into terrain across the shoulder.
- *    - Hills: FBM simplex noise. Amplitude grows the further off-road
- *      you go so the area near the road is gentle and the wilds get rough.
- *    - Mountain: one prominent Gaussian peak in the upper quadrant -
- *      something to drive towards / try to climb.
- *    - Mud bogs: a handful of Gaussian dips scattered off-road, so mud
- *      isn't only the symmetrical valleys hugging the road.
- *    - Surfaces: road inside the core; dirt elsewhere except low spots
- *      (h < -0.2 = mud, h < -0.8 = deep mud) and the mountain summit
- *      (h > 9 = bare dirt regardless of mud thresholds).
- */
+/** Road definition. A road is a polyline with width and surface type. */
+export interface Road {
+  /** Path points in world coordinates. */
+  points: ReadonlyArray<{ x: number; z: number }>;
+  /** Width of the road (full width, not half-width). */
+  width: number;
+  /** Surface type for this road. */
+  surface: Surface;
+  /** Shoulder width on each side where terrain eases in. */
+  shoulderWidth: number;
+}
+
+/** Default straight road along z=0. */
+function defaultRoad(size: number): Road {
+  const half = size / 2;
+  return {
+    points: [{ x: 0, z: -half }, { x: 0, z: half }],
+    width: TERRAIN.roadCore * 2,
+    surface: Surface.Road,
+    shoulderWidth: TERRAIN.roadShoulder - TERRAIN.roadCore,
+  };
+}
+
+// --- Height layers ---
+
+export type HeightLayer = (
+  ctx: TerrainGenContext,
+  x: number,
+  z: number,
+  currentH: number,
+) => number;
+
+export interface TerrainGenContext {
+  size: number;
+  resolution: number;
+  rng: () => number;
+  noise: (x: number, y: number) => number;
+  noiseDetail: (x: number, y: number) => number;
+  mountain: MountainSpec;
+  pad: PetrolStationPad;
+  bogs: ReadonlyArray<{ x: number; z: number; depth: number; sigma: number }>;
+  roads: Road[];
+}
+
+/** Base FBM noise with distance-based roughness. */
+export const baseNoiseLayer: HeightLayer = (ctx, x, z, currentH) => {
+  const az = Math.abs(z);
+  const roughness = Math.min(1, Math.max(0, (az - TERRAIN.roadShoulder) / TERRAIN.roughnessDist));
+  const baseAmp = TERRAIN.baseAmpMin + roughness * (TERRAIN.baseAmpMax - TERRAIN.baseAmpMin);
+  let h = ctx.noise(x * TERRAIN.noiseFreq, z * TERRAIN.noiseFreq) * baseAmp;
+  h += ctx.noiseDetail(x * TERRAIN.detailFreq, z * TERRAIN.detailFreq) * 0.8;
+  return currentH + h;
+};
+
+/** Symmetrical mud valley hugging the road shoulder. */
+export const valleyLayer: HeightLayer = (ctx, x, z, currentH) => {
+  const az = Math.abs(z);
+  if (az <= TERRAIN.roadShoulder) return currentH;
+  const valley = Math.exp(-((az - TERRAIN.roadShoulder) ** 2) / (TERRAIN.valleySigma * TERRAIN.valleySigma)) * TERRAIN.valleyAmp;
+  return currentH - valley;
+};
+
+/** Mountain peak (Gaussian). */
+export const mountainLayer: HeightLayer = (ctx, x, z, currentH) => {
+  const dx = x - ctx.mountain.x;
+  const dz = z - ctx.mountain.z;
+  const dist2 = dx * dx + dz * dz;
+  const h = ctx.mountain.peak * Math.exp(-dist2 / (2 * ctx.mountain.sigma * ctx.mountain.sigma));
+  return currentH + h;
+};
+
+/** Mud bogs (Gaussian dips). */
+export const bogLayer: HeightLayer = (ctx, x, z, currentH) => {
+  let h = currentH;
+  for (const b of ctx.bogs) {
+    const dx = x - b.x;
+    const dz = z - b.z;
+    h -= b.depth * Math.exp(-(dx * dx + dz * dz) / (2 * b.sigma * b.sigma));
+  }
+  return h;
+};
+
+/** Map-edge walls: ramp up height at the edges. */
+export const edgeLayer: HeightLayer = (ctx, x, z, currentH) => {
+  const half = ctx.size / 2;
+  const distEdgeX = half - Math.abs(x);
+  const distEdgeZ = half - Math.abs(z);
+  const tEdge = (d: number): number => {
+    if (d >= TERRAIN.edgeRamp) return 0;
+    if (d <= 0) return 1;
+    const u = 1 - d / TERRAIN.edgeRamp;
+    return u * u * (3 - 2 * u);
+  };
+  const edgeWeight = Math.max(tEdge(distEdgeX), tEdge(distEdgeZ));
+  return currentH + TERRAIN.edgeLift * edgeWeight;
+};
+
+/** Distance from a point to a line segment. */
+function pointToSegmentDist(px: number, pz: number, ax: number, az: number, bx: number, bz: number): number {
+  const dx = bx - ax;
+  const dz = bz - az;
+  const len2 = dx * dx + dz * dz;
+  if (len2 === 0) return Math.hypot(px - ax, pz - az);
+  let t = ((px - ax) * dx + (pz - az) * dz) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx;
+  const cz = az + t * dz;
+  return Math.hypot(px - cx, pz - cz);
+}
+
+/** Road height layer - flattens terrain under roads and eases at shoulders. */
+export const roadLayer: HeightLayer = (ctx, x, z, currentH) => {
+  let minDist = Infinity;
+  for (const road of ctx.roads) {
+    for (let i = 0; i < road.points.length - 1; i++) {
+      const a = road.points[i]!;
+      const b = road.points[i + 1]!;
+      const dist = pointToSegmentDist(x, z, a.x, a.z, b.x, b.z);
+      minDist = Math.min(minDist, dist);
+    }
+  }
+  const roadCoreDist = TERRAIN.roadCore;
+  const roadShoulderDist = TERRAIN.roadShoulder;
+  if (minDist <= roadCoreDist) {
+    return 0; // Flat at y=0 inside road core
+  }
+  if (minDist < roadShoulderDist) {
+    // Smooth ease from 0 to natural height over shoulder
+    const t = (minDist - roadCoreDist) / (roadShoulderDist - roadCoreDist);
+    const ease = t * t * (3 - 2 * t);
+    return currentH * ease;
+  }
+  return currentH;
+};
+
+/** Petrol station pad layer - flattens and blends. */
+export const padLayer: HeightLayer = (ctx, x, z, currentH) => {
+  const pad = ctx.pad;
+  const cosY = Math.cos(pad.yaw);
+  const sinY = Math.sin(pad.yaw);
+  const dx = x - pad.cx;
+  const dz = z - pad.cz;
+  const lx = cosY * dx + sinY * dz;
+  const lz = -sinY * dx + cosY * dz;
+  const wingT = Math.max(0, -lz / pad.halfD);
+  const effHalfW = pad.halfW + wingT * pad.wingDelta;
+  const padX = smoothFalloff(Math.abs(lx), effHalfW, pad.fade);
+  const padZ = smoothFalloff(Math.abs(lz), pad.halfD, pad.fade);
+  const padW = padX * padZ;
+  if (padW > 0) {
+    return currentH * (1 - padW);
+  }
+  return currentH;
+};
+
+// --- Surface rules ---
+
+export type SurfaceRule = (
+  ctx: TerrainGenContext,
+  x: number,
+  z: number,
+  h: number,
+  currentSurf: Surface,
+) => Surface;
+
+/** Road surface rule - assigns road surface based on distance to roads. */
+export const roadSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  let minDist = Infinity;
+  let roadSurface: Surface | null = null;
+  for (const road of ctx.roads) {
+    for (let i = 0; i < road.points.length - 1; i++) {
+      const a = road.points[i]!;
+      const b = road.points[i + 1]!;
+      const dist = pointToSegmentDist(x, z, a.x, a.z, b.x, b.z);
+      if (dist < minDist) {
+        minDist = dist;
+        roadSurface = road.surface;
+      }
+    }
+  }
+  if (minDist <= TERRAIN.roadCore) {
+    return roadSurface ?? Surface.Road;
+  }
+  if (minDist <= TERRAIN.roadShoulder) {
+    return Surface.Dirt;
+  }
+  return currentSurf;
+};
+
+/** Mountain surface rule - gravel on mountain slopes. */
+export const mountainSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  const mtn = ctx.mountain;
+  const distMtn2 = (x - mtn.x) ** 2 + (z - mtn.z) ** 2;
+  const onMtn = distMtn2 < (mtn.sigma * 1.2) ** 2;
+  if (onMtn && h > 4) {
+    return Surface.Gravel;
+  }
+  return currentSurf;
+};
+
+/** Mud surface rule - based on height. */
+export const mudSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  if (h < -0.8) return Surface.DeepMud;
+  if (h < -0.2) return Surface.Mud;
+  return currentSurf;
+};
+
+/** Grass surface rule - rolling mid-elevations. */
+export const grassSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  if (h > 1.5 && h < 5) return Surface.Grass;
+  return currentSurf;
+};
+
+/** Pad surface rule - concrete on the petrol station pad. */
+export const padSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  const pad = ctx.pad;
+  const cosY = Math.cos(pad.yaw);
+  const sinY = Math.sin(pad.yaw);
+  const dx = x - pad.cx;
+  const dz = z - pad.cz;
+  const lx = cosY * dx + sinY * dz;
+  const lz = -sinY * dx + cosY * dz;
+  const wingT = Math.max(0, -lz / pad.halfD);
+  const effHalfW = pad.halfW + wingT * pad.wingDelta;
+  const padX = smoothFalloff(Math.abs(lx), effHalfW, pad.fade);
+  const padZ = smoothFalloff(Math.abs(lz), pad.halfD, pad.fade);
+  const padW = padX * padZ;
+  if (padW > 0.5) return Surface.Concrete;
+  return currentSurf;
+};
+
+// --- Terrain generation ---
+
+export interface TerrainOptions {
+  size?: number;
+  resolution?: number;
+  seed?: number;
+  /** Additional height layers (appended after defaults). */
+  extraHeightLayers?: HeightLayer[];
+  /** Additional surface rules (appended after defaults). */
+  extraSurfaceRules?: SurfaceRule[];
+  /** Custom roads (defaults to single straight road along z=0). */
+  roads?: Road[];
+}
+
+const DEFAULT_HEIGHT_LAYERS: HeightLayer[] = [
+  baseNoiseLayer,
+  valleyLayer,
+  mountainLayer,
+  bogLayer,
+  edgeLayer,
+  roadLayer,
+  padLayer,
+];
+
+const DEFAULT_SURFACE_RULES: SurfaceRule[] = [
+  roadSurfaceRule,
+  padSurfaceRule,
+  mudSurfaceRule,
+  mountainSurfaceRule,
+  grassSurfaceRule,
+];
+
+/** Returns 1 inside [0, halfExtent], smoothly falling to 0 over the
+ *  next `fade` metres past the boundary. */
+function smoothFalloff(absCoord: number, halfExtent: number, fade: number): number {
+  if (absCoord <= halfExtent) return 1;
+  const t = (absCoord - halfExtent) / fade;
+  if (t >= 1) return 0;
+  return 1 - t * t * (3 - 2 * t);
+}
+
 export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
-  const size = opts.size ?? 200;
-  const resolution = opts.resolution ?? 64;
-  const seed = opts.seed ?? 1337;
+  const size = opts.size ?? TERRAIN.defaultSize;
+  const resolution = opts.resolution ?? TERRAIN.defaultResolution;
+  const seed = opts.seed ?? TERRAIN.defaultSeed;
   const rng = mulberry32(seed);
   const noise = createNoise2D(rng);
   const noiseDetail = createNoise2D(rng);
@@ -122,166 +368,48 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const heights = new Float32Array(n * n);
   const surfaces = new Uint8Array(n * n);
 
-  // Frequency in noise space - smaller = bigger hills.
-  const freq = 1 / 40;
-  const detailFreq = 1 / 12;
-
-  // Road geometry. The "core" is strictly flat at y=0 so vehicles spawn
-  // and drive on a solid plane regardless of orientation. Outside the
-  // shoulder we ease back into natural terrain. The flat area is wide
-  // enough that there's clear shoulder either side of the road for
-  // pulling over, parking, etc.
-  const roadCore = 8;       // |z| < roadCore is exactly flat at y=0
-  const roadShoulder = 14;  // roadCore <= |z| < roadShoulder eases into terrain
-
-  // Mountain: single big landmark. Centered off-road in the upper quadrant
-  // so it reads as a destination from the road.
-  const mtn = mountainFor(size);
-  const mtnCx = mtn.x;
-  const mtnCz = mtn.z;
-  const mtnPeak = mtn.peak;
-  const mtnSigma = mtn.sigma;
-
-  // Petrol-station pad. We flatten the heightmap and force surface to
-  // Concrete inside the pad so vehicles can drive on level ground.
+  const mountain = mountainFor(size);
   const pad = petrolStationPadFor(size);
+  const bogs = TERRAIN.bogs;
+  const roads = opts.roads ?? [defaultRoad(size)];
 
-  // Mud bogs: a few Gaussian dips, hand-placed so they're never inside
-  // the pad / road and never overlap the mountain. World-space coords.
-  const bogs: ReadonlyArray<{ x: number; z: number; depth: number; sigma: number }> = [
-    { x: 30, z: -50, depth: 1.7, sigma: 8 },
-    { x: -30, z: -45, depth: 1.5, sigma: 7 },
-    { x: 110, z: 60, depth: 1.8, sigma: 9 },
-    { x: -100, z: -90, depth: 1.5, sigma: 7 },
-    { x: 50, z: -95, depth: 1.6, sigma: 8 },
-  ];
+  const ctx: TerrainGenContext = {
+    size,
+    resolution,
+    rng,
+    noise,
+    noiseDetail,
+    mountain,
+    pad,
+    bogs,
+    roads,
+  };
+
+  const heightLayers = [...DEFAULT_HEIGHT_LAYERS, ...(opts.extraHeightLayers ?? [])];
+  const surfaceRules = [...DEFAULT_SURFACE_RULES, ...(opts.extraSurfaceRules ?? [])];
 
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
       const x = (c / (n - 1) - 0.5) * size;
       const z = (r / (n - 1) - 0.5) * size;
-      const az = Math.abs(z);
 
-      // Distance-from-road amplitude scaling: gentle near the shoulder,
-      // rougher further out. Saturates around 1.0 past 60m off-road.
-      const roughness = Math.min(1, Math.max(0, (az - roadShoulder) / 60));
-      const baseAmp = 3 + roughness * 5; // 3..8m hills
-      let hNat = noise(x * freq, z * freq) * baseAmp;
-      hNat += noiseDetail(x * detailFreq, z * detailFreq) * 0.8;
-
-      // Symmetrical mud valley hugging the road shoulder.
-      const valley = Math.exp(-((az - roadShoulder) ** 2) / (12 * 12)) * 1.4;
-      if (az > roadShoulder) hNat -= valley;
-
-      // Mountain peak.
-      const dxM = x - mtnCx;
-      const dzM = z - mtnCz;
-      const distM2 = dxM * dxM + dzM * dzM;
-      hNat += mtnPeak * Math.exp(-distM2 / (2 * mtnSigma * mtnSigma));
-
-      // Mud bogs (subtract).
-      for (const b of bogs) {
-        const dx = x - b.x;
-        const dz = z - b.z;
-        hNat -= b.depth * Math.exp(-(dx * dx + dz * dz) / (2 * b.sigma * b.sigma));
+      // Apply height layers
+      let h = 0;
+      for (const layer of heightLayers) {
+        h = layer(ctx, x, z, h);
       }
+      heights[r * n + c] = h;
 
-      // Map-edge wall: ramp up the heightfield steeply along the last
-      // EDGE_RAMP m of each side so the world reads as bounded by
-      // cliffs / hills rather than a flat horizon you can drive off.
-      // Smoothstep on each axis, take max so corners get the full lift.
-      const edgeRamp = 14;
-      const edgeLift = 18;
-      const half = size / 2;
-      const distEdgeX = half - Math.abs(x);
-      const distEdgeZ = half - Math.abs(z);
-      const tEdge = (d: number): number => {
-        if (d >= edgeRamp) return 0;
-        if (d <= 0) return 1;
-        const u = 1 - d / edgeRamp;
-        return u * u * (3 - 2 * u);
-      };
-      const edgeWeight = Math.max(tEdge(distEdgeX), tEdge(distEdgeZ));
-      hNat += edgeLift * edgeWeight;
-
-      // Pad-blend: smoothstep that reaches 1 inside the pad and fades
-      // to 0 over `pad.fade` metres outside. We rotate the world point
-      // into pad-local coordinates so non-axis-aligned pads still work.
-      // The pad is trapezoidal: halfW grows linearly with +lz so the
-      // road-facing edge is wider than the back, reading as turn-in
-      // lanes flaring out to the road.
-      const cosY = Math.cos(pad.yaw);
-      const sinY = Math.sin(pad.yaw);
-      const dx = x - pad.cx;
-      const dz = z - pad.cz;
-      const lx = cosY * dx + sinY * dz;
-      const lz = -sinY * dx + cosY * dz;
-      // Pad's road-facing edge is at lz = -halfD (the road is at world
-      // z<5 while the pad centre sits at world z=cz=14). Wing fattens
-      // the pad as we approach the road side: wingT 0 at back, 1 at
-      // road edge.
-      const wingT = Math.max(0, -lz / pad.halfD);
-      const effHalfW = pad.halfW + wingT * pad.wingDelta;
-      const padX = smoothFalloff(Math.abs(lx), effHalfW, pad.fade);
-      const padZ = smoothFalloff(Math.abs(lz), pad.halfD, pad.fade);
-      const padW = padX * padZ;
-
-      let h: number;
-      if (az < roadCore) {
-        h = 0;
-      } else if (az < roadShoulder) {
-        // Smooth ease from 0 to natural over the shoulder band.
-        const t = (az - roadCore) / (roadShoulder - roadCore);
-        const ease = t * t * (3 - 2 * t); // smoothstep
-        h = hNat * ease;
-      } else {
-        h = hNat;
-      }
-
-      // Pad blends the natural height toward 0 (concrete is at road-level).
-      if (padW > 0) h = h * (1 - padW);
-
-      const idx = r * n + c;
-      heights[idx] = h;
-
-      // Surface assignment. Six bands:
-      //   Road    - centre strip
-      //   Dirt    - shoulder + transition zone
-      //   Mud     - shallow low spots
-      //   DeepMud - deepest low spots / bogs
-      //   Grass   - rolling mid-elevations away from the road
-      //   Gravel  - mountain slope (anything within mountain's influence
-      //             that's well above the surrounding terrain)
-      const distMtn2 = (x - mtnCx) ** 2 + (z - mtnCz) ** 2;
-      const onMtn = distMtn2 < (mtnSigma * 1.2) ** 2;
-
+      // Apply surface rules
       let surf: Surface = Surface.Dirt;
-      // Pad surface wins over everything else when we're inside it.
-      if (padW > 0.5) {
-        surfaces[idx] = Surface.Concrete;
-        continue;
+      for (const rule of surfaceRules) {
+        surf = rule(ctx, x, z, h, surf);
       }
-      if (az < roadCore) {
-        surf = Surface.Road;
-      } else if (az < roadShoulder) {
-        surf = Surface.Dirt;
-      } else if (h < -0.8) {
-        surf = Surface.DeepMud;
-      } else if (h < -0.2) {
-        surf = Surface.Mud;
-      } else if (onMtn && h > 4) {
-        // The mountain's flanks are loose rock: gravel covers anything
-        // both inside the mountain's footprint and clearly elevated.
-        surf = Surface.Gravel;
-      } else if (h > 1.5 && h < 5) {
-        // Rolling mid-elevation grassy plateau.
-        surf = Surface.Grass;
-      }
-      surfaces[idx] = surf;
+      surfaces[r * n + c] = surf;
     }
   }
 
-  return { size, resolution, heights, surfaces, seed };
+  return { size, resolution, heights, surfaces, seed, mountain, petrolStation: pad, bogs, roads };
 }
 
 /** Map a world-space (x, z) to a flat index into heights/surfaces, or -1 if
@@ -300,15 +428,4 @@ export function sampleSurface(t: TerrainData, x: number, z: number): Surface {
   const idx = worldToTerrainIndex(t, x, z);
   if (idx < 0) return Surface.Dirt;
   return (t.surfaces[idx] ?? Surface.Dirt) as Surface;
-}
-
-/** Returns 1 inside [0, halfExtent], smoothly falling to 0 over the
- *  next `fade` metres past the boundary. Used to blend a flat pad
- *  back into natural terrain at its edges. */
-function smoothFalloff(absCoord: number, halfExtent: number, fade: number): number {
-  if (absCoord <= halfExtent) return 1;
-  const t = (absCoord - halfExtent) / fade;
-  if (t >= 1) return 0;
-  // Smoothstep falloff (3t² - 2t³ inverted).
-  return 1 - t * t * (3 - 2 * t);
 }
