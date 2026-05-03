@@ -115,7 +115,12 @@ export class SolidAxleVehicle implements VehicleLike {
 
     const ext = this.geom.chassisHalfExtents;
     const r = VEHICLE.chassisColliderRadius;
-    const colDesc = RAPIER.ColliderDesc.roundCuboid(ext.x - r, ext.y - r, ext.z - r, r)
+    // Span the full visual height (chassis bottom → roof top) so the roof
+    // doesn't clip through the ground when the car is upside-down.
+    const colHalfH = (VEHICLE.cabinRoofY + ext.y) / 2;
+    const colOffsetY = -ext.y + colHalfH; // center between chassis-bottom and roof
+    const colDesc = RAPIER.ColliderDesc.roundCuboid(ext.x - r, colHalfH - r, ext.z - r, r)
+      .setTranslation(0, colOffsetY, 0)
       .setDensity(VEHICLE.mass / (8 * ext.x * ext.y * ext.z))
       .setFriction(0.3);
     this.chassis = world.world.createCollider(colDesc, this.body);

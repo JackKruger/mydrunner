@@ -17,6 +17,9 @@ export const VEHICLE = {
   // instead of catching square.  Inner box shrinks by this amount so total
   // extent stays the same.
   chassisColliderRadius: 0.15,
+  // Visual roof top relative to the body origin (used to size the collider so
+  // the roof doesn't clip the ground when the car is upside-down).
+  cabinRoofY: 1.2,
   wheelRadius: 0.46,
   wheelWidth: 0.32,
   // Suspension geometry. Chassis-connection points (wp.y) sit at the
