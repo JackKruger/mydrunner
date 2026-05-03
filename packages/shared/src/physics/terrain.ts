@@ -120,6 +120,20 @@ function secondRoad(size: number): Road {
   };
 }
 
+/** Dirt trail from main road to mountain hill climb base. */
+function mountainTrail(size: number): Road {
+  const mtn = mountainFor(size);
+  const baseX = mtn.x;
+  const baseZ = mtn.z - mtn.sigma * 1.8;
+  // Connect from main road (z=0) to hill base
+  return {
+    points: [{ x: baseX - 5, z: 0 }, { x: baseX + 3, z: baseZ }],
+    width: 6,
+    surface: Surface.Dirt,
+    shoulderWidth: 2,
+  };
+}
+
 // --- Height layers ---
 
 export type HeightLayer = (
@@ -168,24 +182,30 @@ export const mountainLayer: HeightLayer = (ctx, x, z, currentH) => {
   return currentH + h;
 };
 
-/** Hill climb path: a switchback carved into the mountain side.
- *  The path is indented below the natural terrain so it reads as
- *  a purpose-built climb route. */
+/** Hill climb path: switchback carved into the mountain side.
+ *  Zigzag path with gentler gradient so vehicles can actually climb it.
+ *  The path is indented below natural terrain. */
 export const hillClimbLayer: HeightLayer = (ctx, x, z, currentH) => {
   const mtn = ctx.mountain;
-  const baseX = mtn.x;
-  const baseZ = mtn.z - mtn.sigma * 1.6;
-  const dx = mtn.x - baseX;
-  const dz = mtn.z - baseZ;
-  const len = Math.hypot(dx, dz);
-  const nx = dx / len;
-  const nz = dz / len;
-  const distAlong = (x - baseX) * nx + (z - baseZ) * nz;
-  const distPerp = Math.abs((x - baseX) * (-nz) + (z - baseZ) * nx);
+  // Switchback: 3 segments zigzagging up
+  // Base at south, summit at mtn.(x,z)
+  const segments = [
+    { ax: mtn.x - 12, az: mtn.z - mtn.sigma * 1.8, bx: mtn.x + 8, bz: mtn.z - mtn.sigma * 1.4 },
+    { ax: mtn.x + 8, az: mtn.z - mtn.sigma * 1.4, bx: mtn.x - 10, bz: mtn.z - mtn.sigma * 0.9 },
+    { ax: mtn.x - 10, az: mtn.z - mtn.sigma * 0.9, bx: mtn.x + 6, bz: mtn.z - mtn.sigma * 0.4 },
+    { ax: mtn.x + 6, az: mtn.z - mtn.sigma * 0.4, bx: mtn.x - 4, bz: mtn.z - mtn.sigma * 0.1 },
+    { ax: mtn.x - 4, az: mtn.z - mtn.sigma * 0.1, bx: mtn.x + 2, bz: mtn.z + mtn.sigma * 0.3 },
+    { ax: mtn.x + 2, az: mtn.z + mtn.sigma * 0.3, bx: mtn.x, bz: mtn.z },
+  ];
   const pathHalfWidth = 3.5;
-  if (distAlong < 0 || distAlong > len || distPerp > pathHalfWidth + 5) return currentH;
-  // Deeper indent: carve 2.5m into the mountain
-  const indent = 2.5 * Math.exp(-(distPerp ** 2) / (2 * pathHalfWidth ** 2));
+  let minDist = Infinity;
+  for (const seg of segments) {
+    const dist = pointToSegmentDist(x, z, seg.ax, seg.az, seg.bx, seg.bz);
+    minDist = Math.min(minDist, dist);
+  }
+  if (minDist > pathHalfWidth + 5) return currentH;
+  // Indent path 2m below natural terrain
+  const indent = 2.0 * Math.exp(-(minDist ** 2) / (2 * pathHalfWidth ** 2));
   return currentH - indent;
 };
 
@@ -414,7 +434,7 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const mountain = mountainFor(size);
   const pad = petrolStationPadFor(size);
   const bogs = TERRAIN.bogs;
-  const roads = opts.roads ?? [defaultRoad(size), secondRoad(size)];
+  const roads = opts.roads ?? [defaultRoad(size), secondRoad(size), mountainTrail(size)];
 
   const ctx: TerrainGenContext = {
     size,

@@ -112,9 +112,8 @@ const FOREST_PINES: readonly TreeSpec[] = [
   [-122, 60, 0.95, 18], [-104, 80, 1.0, 17],
 ];
 
-// Hill-climb boulders: two parallel tracks ascending the south slope
-// of the mountain, hand-placed so the corridor between them stays
-// drivable. baseX/baseZ live near the road; the path heads toward
+// Hill-climb boulders: big rocks lining the path, lots of small rocks
+// on the track for grip. baseX/baseZ near the road; path heads toward
 // the mountain summit at (mtn.x, mtn.z).
 function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
   const out: Obstacle[] = [];
@@ -128,39 +127,82 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
   const nz = dz / len;
   const px = -nz;
   const pz = nx;
-  const climbSteps = 20;
+  const climbSteps = 25;
   for (let i = 0; i < climbSteps; i++) {
     const t = i / (climbSteps - 1);
     const along = t * len;
-    // Two parallel tracks 4m apart so a 1.7m truck has clearance
-    // between them. Side spacing widens slightly with height for a
-    // funnel feel.
-    const side = 4 + t * 1.5;
+    // Big lining rocks further from the track (5-7m from center)
+    const bigSide = 5 + t * 2;
     for (const s of [-1, 1] as const) {
-      const cx = baseX + nx * along + px * s * side;
-      const cz = baseZ + nz * along + pz * s * side;
+      const cx = baseX + nx * along + px * s * bigSide;
+      const cz = baseZ + nz * along + pz * s * bigSide;
       const idx = worldToTerrainIndex(terrain, cx, cz);
       if (idx < 0) continue;
       const cy = terrain.heights[idx] ?? 0;
-      const radius = 0.55 + t * 0.7;
+      const radius = 1.2 + t * 0.8; // big rocks: 1.2-2.0m
       out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: t * Math.PI });
     }
-    // Corridor boulder every other step.
-    if (i % 2 === 1) {
-      const cx = baseX + nx * along;
-      const cz = baseZ + nz * along;
+    // Small rocks ON the track for extra grip
+    const smallRocks = 3 + Math.floor(Math.random() * 3);
+    for (let j = 0; j < smallRocks; j++) {
+      const offset = (Math.random() - 0.5) * 3;
+      const cx = baseX + nx * along + px * offset;
+      const cz = baseZ + nz * along + pz * offset;
       const idx = worldToTerrainIndex(terrain, cx, cz);
-      if (idx >= 0) {
-        const cy = terrain.heights[idx] ?? 0;
-        out.push({
-          kind: 'rock',
-          x: cx, y: cy, z: cz,
-          size: 0.5 + t * 0.3,
-          height: 0,
-          yaw: t * 1.7,
-        });
-      }
+      if (idx < 0) continue;
+      const cy = terrain.heights[idx] ?? 0;
+      out.push({
+        kind: 'rock',
+        x: cx, y: cy, z: cz,
+        size: 0.3 + Math.random() * 0.3, // small: 0.3-0.6m
+        height: 0,
+        yaw: Math.random() * Math.PI,
+      });
     }
+  }
+  return out;
+}
+
+// Scatter rocks around the mountain base to make it look like a rocky hill.
+function mountainRocks(terrain: TerrainData): Obstacle[] {
+  const out: Obstacle[] = [];
+  const mtn = terrain.mountain;
+  const rng = mulberry32(mtn.x * 1000 + mtn.z);
+  const count = 60;
+  for (let i = 0; i < count; i++) {
+    const angle = rng() * Math.PI * 2;
+    const dist = mtn.sigma * 0.5 + rng() * mtn.sigma * 1.2;
+    const cx = mtn.x + Math.cos(angle) * dist;
+    const cz = mtn.z + Math.sin(angle) * dist;
+    const idx = worldToTerrainIndex(terrain, cx, cz);
+    if (idx < 0) continue;
+    const surf = terrain.surfaces[idx];
+    if (surf === Surface.Road || surf === Surface.Concrete) continue;
+    const cy = terrain.heights[idx] ?? 0;
+    const radius = 0.4 + rng() * 1.8;
+    out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: rng() * Math.PI });
+  }
+  return out;
+}
+
+// Scatter pine trees on the mountain slopes (above the hill climb path).
+function mountainTrees(terrain: TerrainData): Obstacle[] {
+  const out: Obstacle[] = [];
+  const mtn = terrain.mountain;
+  const rng = mulberry32(mtn.x * 2000 + mtn.z * 3);
+  const count = 30;
+  for (let i = 0; i < count; i++) {
+    const angle = rng() * Math.PI * 2;
+    const dist = mtn.sigma * 0.8 + rng() * mtn.sigma * 1.0;
+    const cx = mtn.x + Math.cos(angle) * dist;
+    const cz = mtn.z + Math.sin(angle) * dist;
+    const idx = worldToTerrainIndex(terrain, cx, cz);
+    if (idx < 0) continue;
+    const surf = terrain.surfaces[idx];
+    if (surf === Surface.Road || surf === Surface.Concrete) continue;
+    const cy = terrain.heights[idx] ?? 0;
+    const height = 12 + rng() * 10;
+    out.push({ kind: 'pine', x: cx, y: cy, z: cz, size: 0.8 + rng() * 0.5, height, yaw: rng() * Math.PI });
   }
   return out;
 }

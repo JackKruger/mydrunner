@@ -243,8 +243,8 @@ export const TERRAIN = {
   valleySigma: 12,
 
   // Mountain (ratios applied to size)
-  mtnPeak: 32,
-  mtnSigmaRatio: 0.11,
+  mtnPeak: 48,
+  mtnSigmaRatio: 0.13,
   mtnXRatio: 0.22,
   mtnZRatio: 0.28,
 

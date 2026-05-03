@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Physics, EMPTY_INPUT, type PlayerInput } from '../index.js';
+import { mountainFor, petrolStationPadFor } from '../physics/terrain.js';
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -20,9 +21,14 @@ function makeWorld() {
   const heights = new Float32Array(n * n);
   const surfaces = new Uint8Array(n * n);
   surfaces.fill(Physics.Surface.Road);
-  const world = new Physics.World({
-    terrain: { size: 200, resolution: n, heights, surfaces, seed: 0 },
-  });
+  const terrainData: Physics.TerrainData = {
+    size: 200, resolution: n, heights, surfaces, seed: 0,
+    mountain: mountainFor(200),
+    petrolStation: petrolStationPadFor(200),
+    bogs: [],
+    roads: [],
+  };
+  const world = new Physics.World({ terrain: terrainData });
   const vehicle = new Physics.SolidAxleVehicle(
     world,
     'p',
