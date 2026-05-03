@@ -138,15 +138,12 @@ export const AXLE = {
     droopMax: 0.30,
     bumpMax: 0.20,
     rideStiffness: 80_000,
-    // c_critical for vertical bob = 2*sqrt(k_total*m) ~ 2*sqrt(170000*1500)
-    // ~ 31900 N*s/m total. Per axle that's ~16000 each. Sums with the
-    // saturating engagement curve in solidAxleVehicle.ts to land at
-    // ~critical at typical equilibrium compression - body settles in
-    // half a cycle instead of bobbing visibly while the wheels stay
-    // planted (the previous 75%-critical claim was correct on paper but
-    // the engagement scaling collapsed it to ~12% effective in steady
-    // state, hence the visible "body stutters while driving" feel).
-    rideDamping: 28_000,
+    // c_critical for vertical bounce = 2*sqrt(k_total*m)
+    // ~ 2*sqrt(170000*1500) ~ 31900 N/s/m total; per axle ~15950.
+    // Target ζ ≈ 0.70 (slightly underdamped): c = 0.70 * 15950 ≈ 11150.
+    // Previous value of 28k gave ζ ≈ 1.6× (overdamped) — chassis barely
+    // moved and never visibly pitched/bounced on terrain.
+    rideDamping: 11_000,
     rollStiffness: 35_000,
     rollDamping: 1_800,
     maxArticulation: 0.45,
@@ -164,11 +161,11 @@ export const AXLE = {
     droopMax: 0.32,
     bumpMax: 0.20,
     rideStiffness: 90_000,
-    // Matched to front's overdamped ratio (28k / c_crit_front ≈ 1.8×) so
-    // both ends have the same damping ratio. Mismatched ratios excited a
-    // sustained pitch oscillation that made the wheel tread lugs appear to
-    // spin even when stationary. c_crit_rear ≈ 16,400, so 1.8× ≈ 29,500.
-    rideDamping: 28_000,
+    // c_crit_rear ≈ 2*sqrt(90000*750) ≈ 16432 N·s/m. Target ζ ≈ 0.70:
+    // c = 0.70 * 16432 ≈ 11500. Match front ratio so both ends settle
+    // at the same rate — mismatched damping excites sustained pitch
+    // oscillation (wheel tread lugs appear to spin while stationary).
+    rideDamping: 11_000,
     rollStiffness: 28_000,
     rollDamping: 1_500,
     maxArticulation: 0.50,

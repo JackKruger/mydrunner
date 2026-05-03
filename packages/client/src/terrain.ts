@@ -32,27 +32,6 @@ export class TerrainMesh {
       this.positions[i * 3 + 1] = this.terrain.heights[i] ?? 0;
     }
     pos.needsUpdate = true;
-
-    // Replace the default Three.js anti-diagonal (NW→SE) with the main
-    // diagonal (SW→NE) to match Rapier's heightfield triangulation, which
-    // uses (BL,TL,TR) + (BL,TR,BR). Mismatched diagonals produce visual
-    // triangles that straddle different physics triangles, so wheel contact
-    // geometry disagrees with the rendered surface (half-wheel penetration
-    // on steep slopes after the resolution increase to 128).
-    {
-      const indices: number[] = [];
-      for (let iy = 0; iy < n - 1; iy++) {
-        for (let ix = 0; ix < n - 1; ix++) {
-          const a = iy * n + ix;           // SW
-          const b = (iy + 1) * n + ix;     // NW
-          const c = (iy + 1) * n + ix + 1; // NE
-          const d = iy * n + ix + 1;       // SE
-          indices.push(a, b, c, a, c, d);  // main diagonal SW→NE
-        }
-      }
-      geo.setIndex(indices);
-    }
-
     geo.computeVertexNormals();
 
     this.material = makeTerrainMaterial(this.terrain);

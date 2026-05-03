@@ -63,7 +63,6 @@ const hiluxGeom: VehicleGeom = {
     ...AXLE.rear,
     centerLocalZ: -1.4,           // 0.1m rearward of Patrol's -1.3
     rideStiffness: 75_000,        // softer than Patrol's 90k for cargo
-    rideDamping: 11_000,          // damping scales with stiffness
     maxArticulation: 0.55,        // a little more rear flex
   },
 };
