@@ -119,21 +119,6 @@ export class Prediction {
       a.rollAngle *= 0.82;
     }
   }
-    if (captureState) this.capturePrev();
-    this.vehicle.setInput(input);
-    this.world.step();
-    this.lastSteppedSeq = input.seq;
-    // Decay the visual reconcile offset toward zero each step. 0.82 per
-    // step at 60Hz gives a ~80ms half-life, so a small reconcile snap
-    // converges away within a couple of frames - invisible.
-    this.visualOffset.x *= 0.82;
-    this.visualOffset.y *= 0.82;
-    this.visualOffset.z *= 0.82;
-    for (const a of this.axleVisualOffset) {
-      a.rideY *= 0.82;
-      a.rollAngle *= 0.82;
-    }
-  }
 
   private capturePrev(): void {
     const t = this.vehicle.body.translation();
