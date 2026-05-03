@@ -96,11 +96,14 @@ export interface Road {
   shoulderWidth: number;
 }
 
-/** Default straight road along z=0 (horizontal strip). */
+/** Default straight road along z=0 (horizontal strip).
+ *  Segment extends beyond map edges so the perpendicular distance
+ *  equals |z| for all points within the map, matching the original
+ *  behaviour where the road was infinite in X. */
 function defaultRoad(size: number): Road {
-  const half = size / 2;
+  const extended = size * 2; // well beyond map edges
   return {
-    points: [{ x: -half, z: 0 }, { x: half, z: 0 }],
+    points: [{ x: -extended, z: 0 }, { x: extended, z: 0 }],
     width: TERRAIN.roadCore * 2,
     surface: Surface.Road,
     shoulderWidth: TERRAIN.roadShoulder - TERRAIN.roadCore,
@@ -223,7 +226,7 @@ export const roadLayer: HeightLayer = (ctx, x, z, currentH) => {
   return currentH;
 };
 
-/** Petrol station pad layer - flattens and blends. */
+/** Petrol station pad layer - flattens pad and adjacent fade zone to y=0. */
 export const padLayer: HeightLayer = (ctx, x, z, currentH) => {
   const pad = ctx.pad;
   const cosY = Math.cos(pad.yaw);
@@ -238,7 +241,7 @@ export const padLayer: HeightLayer = (ctx, x, z, currentH) => {
   const padZ = smoothFalloff(Math.abs(lz), pad.halfD, pad.fade);
   const padW = padX * padZ;
   if (padW > 0) {
-    return currentH * (1 - padW);
+    return 0; // Flat at y=0 for pad and adjacent fade zone
   }
   return currentH;
 };

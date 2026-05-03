@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mydrunner</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #111; color: #eee; font-family: ui-monospace, monospace; }
+      #app { width: 100vw; height: 100vh; }
+      #hud { position: fixed; top: 8px; left: 8px; padding: 6px 10px; background: rgba(0,0,0,0.5); border-radius: 4px; font-size: 12px; line-height: 1.4; pointer-events: none; }
+      #help { position: fixed; bottom: 8px; left: 8px; padding: 6px 10px; background: rgba(0,0,0,0.5); border-radius: 4px; font-size: 11px; line-height: 1.4; pointer-events: none; opacity: 0.7; }
+      #version { position: fixed; bottom: 8px; right: 8px; padding: 3px 8px; background: rgba(0,0,0,0.5); border-radius: 3px; font-size: 10px; color: #aaa; font-family: ui-monospace, monospace; pointer-events: none; opacity: 0.6; }
+
+      /* ── Touch controls ─────────────────────────────────────────── */
+      #touch-controls {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 50;
+        display: none;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      body.touch #touch-controls { display: block; }
+      body.touch #help { display: none; }
+
+      #steer-pad {
+        position: absolute;
+        left: 24px;
+        bottom: 24px;
+        width: 160px;
+        height: 160px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.06);
+        border: 2px solid rgba(255, 255, 255, 0.18);
+        pointer-events: auto;
+      }
+      #steer-knob {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 70px;
+        height: 70px;
+        margin: -35px 0 0 -35px;
+        border-radius: 50%;
+        background: rgba(217, 83, 30, 0.7);
+        border: 2px solid rgba(255, 255, 255, 0.4);
+        pointer-events: none;
+        transition: background 0.1s;
+      }
+      #steer-pad.active #steer-knob { background: rgba(217, 83, 30, 0.95); }
+
+      #pedal-stack {
+        position: absolute;
+        right: 24px;
+        bottom: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-end;
+      }
+      .pedal {
+        width: 96px;
+        height: 96px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.06);
+        border: 2px solid rgba(255, 255, 255, 0.18);
+        color: #eee;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        font-weight: bold;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+      }
+      .pedal.pressed { background: rgba(217, 83, 30, 0.85); border-color: rgba(255, 255, 255, 0.5); }
+      #throttle-btn { background: rgba(70, 107, 58, 0.4); }
+      #throttle-btn.pressed { background: rgba(120, 180, 90, 0.85); }
+      #brake-btn { background: rgba(178, 58, 72, 0.4); }
+      #brake-btn.pressed { background: rgba(220, 70, 90, 0.9); }
+
+      #aux-row {
+        position: absolute;
+        right: 24px;
+        top: 24px;
+        display: flex;
+        gap: 10px;
+      }
+      .aux-btn {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: #eee;
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        pointer-events: auto;
+        padding: 0;
+      }
+      .aux-btn.pressed { background: rgba(217, 83, 30, 0.7); }
+
+      #handbrake-btn {
+        position: absolute;
+        right: 132px;
+        bottom: 36px;
+        width: 72px;
+        height: 72px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.5);
+        border: 2px solid rgba(255, 255, 255, 0.2);
+        color: #eee;
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+        font-weight: bold;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        pointer-events: auto;
+        padding: 0;
+      }
+      #handbrake-btn.pressed { background: rgba(217, 83, 30, 0.85); }
+
+      @media (max-width: 480px) {
+        #steer-pad { width: 130px; height: 130px; left: 16px; bottom: 16px; }
+        #steer-knob { width: 56px; height: 56px; margin: -28px 0 0 -28px; }
+        .pedal { width: 80px; height: 80px; }
+        #pedal-stack { right: 16px; bottom: 16px; gap: 10px; }
+        #handbrake-btn { right: 108px; bottom: 28px; width: 60px; height: 60px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud">connecting…</div>
+    <div id="help">WASD / Arrows = drive · Space = handbrake (toggle) · Shift = brake · R = reset · C = camera · M = mute · T = chat</div>
+    <div id="version">dev</div>
+
+    <div id="touch-controls">
+      <div id="steer-pad"><div id="steer-knob"></div></div>
+      <button id="handbrake-btn" type="button">hand<br/>brake</button>
+      <div id="pedal-stack">
+        <button class="pedal" id="throttle-btn" type="button">gas</button>
+        <button class="pedal" id="brake-btn" type="button">brake</button>
+      </div>
+      <div id="aux-row">
+        <button class="aux-btn" id="cam-btn" type="button">cam</button>
+        <button class="aux-btn" id="reset-btn" type="button">reset</button>
+        <button class="aux-btn" id="mute-btn" type="button">mute</button>
+        <button class="aux-btn" id="chat-btn" type="button">chat</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
