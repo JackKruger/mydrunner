@@ -139,9 +139,11 @@ export function stepEngine(
   // through the negative ratio - both signs cancel.
   const torqueAtWheels = engineT * activeRatio * ENGINE.finalDrive;
 
-  // Engine braking off-throttle.
+  // Engine braking off-throttle. The coef has been increased from 0.04
+  // to 0.12 so the vehicle doesn't coast faster than it should on
+  // downhills. Braking torque rises linearly with RPM above idle.
   let brakeT = 0;
-  if (Math.abs(throttle) < 0.05 && rpm > ENGINE.idleRpm + 100) {
+  if (Math.abs(throttle) < 0.05 && rpm > ENGINE.idleRpm + 50) {
     brakeT = (rpm - ENGINE.idleRpm) * ENGINE.engineBrakeCoef * Math.sign(activeRatio);
   }
 

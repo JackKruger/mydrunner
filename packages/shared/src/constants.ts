@@ -80,7 +80,7 @@ export const ENGINE = {
   firstGear: 2,
   shiftUpRpm: 4600,
   shiftDownRpm: 1700,
-  engineBrakeCoef: 0.04,
+  engineBrakeCoef: 0.12,
   rpmLimiterFalloff: 800,
 } as const;
 
@@ -178,6 +178,14 @@ export const TIRE_LATERAL = {
   longRatio: 0.95,
 } as const;
 
+// Effective longitudinal friction coefficient for the solid-axle model.
+// With per-wheel normal load ~3700N (1500kg / 4 wheels), this gives
+// ~3700N of grip per wheel on road - around 1g of acceleration across
+// all four wheels. Surface multiplier scales below this. 1.15 gives a
+// touch more bite at low speed so launching off the line + tight
+// cornering both feel less greasy.
+export const TIRE_LONG_FRICTION = 1.15;
+
 // Wheel spin physics for the solid-axle model. inertia governs how fast
 // a wheel spins up under torque (kg*m^2 of a tyre + rim + brake disc).
 // rollingResistance is a small proportional drag torque that bleeds spin
@@ -186,14 +194,6 @@ export const WHEEL = {
   inertia: 1.6,
   rollingResistance: 0.015,
 } as const;
-
-// Vehicle physics model. The custom solid-axle path is now the default;
-// 'raycast' is kept as a one-line escape hatch in case the new model
-// regresses something in production. Both paths are exercised by the
-// test suite (legacy via physics.test.ts + prediction.test.ts, solid-
-// axle via solidAxleVehicle.test.ts + axle.test.ts).
-export type VehicleModel = 'raycast' | 'solidAxle';
-export const VEHICLE_MODEL: VehicleModel = 'solidAxle';
 
 // Hill-climb traction assist. Real 4x4s lose grip on slopes because
 // gravity peels the tyre's contact away; in our model it manifests as

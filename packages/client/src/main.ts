@@ -6,7 +6,7 @@ import { Physics, FIXED_DT, type PlayerId } from '@mydrunner/shared';
 import { EngineAudio } from './engineAudio.js';
 import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './joinScreen.js';
 import { initChat } from './chat.js';
-import { isDebugUser, initDebugPanel } from './debugPanel.js';
+import { isDebugUser, initDebugPanel, updateAxleDebug } from './debugPanel.js';
 
 const SURFACE_LABELS: Record<number, string> = {
   [Physics.Surface.Road]: 'road',
@@ -278,6 +278,8 @@ async function start(): Promise<void> {
     if (prediction) {
       const s = prediction.state(alpha);
       scene.setLocalVehiclePose(s.position, s.rotation, s.wheels, s.axles);
+      // Update debug axle overlay for debug users.
+      updateAxleDebug(s.axles[0], s.axles[1]);
     }
 
     scene.render(now);

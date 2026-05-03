@@ -1,7 +1,6 @@
-// Shared vehicle interface that both the legacy raycast Vehicle and the
-// new SolidAxleVehicle satisfy. World.spawnVehicle returns this; consumers
-// (Room, Prediction) program against it instead of either concrete class
-// so the VEHICLE_MODEL flag can swap them at runtime.
+// Shared vehicle interface that SolidAxleVehicle satisfies.
+// World.spawnVehicle returns this; consumers (Room, Prediction) program
+// against it instead of the concrete class.
 
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { PlayerInput, VehicleState } from '../types.js';
@@ -30,8 +29,8 @@ export interface VehicleLike {
   getState(): VehicleState;
   wheelSamples(): WheelSample[];
   dispose(): void;
-  /** Optional: solid-axle vehicles expose axle state for prediction
-   *  reconcile. The legacy raycast Vehicle does not implement this. */
+  /** Solid-axle vehicles expose axle state for prediction
+   *  reconcile. */
   axleSnaps?(): [AxleSnap, AxleSnap];
   applyAxleSnaps?(snaps: [AxleSnap, AxleSnap]): void;
 }

@@ -144,21 +144,22 @@ visibly pulled with it, axle tilts, chassis can lean.
 
 ### Phase 4 — cleanup (after Phase 3 has been live one release)
 
-- [ ] Delete `packages/shared/src/physics/vehicle.ts` (legacy raycast
+- [x] Delete `packages/shared/src/physics/vehicle.ts` (legacy raycast
       model).
-- [ ] Rename `solidAxleVehicle.ts` → `vehicle.ts`, update imports.
-- [ ] Strip `VEHICLE_MODEL` flag from `constants.ts` and the branch
+- [x] Rename `solidAxleVehicle.ts` → `vehicle.ts`, update imports.
+      (Note: file was NOT renamed to avoid git history confusion;
+      imports updated in `world.ts`, `index.ts`, and `vehicleTypes.ts`.)
+- [x] Strip `VEHICLE_MODEL` flag from `constants.ts` and the branch
       in `World.spawnVehicle`.
-- [ ] Remove legacy `Tuning` fields (`suspensionStiffness`,
+- [x] Remove legacy `Tuning` fields (`suspensionStiffness`,
       `suspensionDamping`, `suspensionCompression`, `maxSuspensionForce`,
-      `maxSuspensionTravel`) from `tuning.ts`.
+      `maxSuspensionTravel`) from `tuning.ts`. Debug panel updated with
+      solid-axle per-axle sliders.
 
 ### Open follow-ups discovered during playtest
 
-- [ ] **`LONG_FRICTION` magic number** — currently hardcoded 1.0 at the
-      top of `solidAxleVehicle.ts`. Move to `constants.ts` once tuning
-      stabilises, exposed via `TUNING` so the debug panel can tweak
-      it.
+- [x] **`LONG_FRICTION` magic number** — moved to `constants.ts` as
+      `TIRE_LONG_FRICTION`.
 - [ ] **A/B characterisation harness** — `shared/__tests__/modelCompare.test.ts`
       that drives both legacy and solid-axle models through identical
       input sequences (settle → throttle → straight 5s → brake → tight
@@ -168,10 +169,9 @@ visibly pulled with it, axle tilts, chassis can lean.
 - [ ] **Diff-lock UI hookup** — `TUNING.diffLockFront` / `diffLockRear`
       exist but no key bind. Consider Q for front lock, E for rear (or
       a combined lockall). Useful for rock crawling demos.
-- [ ] **Live debug overlay** — print per-axle rideY/rollAngle each
-      frame next to the existing surface HUD so playtest tuning is
-      data-driven. Hook into the existing debug-user code path
-      (`isDebugUser('jack')` in `main.ts`).
+- [x] **Live debug overlay** — per-axle rideY/rollAngle displayed in
+      the debug panel for debug users ("jack"). Updated each render
+      frame via `updateAxleDebug()`.
 - [ ] **Lateral force model** — currently `F_lat = clamp(-latStiff*latV,
       ±latMax)`. Linear in slip speed, capped at friction circle. A
       slip-angle-based curve (cornering stiffness up to peak then
@@ -213,12 +213,15 @@ visibly pulled with it, axle tilts, chassis can lean.
       simple linear+clamp lateral force; a proper slip-angle curve
       (peak at ~6-10 deg, falls off past) would make under/oversteer
       feel right and let "drifting in mud" be a thing.
-- [ ] Better engine braking on downhills - currently coasts faster than
-      it should. Tune `ENGINE.engineBrakeCoef` or sample from chassis
-      velocity not just RPM.
+- [x] Better engine braking on downhills — `ENGINE.engineBrakeCoef`
+      increased from 0.04 to 0.12, threshold lowered from idle+100 to
+      idle+50 RPM so braking engages earlier and bites harder.
 - [x] ~~Anti-roll bar emulation~~ — done as part of the solid-axle
       overhaul (`ANTI_ROLL_STIFFNESS` / `ANTI_ROLL_DAMPING` at the top
       of `solidAxleVehicle.ts`). Tunable from playtest feel.
+- [x] Prediction reconciliation smoothing — small errors (< 0.15m)
+      smoothly LERPed over 6 ticks in `prediction.ts`; large errors
+      still snap with visual offset decay.
 
 ### P1 — make the world feel less empty
 - [ ] Skybox / cloud layer (procedural, no external assets). Sky is

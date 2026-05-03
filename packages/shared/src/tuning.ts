@@ -39,14 +39,6 @@ export interface Tuning {
     gravel: number;
     concrete: number;
   };
-  // Legacy raycast vehicle suspension knobs. Kept in Phase 1 - 3 so the
-  // debug panel can still tune the old model when VEHICLE_MODEL is
-  // 'raycast'. Stripped in Phase 4 once the legacy path is deleted.
-  suspensionStiffness: number;
-  suspensionDamping: number;
-  suspensionCompression: number;
-  maxSuspensionForce: number;
-  maxSuspensionTravel: number;
   brakeForce: number;
   maxSteer: number;
   steerSpeed: number;
@@ -73,11 +65,6 @@ export const TUNING: Tuning = {
   tireBaseGrip: TIRE_BASE_GRIP,
   inclineAssistMax: INCLINE_ASSIST_MAX,
   surfaceFriction: { ...SURFACE_FRICTION } as Tuning['surfaceFriction'],
-  suspensionStiffness: VEHICLE.suspensionStiffness,
-  suspensionDamping: VEHICLE.suspensionDamping,
-  suspensionCompression: VEHICLE.suspensionCompression,
-  maxSuspensionForce: VEHICLE.maxSuspensionForce,
-  maxSuspensionTravel: VEHICLE.maxSuspensionTravel,
   brakeForce: VEHICLE.brakeForce,
   maxSteer: VEHICLE.maxSteer,
   steerSpeed: VEHICLE.steerSpeed,

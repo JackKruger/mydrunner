@@ -102,7 +102,7 @@ Other players are still rendered by interpolating between buffered snapshots ~10
 - `packages/shared/src/types.ts` — `PlayerInput`, `VehicleState`, `WorldSnapshot`, `CarKind`. Wire-shape contract.
 - `packages/shared/src/net/messages.ts` — `ClientMessage` / `ServerMessage` discriminated unions, `encode` / `decode*`. Welcome carries terrain seed + spawn pose; `hello` carries name + carKind; snapshots include each player's `carKind`; `rut` messages carry per-cell deltas (currently never emitted).
 - `packages/shared/src/physics/world.ts` — `World` wraps a `RAPIER.World`, owns the heightfield collider + map of vehicles + obstacles. **Note: heights are transposed before being handed to Rapier** (Rapier reads column-major; our generator is row-major).
-- `packages/shared/src/physics/vehicle.ts` — `Vehicle` wraps `RAPIER.DynamicRayCastVehicleController`. `preStep` does per-wheel surface lookup, AWD torque distribution, friction modulation, and incline-traction assist.
+- `packages/shared/src/physics/solidAxleVehicle.ts` — `SolidAxleVehicle`: custom solid-axle vehicle model (the only vehicle model; legacy raycast path was deleted in Phase 4). `preStep` does per-wheel-end raycasts, spring/damper forces, anti-roll bar, engine + gearbox, and tire slip forces.
 - `packages/shared/src/physics/terrain.ts` — deterministic FBM-noise heightmap + Surface enum + `mountainFor(size)` landmark spec. `roadCore=5` strict-flat, `roadCore..roadShoulder=8` smoothstep into natural terrain. Rolling hills, one Gaussian mountain peak, scattered mud bogs.
 - `packages/shared/src/physics/obstacles.ts` — deterministic rock + tree placement. Three passes: medium scatter, dense small-rock detail, and a corridor of boulders along the rocky hill climb up the mountain.
 - `packages/shared/src/physics/ruts.ts` — `RutBuffer` accumulates per-cell erosion, capped at `RUT_MAX_DEPTH`. Only Mud / DeepMud cells erode. Plumbing is in place but disabled via `RUTS_ENABLED`.
@@ -210,7 +210,7 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - **Tick on `setInterval`.** Will drift under Node GC pauses. Acceptable for MVP; move to `setImmediate`-driven loop with sleep-to-deadline if drift becomes visible.
 - **Inputs are clamped server-side** (`Room.applyInput`) but otherwise trusted. No anti-cheat beyond range clamping.
 - **Rapier `compat` build bundles WASM as base64.** This is why `optimizeDeps.exclude` is set in `vite.config.ts`. Don't switch to `@dimforge/rapier3d` (non-compat) without revisiting Vite config.
-- **Prediction divergence is not visually smoothed.** A reconcile snaps the body. If divergence becomes large under packet loss, this will pop. Add a small-error LERP and a large-error snap when needed.
+- **Prediction divergence smoothing.** Small position errors (< 0.15m) are smoothly LERPed over 6 ticks (~100ms) via `reconcileSmoothing` in `prediction.ts`. Large errors still snap with visual offset decay.
 
 ## Operating notes
 

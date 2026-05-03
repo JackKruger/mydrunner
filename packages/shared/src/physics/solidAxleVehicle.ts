@@ -26,6 +26,7 @@ import {
   FIXED_DT,
   GRAVITY_Y,
   TIRE_LATERAL,
+  TIRE_LONG_FRICTION,
   VEHICLE,
 } from '../constants.js';
 import { TUNING } from '../tuning.js';
@@ -62,14 +63,6 @@ import type {
   WheelSample,
 } from './vehicleTypes.js';
 import type { World } from './world.js';
-
-// Effective longitudinal friction coefficient for the new model. With
-// per-wheel normal load ~3700N (1500kg / 4 wheels), this gives ~3700N of
-// grip per wheel on road - around 1g of acceleration available across
-// the four wheels combined. Surface multiplier scales below this. 1.15
-// (was 1.0) gives a touch more bite at low speed so launching off the
-// line + tight cornering both feel less greasy.
-const LONG_FRICTION = 1.15;
 
 // Anti-roll bar: chassis-frame torque proportional to world-roll about
 // the chassis-forward axis. The per-wheel-end ride forces already give
@@ -441,7 +434,7 @@ export class SolidAxleVehicle implements VehicleLike {
       const normalLoad = baseLoad + loadFromSpring;
 
       const longGripCap =
-        LONG_FRICTION * surfMult * axleGripMult * inclineMult * normalLoad;
+        TIRE_LONG_FRICTION * surfMult * axleGripMult * inclineMult * normalLoad;
       const longForceMag = slipMult * longGripCap;
       const longForceSigned = Math.sign(slip) * longForceMag;
 

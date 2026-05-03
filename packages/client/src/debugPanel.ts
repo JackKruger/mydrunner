@@ -34,12 +34,16 @@ const SLIDERS: Slider[] = [
   { label: 'surf.deepMud', min: 0, max: 2, step: 0.02, get: () => TUNING.surfaceFriction.deepMud, set: (v) => (TUNING.surfaceFriction.deepMud = v) },
   { label: 'surf.grass', min: 0, max: 2, step: 0.02, get: () => TUNING.surfaceFriction.grass, set: (v) => (TUNING.surfaceFriction.grass = v) },
   { label: 'surf.gravel', min: 0, max: 2, step: 0.02, get: () => TUNING.surfaceFriction.gravel, set: (v) => (TUNING.surfaceFriction.gravel = v) },
-  // Suspension feel.
-  { label: 'susp.stiffness', min: 5, max: 120, step: 1, get: () => TUNING.suspensionStiffness, set: (v) => (TUNING.suspensionStiffness = v) },
-  { label: 'susp.damping', min: 0, max: 15, step: 0.1, get: () => TUNING.suspensionDamping, set: (v) => (TUNING.suspensionDamping = v) },
-  { label: 'susp.compression', min: 0, max: 2, step: 0.05, get: () => TUNING.suspensionCompression, set: (v) => (TUNING.suspensionCompression = v) },
-  { label: 'susp.maxForce', min: 1000, max: 30000, step: 250, get: () => TUNING.maxSuspensionForce, set: (v) => (TUNING.maxSuspensionForce = v) },
-  { label: 'susp.maxTravel', min: 0.05, max: 1, step: 0.02, get: () => TUNING.maxSuspensionTravel, set: (v) => (TUNING.maxSuspensionTravel = v) },
+  // Suspension feel — solid-axle per-axle knobs.
+  { label: 'axleF.rideStiff', min: 20000, max: 200000, step: 1000, get: () => TUNING.axleFront.rideStiffness, set: (v) => (TUNING.axleFront.rideStiffness = v) },
+  { label: 'axleF.rideDamp', min: 2000, max: 40000, step: 500, get: () => TUNING.axleFront.rideDamping, set: (v) => (TUNING.axleFront.rideDamping = v) },
+  { label: 'axleF.rollStiff', min: 5000, max: 80000, step: 1000, get: () => TUNING.axleFront.rollStiffness, set: (v) => (TUNING.axleFront.rollStiffness = v) },
+  { label: 'axleF.maxArtic', min: 0.1, max: 1.0, step: 0.02, get: () => TUNING.axleFront.maxArticulation, set: (v) => (TUNING.axleFront.maxArticulation = v) },
+  { label: 'axleR.rideStiff', min: 20000, max: 200000, step: 1000, get: () => TUNING.axleRear.rideStiffness, set: (v) => (TUNING.axleRear.rideStiffness = v) },
+  { label: 'axleR.rideDamp', min: 2000, max: 40000, step: 500, get: () => TUNING.axleRear.rideDamping, set: (v) => (TUNING.axleRear.rideDamping = v) },
+  { label: 'axleR.rollStiff', min: 5000, max: 80000, step: 1000, get: () => TUNING.axleRear.rollStiffness, set: (v) => (TUNING.axleRear.rollStiffness = v) },
+  { label: 'axleR.maxArtic', min: 0.1, max: 1.0, step: 0.02, get: () => TUNING.axleRear.maxArticulation, set: (v) => (TUNING.axleRear.maxArticulation = v) },
+  { label: 'latStiff', min: 2000, max: 40000, step: 500, get: () => TUNING.tireLatStiffness, set: (v) => (TUNING.tireLatStiffness = v) },
   // Drivetrain.
   { label: 'brakeForce', min: 500, max: 6000, step: 50, get: () => TUNING.brakeForce, set: (v) => (TUNING.brakeForce = v) },
   { label: 'maxSteer (rad)', min: 0.1, max: 0.8, step: 0.02, get: () => TUNING.maxSteer, set: (v) => (TUNING.maxSteer = v) },
@@ -103,6 +107,8 @@ export function isDebugUser(name: string): boolean {
   return name.trim().toLowerCase() === 'jack';
 }
 
+let axleEl: HTMLDivElement | null = null;
+
 export function initDebugPanel(): void {
   const style = document.createElement('style');
   style.textContent = STYLE;
@@ -112,6 +118,18 @@ export function initDebugPanel(): void {
   panel.id = 'debug-panel';
   panel.innerHTML = `<h2>TUNING (jack)</h2>`;
   document.body.appendChild(panel);
+
+  // Live axle readout section.
+  const axleSection = document.createElement('div');
+  axleSection.id = 'debug-axles';
+  axleSection.style.cssText =
+    'margin-top:12px;padding-top:8px;border-top:1px solid #2a323d;font-size:10px;color:#7adfff;';
+  axleSection.innerHTML =
+    '<div style="color:#d9531e;margin-bottom:4px">AXLE STATE</div>' +
+    '<div id="debug-axle-front">front: --</div>' +
+    '<div id="debug-axle-rear">rear: --</div>';
+  panel.appendChild(axleSection);
+  axleEl = axleSection;
 
   const valueEls = new Map<string, HTMLSpanElement>();
 
@@ -192,12 +210,21 @@ export const SURFACE_FRICTION = {
   grass: ${f(t.surfaceFriction.grass)},
   gravel: ${f(t.surfaceFriction.gravel)},
 } as const;
-// VEHICLE.* (suspension + drive feel):
-//   suspensionStiffness: ${f(t.suspensionStiffness, 0)},
-//   suspensionDamping: ${f(t.suspensionDamping, 2)},
-//   suspensionCompression: ${f(t.suspensionCompression, 2)},
-//   maxSuspensionForce: ${f(t.maxSuspensionForce, 0)},
-//   maxSuspensionTravel: ${f(t.maxSuspensionTravel, 2)},
+// AXLE.* (solid-axle per-axle suspension):
+//   front: {
+//     rideStiffness: ${f(t.axleFront.rideStiffness, 0)},
+//     rideDamping: ${f(t.axleFront.rideDamping, 0)},
+//     rollStiffness: ${f(t.axleFront.rollStiffness, 0)},
+//     maxArticulation: ${f(t.axleFront.maxArticulation, 2)},
+//   },
+//   rear: {
+//     rideStiffness: ${f(t.axleRear.rideStiffness, 0)},
+//     rideDamping: ${f(t.axleRear.rideDamping, 0)},
+//     rollStiffness: ${f(t.axleRear.rollStiffness, 0)},
+//     maxArticulation: ${f(t.axleRear.maxArticulation, 2)},
+//   },
+//   tireLatStiffness: ${f(t.tireLatStiffness, 0)},
+// VEHICLE.* (drive feel):
 //   brakeForce: ${f(t.brakeForce, 0)},
 //   maxSteer: ${f(t.maxSteer, 2)},
 //   steerSpeed: ${f(t.steerSpeed, 2)},
@@ -208,4 +235,23 @@ export const SURFACE_FRICTION = {
 //   slipFalloff: ${f(t.slipFalloff, 2)},
 //   slipFloor: ${f(t.slipFloor, 2)},
 `;
+}
+
+/** Update the live axle readout in the debug panel. Call each render frame
+ *  from the main loop with the current prediction axle state. */
+export function updateAxleDebug(
+  front: { rideY: number; rollAngle: number },
+  rear: { rideY: number; rollAngle: number },
+): void {
+  if (!axleEl) return;
+  const fEl = document.getElementById('debug-axle-front');
+  const rEl = document.getElementById('debug-axle-rear');
+  if (fEl) {
+    fEl.textContent =
+      `front: rideY=${front.rideY.toFixed(3)}m  roll=${(front.rollAngle * 57.296).toFixed(1)}deg`;
+  }
+  if (rEl) {
+    rEl.textContent =
+      `rear:  rideY=${rear.rideY.toFixed(3)}m  roll=${(rear.rollAngle * 57.296).toFixed(1)}deg`;
+  }
 }

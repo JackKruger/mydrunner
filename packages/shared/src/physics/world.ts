@@ -5,8 +5,7 @@
 // a World - Rapier is WASM and needs to load.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { GRAVITY_Y, VEHICLE_MODEL } from '../constants.js';
-import { Vehicle } from './vehicle.js';
+import { GRAVITY_Y } from '../constants.js';
 import { SolidAxleVehicle } from './solidAxleVehicle.js';
 import type { CarKind } from '../types.js';
 import type { VehicleLike, VehicleSpawn } from './vehicleTypes.js';
@@ -89,9 +88,7 @@ export class World {
   }
 
   spawnVehicle(id: string, spawn: VehicleSpawn, kind: CarKind = 'patrol'): VehicleLike {
-    const v: VehicleLike = VEHICLE_MODEL === 'solidAxle'
-      ? new SolidAxleVehicle(this, id, spawn, kind)
-      : new Vehicle(this, id, spawn);
+    const v: VehicleLike = new SolidAxleVehicle(this, id, spawn, kind);
     this.vehicles.set(id, v);
     return v;
   }
