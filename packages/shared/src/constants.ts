@@ -82,6 +82,9 @@ export const ENGINE = {
   shiftDownRpm: 1700,
   engineBrakeCoef: 0.12,
   rpmLimiterFalloff: 800,
+  // Minimum ticks between automatic RPM-triggered shifts (~1.5 s at 60 Hz).
+  // Prevents hunting when vehicle speed oscillates near a shift threshold.
+  shiftHoldTicks: 90,
 } as const;
 
 // Mud / surface friction. Multipliers in [0, 1] applied on top of
@@ -212,9 +215,9 @@ export const INCLINE_ASSIST_MAX = 1.5;
 // the outside of the turn instead of locking rigidly behind the car.
 export const CAMERA = {
   chaseYawStiffness: 14,    // rad/s^2 per rad of error - higher = tracks faster
-  chaseYawDamping: 2.8,     // critical at 2*sqrt(stiffness) ~7.48; well below that for visible swing
-  chaseSwingLateral: 0.75,  // metres of side offset per rad/s of camera yaw rate
-  chaseSwingMax: 2.2,       // clamp on lateral swing offset (m)
+  chaseYawDamping: 5.5,     // closer to critical (~7.48) - less post-corner oscillation
+  chaseSwingLateral: 0.35,  // metres of side offset per rad/s of camera yaw rate
+  chaseSwingMax: 1.0,       // clamp on lateral swing offset (m)
 } as const;
 
 // Networking

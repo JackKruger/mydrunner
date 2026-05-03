@@ -20,10 +20,12 @@ export interface EngineState {
   rpm: number;
   /** Index into ENGINE.gears. */
   gearIndex: number;
+  /** Ticks remaining before the next automatic RPM-triggered shift is allowed. */
+  shiftCooldown: number;
 }
 
 export function createEngineState(): EngineState {
-  return { rpm: ENGINE.idleRpm, gearIndex: ENGINE.neutralGear };
+  return { rpm: ENGINE.idleRpm, gearIndex: ENGINE.neutralGear, shiftCooldown: 0 };
 }
 
 /** Approximate torque curve. Peak around peakTorqueRpm, falls off either
@@ -49,15 +51,19 @@ export function gearRatio(state: EngineState): number {
 
 /** Step the engine simulation one fixed frame.
  *
- *  wheelAngVel: signed average angular velocity of the driven wheels in
- *               rad/s. Sign indicates forward (+) vs reverse (-) motion.
- *  throttle:    signed input in [-1, 1].
- *
- *  Returns the torque to apply at the drive wheels (positive = forward).
+ *  wheelAngVel:   signed average angular velocity of the driven wheels in
+ *                 rad/s. Used for RPM display / torque curve.
+ *  vehicleAngVel: |chassis forward speed| / wheelRadius. Used exclusively
+ *                 for automatic shift decisions. Decoupling this from
+ *                 wheelAngVel prevents spinning wheels (slip on mud / steep
+ *                 hills) from triggering premature upshifts and the 1-2-1-2
+ *                 gear-hunt cycle that follows.
+ *  throttle:      signed input in [-1, 1].
  */
 export function stepEngine(
   state: EngineState,
   wheelAngVel: number,
+  vehicleAngVel: number,
   throttle: number,
   dt: number,
 ): { wheelForce: number; rpm: number; gear: number } {
@@ -103,24 +109,23 @@ export function stepEngine(
   } else if (wantsReverse && gIdx === ENGINE.neutralGear) {
     nextGear = ENGINE.reverseGear;
   } else if (gIdx >= ENGINE.firstGear) {
-    // Forward auto-shifting based on RPM. Only when actually rolling
-    // forward (don't upshift while wheels are spinning at standstill).
-    // Downshift uses the gear-locked RPM directly, NOT the blended
-    // `rpm` above. Why: the converter-style blend pads RPM up toward
-    // the throttle target at low wheel speeds (so launches don't lug
-    // at idle), which means a truck slowing to a crawl on a hill
-    // sits at ~2500 RPM in 5th and never trips the < 1700 downshift
-    // threshold. Result: stuck in too-tall a gear, ~3 kN at the
-    // wheels when 30° terrain wants ~7 kN, slows to a stop. Locked
-    // RPM correctly reflects "if the engine were rigid-coupled to
-    // the wheels, what would it be doing" - which is the right
-    // signal for "do I need a lower gear?".
-    const wheelRpmAbs = (Math.abs(wheelAngVel) * 60) / (2 * Math.PI);
-    const lockedAtGear = wheelRpmAbs * Math.abs(ratio) * ENGINE.finalDrive;
-    if (rpm > ENGINE.shiftUpRpm && gIdx < ENGINE.gears.length - 1 && wheelAngVel > 1.5) {
+    // Forward auto-shifting based on chassis speed (vehicleAngVel), NOT
+    // wheel spin. Wheel angVel inflates when tires slip (stuck on hill,
+    // mud bog, etc.) and using it for shift decisions causes a feedback
+    // loop: spinning wheels trigger an upshift → less torque in the
+    // higher gear → wheels slow → downshift → wheels spin up → upshift
+    // again (the 1-2-1-2 hunting the player reported). Chassis speed is
+    // unaffected by slip and gives a stable, speed-accurate shift point.
+    const vehicleRpmAbs = (vehicleAngVel * 60) / (2 * Math.PI);
+    const vehicleLockedRpm = vehicleRpmAbs * Math.abs(ratio) * ENGINE.finalDrive;
+    if (state.shiftCooldown > 0) {
+      state.shiftCooldown--;
+    } else if (vehicleLockedRpm > ENGINE.shiftUpRpm && gIdx < ENGINE.gears.length - 1) {
       nextGear = gIdx + 1;
-    } else if (lockedAtGear < ENGINE.shiftDownRpm && gIdx > ENGINE.firstGear) {
+      state.shiftCooldown = ENGINE.shiftHoldTicks;
+    } else if (vehicleLockedRpm < ENGINE.shiftDownRpm && gIdx > ENGINE.firstGear) {
       nextGear = gIdx - 1;
+      state.shiftCooldown = ENGINE.shiftHoldTicks;
     }
   } else if (Math.abs(throttle) < 0.05 && Math.abs(wheelAngVel) < 0.5) {
     nextGear = ENGINE.neutralGear;

@@ -338,7 +338,11 @@ export class SolidAxleVehicle implements VehicleLike {
     const avgAngVel = (this.wheels[0]!.angVel + this.wheels[1]!.angVel + this.wheels[2]!.angVel + this.wheels[3]!.angVel) / 4;
     const longSpeed = lv.x * fwd.x + lv.y * fwd.y + lv.z * fwd.z;
     const signedAvg = Math.sign(longSpeed || avgAngVel) * Math.abs(avgAngVel);
-    const engineOut = stepEngine(this.engine, signedAvg, this.input.throttle, dt);
+    // vehicleAngVel is chassis speed expressed as equivalent wheel rad/s.
+    // Passed separately so the engine uses it for shift decisions without
+    // being confused by wheel slip (see engine.ts for the full rationale).
+    const vehicleAngVel = Math.abs(longSpeed) / this.geom.wheelRadius;
+    const engineOut = stepEngine(this.engine, signedAvg, vehicleAngVel, this.input.throttle, dt);
     this.lastRpm = engineOut.rpm;
     this.lastGear = engineOut.gear;
     const drivePerWheelTorque = engineOut.wheelForce; // engine.ts returns torque-shaped values
