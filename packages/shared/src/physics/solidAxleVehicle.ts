@@ -28,6 +28,7 @@ import {
   TIRE_LATERAL,
   TIRE_LONG_FRICTION,
   VEHICLE,
+  WHEEL,
 } from '../constants.js';
 import { TUNING } from '../tuning.js';
 import {
@@ -39,7 +40,8 @@ import {
 } from '../types.js';
 import { Surface, sampleSurface } from './terrain.js';
 import { createEngineState, stepEngine, type EngineState } from './engine.js';
-import { slipRatio, gripFromSlip } from './tire.js';
+// slipRatio / gripFromSlip kept in tire.ts for tests; not used here since
+// the impulse-clamped integrator below replaced the Pacejka groundTq path.
 import { rotateVecByQuat } from './util.js';
 import { geomFor, type VehicleGeom } from './vehicleGeom.js';
 import {
@@ -441,30 +443,29 @@ export class SolidAxleVehicle implements VehicleLike {
       const longV = cvX * wheelFwd.x + cvY * wheelFwd.y + cvZ * wheelFwd.z;
       const latV = cvX * wheelRight.x + cvY * wheelRight.y + cvZ * wheelRight.z;
 
-      // Slip ratio + grip multiplier.
-      const slip = slipRatio(w.angVel, this.geom.wheelRadius, longV);
       const surfMult = surfaceGrip(w.surface);
-      const slipMult = gripFromSlip(slip);
       const axleGripMult = isFront ? TUNING.frontGripMult : TUNING.rearGripMult;
-      // Normal load estimate: even chassis-weight share + extra from
-      // spring compression at this wheel-end. The compression term gives
-      // higher grip on the wheel that's actually pressed into the ground
-      // (load transfer through the axle).
+      // Normal load: even weight share + load transfer from spring compression.
       const baseLoad = VEHICLE.mass * Math.abs(GRAVITY_Y) / 4;
       const loadFromSpring = ag.rideStiffness * Math.max(0, w.contactDepth) * 0.25;
       const normalLoad = baseLoad + loadFromSpring;
-
       const longGripCap =
         TIRE_LONG_FRICTION * surfMult * axleGripMult * inclineMult * normalLoad;
-      const longForceMag = slipMult * longGripCap;
-      const longForceSigned = Math.sign(slip) * longForceMag;
 
-      // Ground torque on the wheel = -F_long * R (decelerates a driving
-      // wheel; spins up a locked wheel).
-      const groundTq = -longForceSigned * this.geom.wheelRadius;
+      // Impulse-clamped wheel integration. The Pacejka groundTq (≈1200 N·m
+      // at 1 rad/s contact) is 14× larger than what Euler-at-60Hz can
+      // integrate stably: it flung angVel to ±14 rad/s per frame, which
+      // bypassed the |angVel|<1 spin-guard and let spin accumulate while
+      // "parked". Fix: compute the torque needed to reach zero-slip in one
+      // step and clamp it to grip capacity — the wheel can never overshoot.
+      const groundAngVel = longV / this.geom.wheelRadius;
+      const maxGroundTq = longGripCap * this.geom.wheelRadius;
+      const neededTq = (groundAngVel - w.angVel) * WHEEL.inertia / dt;
+      const groundTq = Math.sign(neededTq) * Math.min(Math.abs(neededTq), maxGroundTq);
       integrateWheelSpin(w, driveTq, brakeTq, groundTq, dt);
 
-      // Longitudinal force on the chassis at the contact point.
+      // Chassis force = Newton's 3rd law of the clamped wheel impulse.
+      const longForceSigned = -groundTq / this.geom.wheelRadius;
       this.body.addForceAtPoint(
         {
           x: wheelFwd.x * longForceSigned,
