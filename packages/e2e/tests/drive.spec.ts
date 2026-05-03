@@ -81,12 +81,17 @@ test.describe('driving', () => {
 
     await page.keyboard.down('KeyA');
     await page.waitForTimeout(800);
-    const samples: number[] = [];
-    for (let i = 0; i < 20; i++) {
-      const d = await readDiag(page);
-      samples.push(d!.wheels[0]!.steer);
-      await page.waitForTimeout(25);
-    }
+    // Run sampling loop inside the browser to avoid 20 cross-process evaluate
+    // roundtrips, which time out on slow CI runners.
+    const samples: number[] = await page.evaluate(async () => {
+      const w = window as unknown as { __prediction?: { state: () => { wheels: { steer: number }[] } } };
+      const out: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        out.push(w.__prediction?.state().wheels[0]?.steer ?? 0);
+        await new Promise<void>((r) => setTimeout(r, 25));
+      }
+      return out;
+    });
     await page.keyboard.up('KeyA');
     const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
     expect(mean, `mean steer was ${mean.toFixed(3)}`).toBeLessThan(-0.2);
