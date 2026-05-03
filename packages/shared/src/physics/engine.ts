@@ -70,13 +70,12 @@ export function stepEngine(
   // Derive engine RPM from driveshaft. In neutral, RPM follows throttle
   // toward an idle/blip behaviour; when in gear, it's locked to the
   // wheels through the gear and final drive.
-  let rpm: number;
   const gIdx = state.gearIndex;
   const ratio = ENGINE.gears[gIdx] ?? 0;
+  let targetRpm: number;
   if (gIdx === ENGINE.neutralGear || ratio === 0) {
     // Free-revving in neutral.
-    const target = ENGINE.idleRpm + Math.max(0, throttle) * (ENGINE.redlineRpm - ENGINE.idleRpm);
-    rpm = state.rpm + (target - state.rpm) * Math.min(1, dt * 4);
+    targetRpm = ENGINE.idleRpm + Math.max(0, throttle) * (ENGINE.redlineRpm - ENGINE.idleRpm);
   } else {
     // Wheel-derived RPM (rigid coupling). At low wheel speed a real auto
     // is decoupled from the wheels by a torque converter / slipping
@@ -89,9 +88,23 @@ export function stepEngine(
     // 8 rad/s wheel speed (~3 m/s).
     const blend = Math.min(1, Math.abs(wheelAngVel) / 8);
     const throttleTarget = ENGINE.idleRpm + Math.abs(throttle) * (ENGINE.peakTorqueRpm - ENGINE.idleRpm);
-    rpm = lockedRpm * blend + throttleTarget * (1 - blend);
-    if (rpm < ENGINE.idleRpm) rpm = ENGINE.idleRpm;
+    targetRpm = lockedRpm * blend + throttleTarget * (1 - blend);
   }
+  // Hard cap at the rev-limiter cliff. Past this rpm the torque curve
+  // (torqueAtRpm) returns ~0 anyway, so the engine cannot physically
+  // rev higher. Without this cap, freely-spinning wheels (slip on mud,
+  // in-air after a jump) inflate lockedRpm without bound and the rpm
+  // field drifts to absurd values — which the audio synth then chases,
+  // producing the "rpm climbs forever" glitch.
+  const RPM_HARD_LIMIT = ENGINE.redlineRpm + ENGINE.rpmLimiterFalloff;
+  if (targetRpm > RPM_HARD_LIMIT) targetRpm = RPM_HARD_LIMIT;
+  if (targetRpm < ENGINE.idleRpm) targetRpm = ENGINE.idleRpm;
+  // Smooth toward target. Per-tick wheel-spin variance (impulse-clamped
+  // integrator + slip dynamics) and gear-change transitions otherwise
+  // translate directly into rpm jumps that read as audio glitching/
+  // bouncing. ~125 ms time constant tracks throttle changes within a
+  // few frames while filtering single-tick spikes.
+  const rpm = state.rpm + (targetRpm - state.rpm) * Math.min(1, dt * 8);
 
   // Direction-of-travel intent comes from throttle sign. Importantly, we
   // shift into the requested direction even if the car is currently
