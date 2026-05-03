@@ -114,7 +114,8 @@ export class SolidAxleVehicle implements VehicleLike {
     this.body = world.world.createRigidBody(bodyDesc);
 
     const ext = this.geom.chassisHalfExtents;
-    const colDesc = RAPIER.ColliderDesc.cuboid(ext.x, ext.y, ext.z)
+    const r = VEHICLE.chassisColliderRadius;
+    const colDesc = RAPIER.ColliderDesc.roundCuboid(ext.x - r, ext.y - r, ext.z - r, r)
       .setDensity(VEHICLE.mass / (8 * ext.x * ext.y * ext.z))
       .setFriction(0.3);
     this.chassis = world.world.createCollider(colDesc, this.body);
