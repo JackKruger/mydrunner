@@ -105,9 +105,21 @@ export function stepEngine(
   } else if (gIdx >= ENGINE.firstGear) {
     // Forward auto-shifting based on RPM. Only when actually rolling
     // forward (don't upshift while wheels are spinning at standstill).
+    // Downshift uses the gear-locked RPM directly, NOT the blended
+    // `rpm` above. Why: the converter-style blend pads RPM up toward
+    // the throttle target at low wheel speeds (so launches don't lug
+    // at idle), which means a truck slowing to a crawl on a hill
+    // sits at ~2500 RPM in 5th and never trips the < 1700 downshift
+    // threshold. Result: stuck in too-tall a gear, ~3 kN at the
+    // wheels when 30° terrain wants ~7 kN, slows to a stop. Locked
+    // RPM correctly reflects "if the engine were rigid-coupled to
+    // the wheels, what would it be doing" - which is the right
+    // signal for "do I need a lower gear?".
+    const wheelRpmAbs = (Math.abs(wheelAngVel) * 60) / (2 * Math.PI);
+    const lockedAtGear = wheelRpmAbs * Math.abs(ratio) * ENGINE.finalDrive;
     if (rpm > ENGINE.shiftUpRpm && gIdx < ENGINE.gears.length - 1 && wheelAngVel > 1.5) {
       nextGear = gIdx + 1;
-    } else if (rpm < ENGINE.shiftDownRpm && gIdx > ENGINE.firstGear) {
+    } else if (lockedAtGear < ENGINE.shiftDownRpm && gIdx > ENGINE.firstGear) {
       nextGear = gIdx - 1;
     }
   } else if (Math.abs(throttle) < 0.05 && Math.abs(wheelAngVel) < 0.5) {

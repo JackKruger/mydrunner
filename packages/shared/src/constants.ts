@@ -203,7 +203,7 @@ export const VEHICLE_MODEL: VehicleModel = 'solidAxle';
 // (1 + INCLINE_ASSIST_MAX). Negative pitch (nose down, descending)
 // gets no boost - going downhill grip isn't the problem. Tuned to make
 // a properly-driven 4x4 climb the rocky-hill route to the summit.
-export const INCLINE_ASSIST_MAX = 1.1;
+export const INCLINE_ASSIST_MAX = 1.5;
 
 // Chase camera. Lives shared-side because the constants describe the
 // game's feel, not anything client-internal. The chase yaw uses an
