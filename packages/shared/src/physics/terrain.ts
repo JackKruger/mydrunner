@@ -96,11 +96,11 @@ export interface Road {
   shoulderWidth: number;
 }
 
-/** Default straight road along z=0. */
+/** Default straight road along z=0 (horizontal strip). */
 function defaultRoad(size: number): Road {
   const half = size / 2;
   return {
-    points: [{ x: 0, z: -half }, { x: 0, z: half }],
+    points: [{ x: -half, z: 0 }, { x: half, z: 0 }],
     width: TERRAIN.roadCore * 2,
     surface: Surface.Road,
     shoulderWidth: TERRAIN.roadShoulder - TERRAIN.roadCore,
@@ -197,22 +197,26 @@ function pointToSegmentDist(px: number, pz: number, ax: number, az: number, bx: 
 /** Road height layer - flattens terrain under roads and eases at shoulders. */
 export const roadLayer: HeightLayer = (ctx, x, z, currentH) => {
   let minDist = Infinity;
+  let closestRoadCoreDist = TERRAIN.roadCore;
+  let closestRoadShoulderDist = TERRAIN.roadShoulder;
   for (const road of ctx.roads) {
     for (let i = 0; i < road.points.length - 1; i++) {
       const a = road.points[i]!;
       const b = road.points[i + 1]!;
       const dist = pointToSegmentDist(x, z, a.x, a.z, b.x, b.z);
-      minDist = Math.min(minDist, dist);
+      if (dist < minDist) {
+        minDist = dist;
+        closestRoadCoreDist = road.width / 2;
+        closestRoadShoulderDist = road.width / 2 + road.shoulderWidth;
+      }
     }
   }
-  const roadCoreDist = TERRAIN.roadCore;
-  const roadShoulderDist = TERRAIN.roadShoulder;
-  if (minDist <= roadCoreDist) {
+  if (minDist <= closestRoadCoreDist) {
     return 0; // Flat at y=0 inside road core
   }
-  if (minDist < roadShoulderDist) {
+  if (minDist < closestRoadShoulderDist) {
     // Smooth ease from 0 to natural height over shoulder
-    const t = (minDist - roadCoreDist) / (roadShoulderDist - roadCoreDist);
+    const t = (minDist - closestRoadCoreDist) / (closestRoadShoulderDist - closestRoadCoreDist);
     const ease = t * t * (3 - 2 * t);
     return currentH * ease;
   }
@@ -253,6 +257,8 @@ export type SurfaceRule = (
 export const roadSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
   let minDist = Infinity;
   let roadSurface: Surface | null = null;
+  let roadCoreDist = TERRAIN.roadCore;
+  let roadShoulderDist = TERRAIN.roadShoulder;
   for (const road of ctx.roads) {
     for (let i = 0; i < road.points.length - 1; i++) {
       const a = road.points[i]!;
@@ -261,13 +267,15 @@ export const roadSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
       if (dist < minDist) {
         minDist = dist;
         roadSurface = road.surface;
+        roadCoreDist = road.width / 2;
+        roadShoulderDist = road.width / 2 + road.shoulderWidth;
       }
     }
   }
-  if (minDist <= TERRAIN.roadCore) {
+  if (minDist <= roadCoreDist) {
     return roadSurface ?? Surface.Road;
   }
-  if (minDist <= TERRAIN.roadShoulder) {
+  if (minDist <= roadShoulderDist) {
     return Surface.Dirt;
   }
   return currentSurf;
