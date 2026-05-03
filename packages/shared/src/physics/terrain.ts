@@ -110,10 +110,15 @@ function defaultRoad(size: number): Road {
   };
 }
 
-/** Second road: diagonal branch from the main road toward the mountain base. */
+/** Second road: south loop from the main road up to the mountain trail base.
+ *  Connects (40,-60) on the south side to the mountain trail entry at (55,18),
+ *  giving the map a circuit: main road → south branch → mountain approach. */
 function secondRoad(size: number): Road {
+  const mtn = mountainFor(size);
+  const trailBaseX = mtn.x - 15;
+  const trailBaseZ = mtn.z - mtn.sigma * 1.6;
   return {
-    points: [{ x: 40, z: -60 }, { x: 90, z: 20 }],
+    points: [{ x: 40, z: -60 }, { x: trailBaseX, z: trailBaseZ }],
     width: 10,
     surface: Surface.Dirt,
     shoulderWidth: 4,

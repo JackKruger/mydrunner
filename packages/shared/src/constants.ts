@@ -13,6 +13,10 @@ export const GRAVITY_Y = -9.81;
 export const VEHICLE = {
   mass: 1500,
   chassisHalfExtents: { x: 0.85, y: 0.45, z: 1.9 }, // ~1.7m wide, 3.8m long
+  // Rounded edge radius on the chassis collider so bumpers slide off obstacles
+  // instead of catching square.  Inner box shrinks by this amount so total
+  // extent stays the same.
+  chassisColliderRadius: 0.15,
   wheelRadius: 0.46,
   wheelWidth: 0.32,
   // Suspension geometry. Chassis-connection points (wp.y) sit at the
@@ -273,10 +277,11 @@ export const TERRAIN = {
   // Mud bogs: world-space coords, depth (m), sigma (m)
   bogs: [
     { x: 30, z: -50, depth: 1.7, sigma: 8 },
-    { x: -30, z: -45, depth: 1.5, sigma: 7 },
-    { x: 110, z: 60, depth: 1.8, sigma: 9 },
+    { x: -30, z: -80, depth: 1.5, sigma: 7 },  // spread south: was z=-45, too close to (30,-50)
+    { x: 75, z: 55, depth: 1.8, sigma: 9 },    // mountain flank: was (110,60) off in a corner
     { x: -100, z: -90, depth: 1.5, sigma: 7 },
     { x: 50, z: -95, depth: 1.6, sigma: 8 },
+    { x: 50, z: 55, depth: 1.4, sigma: 9 },    // mountain approach: no north-side mud existed
   ] as ReadonlyArray<{ x: number; z: number; depth: number; sigma: number }>,
 } as const;
 
