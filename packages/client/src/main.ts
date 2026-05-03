@@ -257,6 +257,7 @@ async function start(): Promise<void> {
 
     if (connected && prediction) {
       predictAcc += frameDt;
+      prediction.beginFrame();
       let steps = 0;
       while (predictAcc >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
         const input = sampleInput();

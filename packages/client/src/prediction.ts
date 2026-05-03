@@ -85,6 +85,17 @@ export class Prediction {
     this.vehicle = this.world.spawnVehicle('local', this.spawn);
   }
 
+  /** Call once per render frame (before any physics steps) to capture
+   *  the current body state as the "previous" pose. This is needed for
+   *  smooth alpha-based interpolation in state(). Without calling this
+   *  every frame, `prev` goes stale on displays whose refresh rate isn't
+   *  an exact multiple of the physics tick rate (e.g. 144Hz vs 60Hz),
+   *  causing the car to stutter as the lerp endpoints don't advance
+   *  smoothly between physics steps. */
+  beginFrame(): void {
+    this.capturePrev();
+  }
+
   /** Push a sampled input. Caller has already sent it to the server.
    *  Steps the local sim once at FIXED_DT regardless of frame timing -
    *  prediction is on the input axis, not the frame axis. */
@@ -94,7 +105,21 @@ export class Prediction {
     if ((input.buttons & 1) !== 0) {
       this.vehicle.resetTo(this.spawn);
     }
-    this.capturePrev();
+    this.vehicle.setInput(input);
+    this.world.step();
+    this.lastSteppedSeq = input.seq;
+    // Decay the visual reconcile offset toward zero each step. 0.82 per
+    // step at 60Hz gives a ~80ms half-life, so a small reconcile snap
+    // converges away within a couple of frames - invisible.
+    this.visualOffset.x *= 0.82;
+    this.visualOffset.y *= 0.82;
+    this.visualOffset.z *= 0.82;
+    for (const a of this.axleVisualOffset) {
+      a.rideY *= 0.82;
+      a.rollAngle *= 0.82;
+    }
+  }
+    if (captureState) this.capturePrev();
     this.vehicle.setInput(input);
     this.world.step();
     this.lastSteppedSeq = input.seq;
