@@ -11,7 +11,10 @@ if (!process.env.PLAYWRIGHT_BROWSERS_PATH && existsSync('/opt/pw-browsers')) {
 // waits for both URLs before running tests.
 export default defineConfig({
   testDir: './tests',
-  timeout: 60_000,
+  // Each test gets a fresh browser context, so the Rapier WASM is
+  // recompiled from scratch in every test (~60s on slow CI runners).
+  // 120s gives enough headroom for WASM + test logic on a slow runner.
+  timeout: 120_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,
   workers: 1,
@@ -19,6 +22,9 @@ export default defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:5173',
     trace: 'retain-on-failure',
+    // Allow page.goto to wait up to 90s for the load event (which
+    // includes WASM compilation in the browser).
+    navigationTimeout: 90_000,
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },

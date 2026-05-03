@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 test.describe('@screenshot', () => {
   test('drive a lap and capture frames', async ({ page }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     const outDir = join(process.cwd(), 'screenshots');
     mkdirSync(outDir, { recursive: true });
 
