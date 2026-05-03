@@ -61,9 +61,24 @@ export class Obstacles {
       rampTopMat,  rampSideMat, // +Y top, -Y bottom
       rampSideMat, rampSideMat, // +Z, -Z (long sides)
     ];
-    const flagPostMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 });
+    const flagPostMat = new THREE.MeshStandardMaterial({ color: 0xdde4ee, metalness: 0.6, roughness: 0.4 });
     const flagMat = new THREE.MeshStandardMaterial({ color: 0xff5a1f, roughness: 0.7, side: THREE.DoubleSide });
     for (const o of list) {
+      if (o.kind === 'flagpole') {
+        // Summit marker: tall metal pole with a bright orange flag.
+        const poleH = o.height;
+        const poleGeo = new THREE.CylinderGeometry(0.06, 0.09, poleH, 6);
+        const pole = new THREE.Mesh(poleGeo, flagPostMat);
+        pole.castShadow = true;
+        pole.position.set(o.x, o.y + poleH / 2, o.z);
+        this.group.add(pole);
+        const flagGeo = new THREE.PlaneGeometry(1.6, 0.9);
+        const flag = new THREE.Mesh(flagGeo, flagMat);
+        flag.castShadow = true;
+        flag.position.set(o.x + 0.8, o.y + poleH - 0.45, o.z);
+        this.group.add(flag);
+        continue;
+      }
       if (o.kind === 'pine') {
         this.buildPine(o, pineTrunkMat);
         continue;

@@ -9,7 +9,10 @@
 // roughly x = -78..-50, z = -2..32, or in the road core z = -8..8.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { Surface, type TerrainData, worldToTerrainIndex } from './terrain.js';
+import {
+  Surface, type TerrainData, worldToTerrainIndex,
+  getHillClimbSegments, pointToSegmentDist, HILL_CLIMB_PATH_HALF_WIDTH,
+} from './terrain.js';
 
 // Simple seeded RNG for deterministic obstacle placement
 function mulberry32(seed: number) {
@@ -23,7 +26,7 @@ function mulberry32(seed: number) {
   };
 }
 
-export type ObstacleKind = 'rock' | 'tree' | 'pine' | 'ramp';
+export type ObstacleKind = 'rock' | 'tree' | 'pine' | 'ramp' | 'flagpole';
 
 export interface Obstacle {
   kind: ObstacleKind;
@@ -124,54 +127,86 @@ const FOREST_PINES: readonly TreeSpec[] = [
   [-122, 60, 0.95, 18], [-104, 80, 1.0, 17],
 ];
 
-// Hill-climb boulders: big rocks lining the path, lots of small rocks
-// on the track for grip. baseX/baseZ near the road; path heads toward
-// the mountain summit at (mtn.x, mtn.z).
+// Hill-climb boulders: corridor walls flanking each switchback segment +
+// dense off-trail scatter across the mountain face.  Fully deterministic —
+// no Math.random() used anywhere in here.
 function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
   const out: Obstacle[] = [];
   const mtn = terrain.mountain;
-  const baseX = mtn.x;
-  const baseZ = mtn.z - mtn.sigma * 1.6;
-  const dx = mtn.x - baseX;
-  const dz = mtn.z - baseZ;
-  const len = Math.hypot(dx, dz);
-  const nx = dx / len;
-  const nz = dz / len;
-  const px = -nz;
-  const pz = nx;
-  const climbSteps = 25;
-  for (let i = 0; i < climbSteps; i++) {
-    const t = i / (climbSteps - 1);
-    const along = t * len;
-    // Big lining rocks further from the track (5-7m from center)
-    const bigSide = 5 + t * 2;
-    for (const s of [-1, 1] as const) {
-      const cx = baseX + nx * along + px * s * bigSide;
-      const cz = baseZ + nz * along + pz * s * bigSide;
-      const idx = worldToTerrainIndex(terrain, cx, cz);
-      if (idx < 0) continue;
-      const cy = terrain.heights[idx] ?? 0;
-      const radius = 1.2 + t * 0.8; // big rocks: 1.2-2.0m
-      out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: t * Math.PI });
+  const rng = mulberry32(Math.round(mtn.x) * 1000 + Math.round(mtn.z) * 7 + 42);
+  const segments = getHillClimbSegments(mtn);
+
+  // (a) Trail-edge corridor: anchor rocks every ~9 m on each side of each segment.
+  for (const seg of segments) {
+    const dx = seg.bx - seg.ax;
+    const dz = seg.bz - seg.az;
+    const len = Math.hypot(dx, dz);
+    if (len < 1) continue;
+    const ux = dx / len;
+    const uz = dz / len;
+    const px = -uz; // perpendicular
+    const pz = ux;
+    const steps = Math.max(1, Math.floor(len / 9));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const cx0 = seg.ax + t * dx;
+      const cz0 = seg.az + t * dz;
+      for (const side of [-1, 1] as const) {
+        const offset = 5.5 + rng() * 3.5; // 5.5–9 m from trail centre
+        const jx = (rng() - 0.5) * 2.5;
+        const jz = (rng() - 0.5) * 2.5;
+        const cx = cx0 + px * side * offset + jx;
+        const cz = cz0 + pz * side * offset + jz;
+        const idx = worldToTerrainIndex(terrain, cx, cz);
+        if (idx < 0) continue;
+        const surf = terrain.surfaces[idx];
+        if (surf === Surface.Road || surf === Surface.Concrete) continue;
+        const cy = terrain.heights[idx] ?? 0;
+        out.push({
+          kind: 'rock',
+          x: cx, y: cy, z: cz,
+          size: 1.0 + rng() * 1.4,
+          height: 0,
+          yaw: rng() * Math.PI,
+        });
+      }
     }
-    // Small rocks ON the track for extra grip
-    const smallRocks = 3 + Math.floor(Math.random() * 3);
-    for (let j = 0; j < smallRocks; j++) {
-      const offset = (Math.random() - 0.5) * 3;
-      const cx = baseX + nx * along + px * offset;
-      const cz = baseZ + nz * along + pz * offset;
+  }
+
+  // (b) Dense scatter across the rest of the mountain face.
+  // 16×16 grid spanning sigma*2.2 around the summit; skip trail corridor.
+  const gridN = 16;
+  const span = mtn.sigma * 2.2;
+  const cell = span / gridN;
+  for (let gi = 0; gi < gridN; gi++) {
+    for (let gj = 0; gj < gridN; gj++) {
+      const cx0 = mtn.x - span / 2 + gi * cell;
+      const cz0 = mtn.z - span / 2 + gj * cell;
+      const cx = cx0 + (rng() - 0.5) * cell * 0.85;
+      const cz = cz0 + (rng() - 0.5) * cell * 0.85;
+      if (Math.hypot(cx - mtn.x, cz - mtn.z) > mtn.sigma * 1.1) continue;
       const idx = worldToTerrainIndex(terrain, cx, cz);
       if (idx < 0) continue;
       const cy = terrain.heights[idx] ?? 0;
+      if (cy < 8) continue; // only rocky above 8 m elevation
+      const surf = terrain.surfaces[idx];
+      if (surf === Surface.Road || surf === Surface.Concrete) continue;
+      // Stay clear of the carved trail
+      let minTrail = Infinity;
+      for (const seg of segments) {
+        minTrail = Math.min(minTrail, pointToSegmentDist(cx, cz, seg.ax, seg.az, seg.bx, seg.bz));
+      }
+      if (minTrail < HILL_CLIMB_PATH_HALF_WIDTH + 4) continue;
       out.push({
         kind: 'rock',
         x: cx, y: cy, z: cz,
-        size: 0.3 + Math.random() * 0.3, // small: 0.3-0.6m
+        size: 0.5 + rng() * 1.8,
         height: 0,
-        yaw: Math.random() * Math.PI,
+        yaw: rng() * Math.PI,
       });
     }
   }
+
   return out;
 }
 
@@ -197,24 +232,33 @@ function mountainRocks(terrain: TerrainData): Obstacle[] {
   return out;
 }
 
-// Scatter pine trees on the mountain slopes (above the hill climb path).
+// Scatter pines on the lower mountain slopes.  Trees never appear on the
+// trail — explicit pointToSegmentDist check keeps an 8 m buffer.
 function mountainTrees(terrain: TerrainData): Obstacle[] {
   const out: Obstacle[] = [];
   const mtn = terrain.mountain;
-  const rng = mulberry32(mtn.x * 2000 + mtn.z * 3);
-  const count = 30;
+  const rng = mulberry32(Math.round(mtn.x) * 2000 + Math.round(mtn.z) * 3 + 13);
+  const segments = getHillClimbSegments(mtn);
+  const count = 45;
   for (let i = 0; i < count; i++) {
     const angle = rng() * Math.PI * 2;
-    const dist = mtn.sigma * 0.8 + rng() * mtn.sigma * 1.0;
+    const dist = mtn.sigma * (1.2 + rng() * 1.3); // sigma*1.2 → sigma*2.5
     const cx = mtn.x + Math.cos(angle) * dist;
     const cz = mtn.z + Math.sin(angle) * dist;
     const idx = worldToTerrainIndex(terrain, cx, cz);
     if (idx < 0) continue;
-    const surf = terrain.surfaces[idx];
-    if (surf === Surface.Road || surf === Surface.Concrete) continue;
     const cy = terrain.heights[idx] ?? 0;
-    const height = 12 + rng() * 10;
-    out.push({ kind: 'pine', x: cx, y: cy, z: cz, size: 0.8 + rng() * 0.5, height, yaw: rng() * Math.PI });
+    if (cy < 3 || cy > 20) continue; // lower slopes only
+    const surf = terrain.surfaces[idx];
+    if (surf === Surface.Road || surf === Surface.Concrete || surf === Surface.DeepMud) continue;
+    // Keep trees off the trail
+    let minTrail = Infinity;
+    for (const seg of segments) {
+      minTrail = Math.min(minTrail, pointToSegmentDist(cx, cz, seg.ax, seg.az, seg.bx, seg.bz));
+    }
+    if (minTrail < 8) continue;
+    const height = 9 + rng() * 8;
+    out.push({ kind: 'pine', x: cx, y: cy, z: cz, size: 0.6 + rng() * 0.5, height, yaw: rng() * Math.PI });
   }
   return out;
 }
@@ -331,6 +375,19 @@ export function generateObstacles(terrain: TerrainData): Obstacle[] {
   out.push(...mountainRocks(terrain));
   out.push(...mountainTrees(terrain));
   out.push(...perimeterObstacles(terrain));
+
+  // Summit lookout marker — one flagpole at the peak as a climb destination.
+  const summitIdx = worldToTerrainIndex(terrain, terrain.mountain.x, terrain.mountain.z);
+  const summitY = summitIdx >= 0 ? (terrain.heights[summitIdx] ?? 0) : terrain.mountain.peak;
+  out.push({
+    kind: 'flagpole',
+    x: terrain.mountain.x,
+    y: summitY,
+    z: terrain.mountain.z,
+    size: 0.07,   // pole radius — used by capsule collider half-radius
+    height: 6.0,  // total pole height
+    yaw: 0,
+  });
 
   return out;
 }

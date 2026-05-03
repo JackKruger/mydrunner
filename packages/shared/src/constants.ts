@@ -242,11 +242,17 @@ export const TERRAIN = {
   valleyAmp: 1.4,
   valleySigma: 12,
 
-  // Mountain (ratios applied to size)
-  mtnPeak: 48,
-  mtnSigmaRatio: 0.13,
+  // Mountain (ratios applied to size).
+  // Peak and sigma are sized so the switchback traverses stay ≤ ~30 % grade
+  // (verified analytically in terrain.ts getHillClimbSegments).
+  // Steeper off-trail face is intentional — you can't shortcut the path.
+  mtnPeak: 80,
+  mtnSigmaRatio: 0.19,
   mtnXRatio: 0.22,
-  mtnZRatio: 0.28,
+  mtnZRatio: 0.36,
+
+  // Radius of the flat lookout plateau at the summit (m).
+  lookoutRadius: 8,
 
   // Petrol station pad (must not overlap road at z=0 with core |z|<8)
   padCxRatio: -0.20,

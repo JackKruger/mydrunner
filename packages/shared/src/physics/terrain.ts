@@ -120,14 +120,15 @@ function secondRoad(size: number): Road {
   };
 }
 
-/** Dirt trail from main road to mountain hill climb base. */
+/** Dirt connector from main road (z=0) to the start of traverse 1.
+ *  With the wider sigma the trail base is only ~18 m north of the road,
+ *  so this is a short straight north-south approach track. */
 function mountainTrail(size: number): Road {
   const mtn = mountainFor(size);
-  const baseX = mtn.x;
-  const baseZ = mtn.z - mtn.sigma * 1.8;
-  // Connect from main road (z=0) to hill base
+  const baseX = mtn.x - 15; // aligns with traverse-1 start x
+  const baseZ = mtn.z - mtn.sigma * 1.6; // trail base z
   return {
-    points: [{ x: baseX - 5, z: 0 }, { x: baseX + 3, z: baseZ }],
+    points: [{ x: baseX, z: 0 }, { x: baseX, z: baseZ }],
     width: 6,
     surface: Surface.Dirt,
     shoulderWidth: 2,
@@ -182,18 +183,29 @@ export const mountainLayer: HeightLayer = (ctx, x, z, currentH) => {
   return currentH + h;
 };
 
-const HILL_CLIMB_PATH_HALF_WIDTH = 3.5;
+export const HILL_CLIMB_PATH_HALF_WIDTH = 3.5;
 
 /** Returns the switchback segments for the hill-climb trail.
- *  Exported so the ASCII map visualiser can rasterise them. */
+ *  Exported so the ASCII map visualiser and obstacle placer can use them.
+ *
+ *  Design: 4 long traverses + 1 final approach.  Each traverse grade was
+ *  verified ≤ 30 % (≈ 17°) against a Gaussian mountain with the constants
+ *  in TERRAIN.mtnPeak / mtnSigmaRatio / mtnZRatio.  Traverses alternate
+ *  east and west so the trail zigzags up the southern face like a real
+ *  mountain road.  The switchback turn-arounds are implicit — the vehicle
+ *  just brakes and reverses direction at each segment endpoint. */
 export function getHillClimbSegments(mtn: MountainSpec): Array<{ ax: number; az: number; bx: number; bz: number }> {
   return [
-    { ax: mtn.x - 12, az: mtn.z - mtn.sigma * 1.8, bx: mtn.x + 8,  bz: mtn.z - mtn.sigma * 1.4 },
-    { ax: mtn.x + 8,  az: mtn.z - mtn.sigma * 1.4, bx: mtn.x - 10, bz: mtn.z - mtn.sigma * 0.9 },
-    { ax: mtn.x - 10, az: mtn.z - mtn.sigma * 0.9, bx: mtn.x + 6,  bz: mtn.z - mtn.sigma * 0.4 },
-    { ax: mtn.x + 6,  az: mtn.z - mtn.sigma * 0.4, bx: mtn.x - 4,  bz: mtn.z - mtn.sigma * 0.1 },
-    { ax: mtn.x - 4,  az: mtn.z - mtn.sigma * 0.1, bx: mtn.x + 2,  bz: mtn.z + mtn.sigma * 0.3 },
-    { ax: mtn.x + 2,  az: mtn.z + mtn.sigma * 0.3, bx: mtn.x,      bz: mtn.z },
+    // Traverse 1 — east across the lower face (~18 % grade)
+    { ax: mtn.x - 15, az: mtn.z - mtn.sigma * 1.6, bx: mtn.x + 38, bz: mtn.z - mtn.sigma * 1.2 },
+    // Traverse 2 — west across the mid-lower face (~27 % grade)
+    { ax: mtn.x + 38, az: mtn.z - mtn.sigma * 1.2, bx: mtn.x - 30, bz: mtn.z - mtn.sigma * 0.8 },
+    // Traverse 3 — east across the mid-upper face (~20 % grade)
+    { ax: mtn.x - 30, az: mtn.z - mtn.sigma * 0.8, bx: mtn.x + 30, bz: mtn.z - mtn.sigma * 0.45 },
+    // Traverse 4 — west toward the near-summit ledge (~32 % grade, acceptable)
+    { ax: mtn.x + 30, az: mtn.z - mtn.sigma * 0.45, bx: mtn.x - 10, bz: mtn.z - mtn.sigma * 0.12 },
+    // Final approach — short diagonal to summit (~13 % grade over lookout)
+    { ax: mtn.x - 10, az: mtn.z - mtn.sigma * 0.12, bx: mtn.x, bz: mtn.z },
   ];
 }
 
@@ -209,6 +221,19 @@ export const hillClimbLayer: HeightLayer = (ctx, x, z, currentH) => {
   if (minDist > HILL_CLIMB_PATH_HALF_WIDTH + 5) return currentH;
   const indent = 2.0 * Math.exp(-(minDist ** 2) / (2 * HILL_CLIMB_PATH_HALF_WIDTH ** 2));
   return currentH - indent;
+};
+
+/** Summit lookout plateau: flattens a small disc at the peak so there is
+ *  a clear destination for the climb rather than a knife-edge. */
+export const lookoutLayer: HeightLayer = (ctx, x, z, currentH) => {
+  const mtn = ctx.mountain;
+  const dist = Math.hypot(x - mtn.x, z - mtn.z);
+  const r = TERRAIN.lookoutRadius;
+  if (dist > r) return currentH;
+  const plateau = mtn.peak - 3;
+  const t = dist / r;
+  const blend = t * t * (3 - 2 * t); // smoothstep: flat at centre, natural at edge
+  return plateau + (currentH - plateau) * blend;
 };
 
 /** Mud bogs (Gaussian dips). */
@@ -238,7 +263,7 @@ export const edgeLayer: HeightLayer = (ctx, x, z, currentH) => {
 };
 
 /** Distance from a point to a line segment. */
-function pointToSegmentDist(px: number, pz: number, ax: number, az: number, bx: number, bz: number): number {
+export function pointToSegmentDist(px: number, pz: number, ax: number, az: number, bx: number, bz: number): number {
   const dx = bx - ax;
   const dz = bz - az;
   const len2 = dx * dx + dz * dz;
@@ -348,6 +373,13 @@ export const mountainSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
   return currentSurf;
 };
 
+/** Lookout surface rule - gravel on the summit plateau. */
+export const lookoutSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  const mtn = ctx.mountain;
+  if (Math.hypot(x - mtn.x, z - mtn.z) < TERRAIN.lookoutRadius) return Surface.Gravel;
+  return currentSurf;
+};
+
 /** Mud surface rule - based on height. */
 export const mudSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
   if (h < -0.8) return Surface.DeepMud;
@@ -398,6 +430,7 @@ const DEFAULT_HEIGHT_LAYERS: HeightLayer[] = [
   valleyLayer,
   mountainLayer,
   hillClimbLayer,
+  lookoutLayer,
   bogLayer,
   edgeLayer,
   roadLayer,
@@ -409,6 +442,7 @@ const DEFAULT_SURFACE_RULES: SurfaceRule[] = [
   padSurfaceRule,
   mudSurfaceRule,
   mountainSurfaceRule,
+  lookoutSurfaceRule,
   grassSurfaceRule,
 ];
 
