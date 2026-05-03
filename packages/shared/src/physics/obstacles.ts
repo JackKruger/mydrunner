@@ -128,7 +128,7 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
   const nz = dz / len;
   const px = -nz;
   const pz = nx;
-  const climbSteps = 14;
+  const climbSteps = 20;
   for (let i = 0; i < climbSteps; i++) {
     const t = i / (climbSteps - 1);
     const along = t * len;
@@ -145,8 +145,8 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
       const radius = 0.55 + t * 0.7;
       out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: t * Math.PI });
     }
-    // Sparse corridor boulder every third step.
-    if (i % 3 === 1) {
+    // Corridor boulder every other step.
+    if (i % 2 === 1) {
       const cx = baseX + nx * along;
       const cz = baseZ + nz * along;
       const idx = worldToTerrainIndex(terrain, cx, cz);
@@ -155,7 +155,7 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
         out.push({
           kind: 'rock',
           x: cx, y: cy, z: cz,
-          size: 0.4,
+          size: 0.5 + t * 0.3,
           height: 0,
           yaw: t * 1.7,
         });
