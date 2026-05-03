@@ -20,7 +20,17 @@ describe('rut formation', () => {
     const initial = new Float32Array(heights); // copy
 
     const world = new Physics.World({
-      terrain: { size, resolution: n, heights, surfaces, seed: 0 },
+      terrain: {
+        size,
+        resolution: n,
+        heights,
+        surfaces,
+        seed: 0,
+        mountain: Physics.mountainFor(size),
+        petrolStation: Physics.petrolStationPadFor(size),
+        bogs: [],
+        roads: [],
+      },
     });
     const ruts = new Physics.RutBuffer(world.terrain);
 
@@ -70,7 +80,17 @@ describe('rut formation', () => {
     surfaces.fill(Physics.Surface.Road);
 
     const world = new Physics.World({
-      terrain: { size, resolution: n, heights, surfaces, seed: 0 },
+      terrain: {
+        size,
+        resolution: n,
+        heights,
+        surfaces,
+        seed: 0,
+        mountain: Physics.mountainFor(size),
+        petrolStation: Physics.petrolStationPadFor(size),
+        bogs: [],
+        roads: [],
+      },
     });
     const ruts = new Physics.RutBuffer(world.terrain);
     const vehicle = world.spawnVehicle('p', { position: { x: 0, y: 1.5, z: -10 } });

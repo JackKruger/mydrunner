@@ -11,11 +11,22 @@ beforeAll(async () => {
 describe('heightfield orientation', () => {
   it('vehicle settles on top of an all-zero heightfield at room-spawn coords', () => {
     const n = 64;
+    const size = 200;
     const heights = new Float32Array(n * n); // all zeros
     const surfaces = new Uint8Array(n * n);
     surfaces.fill(Physics.Surface.Road);
     const world = new Physics.World({
-      terrain: { size: 200, resolution: n, heights, surfaces, seed: 0 },
+      terrain: {
+        size,
+        resolution: n,
+        heights,
+        surfaces,
+        seed: 0,
+        mountain: Physics.mountainFor(size),
+        petrolStation: Physics.petrolStationPadFor(size),
+        bogs: [],
+        roads: [],
+      },
     });
     // Same spawn pose Room uses for the first player.
     const v = world.spawnVehicle('p', {

@@ -64,11 +64,22 @@ describe('vehicle physics', () => {
   it('reaches a higher top speed on road than on deep mud', () => {
     function makeWorld(allMud: boolean): Physics.World {
       const n = 32;
+      const size = 100;
       const heights = new Float32Array(n * n);
       const surfaces = new Uint8Array(n * n);
       surfaces.fill(allMud ? Physics.Surface.DeepMud : Physics.Surface.Road);
       return new Physics.World({
-        terrain: { size: 100, resolution: n, heights, surfaces, seed: 0 },
+        terrain: {
+          size,
+          resolution: n,
+          heights,
+          surfaces,
+          seed: 0,
+          mountain: Physics.mountainFor(size),
+          petrolStation: Physics.petrolStationPadFor(size),
+          bogs: [],
+          roads: [],
+        },
       });
     }
     const wRoad = makeWorld(false);

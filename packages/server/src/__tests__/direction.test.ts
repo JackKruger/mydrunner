@@ -18,11 +18,22 @@ function simSeconds(world: Physics.World, seconds: number): void {
 
 function makeRoadWorld(): Physics.World {
   const n = 32;
+  const size = 100;
   const heights = new Float32Array(n * n);
   const surfaces = new Uint8Array(n * n);
   surfaces.fill(Physics.Surface.Road);
   return new Physics.World({
-    terrain: { size: 100, resolution: n, heights, surfaces, seed: 0 },
+    terrain: {
+      size,
+      resolution: n,
+      heights,
+      surfaces,
+      seed: 0,
+      mountain: Physics.mountainFor(size),
+      petrolStation: Physics.petrolStationPadFor(size),
+      bogs: [],
+      roads: [],
+    },
   });
 }
 

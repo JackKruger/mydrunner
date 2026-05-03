@@ -17,15 +17,21 @@ describe('terrain at spawn coords', () => {
     }
   });
 
-  it('ALL road cells (|z| < 5) have h=0', () => {
+  it('ALL spawn-corridor road cells (x < 30, |z| < 5) have h=0', () => {
+    // Bounded to x < 30 to stay clear of the diagonal mountain trail
+    // (starts ~x=39) and the second dirt road. Inside this corridor the
+    // defaultRoad is the closest road, so the universal flatness check
+    // still holds.
     const t = Physics.generateTerrain({ size: 200, resolution: 64, seed: 1337 });
     const n = t.resolution;
     for (let r = 0; r < n; r++) {
       for (let c = 0; c < n; c++) {
+        const x = (c / (n - 1) - 0.5) * t.size;
         const z = (r / (n - 1) - 0.5) * t.size;
+        if (x > 30) continue;
         if (Math.abs(z) < 5) {
           const h = t.heights[r * n + c];
-          expect(h, `at r=${r} c=${c} z=${z}`).toBeCloseTo(0, 5);
+          expect(h, `at r=${r} c=${c} x=${x} z=${z}`).toBeCloseTo(0, 5);
         }
       }
     }
