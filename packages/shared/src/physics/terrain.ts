@@ -158,6 +158,31 @@ export const mountainLayer: HeightLayer = (ctx, x, z, currentH) => {
   return currentH + h;
 };
 
+/** Hill climb path: a switchback carved into the mountain side.
+ *  The path is indented below the natural terrain so it reads as
+ *  a purpose-built climb route. */
+export const hillClimbLayer: HeightLayer = (ctx, x, z, currentH) => {
+  const mtn = ctx.mountain;
+  const baseX = mtn.x;
+  const baseZ = mtn.z - mtn.sigma * 1.6;
+  // Simple straight path from base to summit for now
+  // TODO: replace with switchback polyline for more interesting climb
+  const dx = mtn.x - baseX;
+  const dz = mtn.z - baseZ;
+  const len = Math.hypot(dx, dz);
+  const nx = dx / len;
+  const nz = dz / len;
+  // Point on the centre line of the path
+  const distAlong = (x - baseX) * nx + (z - baseZ) * nz;
+  const distPerp = Math.abs((x - baseX) * (-nz) + (z - baseZ) * nx);
+  const pathHalfWidth = 3.5; // wide enough for a truck
+  const pathDist = Math.abs(distAlong);
+  if (pathDist > len || distPerp > pathHalfWidth + 5) return currentH;
+  // Indent: carve into the mountain so the path is below natural height
+  const indent = 1.5 * Math.exp(-(distPerp ** 2) / (2 * pathHalfWidth ** 2));
+  return currentH - indent;
+};
+
 /** Mud bogs (Gaussian dips). */
 export const bogLayer: HeightLayer = (ctx, x, z, currentH) => {
   let h = currentH;
@@ -344,6 +369,7 @@ const DEFAULT_HEIGHT_LAYERS: HeightLayer[] = [
   baseNoiseLayer,
   valleyLayer,
   mountainLayer,
+  hillClimbLayer,
   bogLayer,
   edgeLayer,
   roadLayer,

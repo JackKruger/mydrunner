@@ -226,7 +226,7 @@ export const INTERPOLATION_DELAY_MS = 100;
 export const TERRAIN = {
   // Defaults
   defaultSize: 200,
-  defaultResolution: 64,
+  defaultResolution: 128,
   defaultSeed: 1337,
 
   // Noise
