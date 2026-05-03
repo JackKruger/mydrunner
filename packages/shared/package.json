@@ -15,7 +15,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "map": "tsx src/generateMaps.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

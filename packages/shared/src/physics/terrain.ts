@@ -182,30 +182,32 @@ export const mountainLayer: HeightLayer = (ctx, x, z, currentH) => {
   return currentH + h;
 };
 
+const HILL_CLIMB_PATH_HALF_WIDTH = 3.5;
+
+/** Returns the switchback segments for the hill-climb trail.
+ *  Exported so the ASCII map visualiser can rasterise them. */
+export function getHillClimbSegments(mtn: MountainSpec): Array<{ ax: number; az: number; bx: number; bz: number }> {
+  return [
+    { ax: mtn.x - 12, az: mtn.z - mtn.sigma * 1.8, bx: mtn.x + 8,  bz: mtn.z - mtn.sigma * 1.4 },
+    { ax: mtn.x + 8,  az: mtn.z - mtn.sigma * 1.4, bx: mtn.x - 10, bz: mtn.z - mtn.sigma * 0.9 },
+    { ax: mtn.x - 10, az: mtn.z - mtn.sigma * 0.9, bx: mtn.x + 6,  bz: mtn.z - mtn.sigma * 0.4 },
+    { ax: mtn.x + 6,  az: mtn.z - mtn.sigma * 0.4, bx: mtn.x - 4,  bz: mtn.z - mtn.sigma * 0.1 },
+    { ax: mtn.x - 4,  az: mtn.z - mtn.sigma * 0.1, bx: mtn.x + 2,  bz: mtn.z + mtn.sigma * 0.3 },
+    { ax: mtn.x + 2,  az: mtn.z + mtn.sigma * 0.3, bx: mtn.x,      bz: mtn.z },
+  ];
+}
+
 /** Hill climb path: switchback carved into the mountain side.
- *  Zigzag path with gentler gradient so vehicles can actually climb it.
  *  The path is indented below natural terrain. */
 export const hillClimbLayer: HeightLayer = (ctx, x, z, currentH) => {
-  const mtn = ctx.mountain;
-  // Switchback: 3 segments zigzagging up
-  // Base at south, summit at mtn.(x,z)
-  const segments = [
-    { ax: mtn.x - 12, az: mtn.z - mtn.sigma * 1.8, bx: mtn.x + 8, bz: mtn.z - mtn.sigma * 1.4 },
-    { ax: mtn.x + 8, az: mtn.z - mtn.sigma * 1.4, bx: mtn.x - 10, bz: mtn.z - mtn.sigma * 0.9 },
-    { ax: mtn.x - 10, az: mtn.z - mtn.sigma * 0.9, bx: mtn.x + 6, bz: mtn.z - mtn.sigma * 0.4 },
-    { ax: mtn.x + 6, az: mtn.z - mtn.sigma * 0.4, bx: mtn.x - 4, bz: mtn.z - mtn.sigma * 0.1 },
-    { ax: mtn.x - 4, az: mtn.z - mtn.sigma * 0.1, bx: mtn.x + 2, bz: mtn.z + mtn.sigma * 0.3 },
-    { ax: mtn.x + 2, az: mtn.z + mtn.sigma * 0.3, bx: mtn.x, bz: mtn.z },
-  ];
-  const pathHalfWidth = 3.5;
+  const segments = getHillClimbSegments(ctx.mountain);
   let minDist = Infinity;
   for (const seg of segments) {
     const dist = pointToSegmentDist(x, z, seg.ax, seg.az, seg.bx, seg.bz);
     minDist = Math.min(minDist, dist);
   }
-  if (minDist > pathHalfWidth + 5) return currentH;
-  // Indent path 2m below natural terrain
-  const indent = 2.0 * Math.exp(-(minDist ** 2) / (2 * pathHalfWidth ** 2));
+  if (minDist > HILL_CLIMB_PATH_HALF_WIDTH + 5) return currentH;
+  const indent = 2.0 * Math.exp(-(minDist ** 2) / (2 * HILL_CLIMB_PATH_HALF_WIDTH ** 2));
   return currentH - indent;
 };
 
@@ -493,13 +495,29 @@ export function sampleSurface(t: TerrainData, x: number, z: number): Surface {
   return (t.surfaces[idx] ?? Surface.Dirt) as Surface;
 }
 
+const SURFACE_MAP_LEGEND = [
+  'SURFACE MAP  (north = top)',
+  '  R = Road (tarmac)         D = Dirt road / shoulder',
+  '  M = Mud                   m = Deep mud',
+  '  G = Grass                 g = Gravel (mountain)',
+  '  C = Concrete (petrol pad) B = Mud bog',
+  '  ~ = Hill-climb trail      S = Spawn zone (west road end)',
+  '  X = Petrol station        A = Mountain summit',
+  '  . = Open terrain',
+  '',
+].join('\n');
+
 /** Generate ASCII surface map for debugging/visualization.
- *  Returns a string with characters representing surface types:
- *   R=road, D=dirt, M=mud, m=deepMud, G=grass, g=gravel, C=concrete, .=other
- *   X=petrol station, A=mountain, B=bog
- *   @param step - sample spacing in world units (default 4m) */
-export function asciiSurfaceMap(t: TerrainData, step = 4): string {
+ *  Step defaults to 2 m giving ~size/2 chars per axis on a 320 m world.
+ *  @param step - sample spacing in world units */
+export function asciiSurfaceMap(t: TerrainData, step = 2): string {
   const half = t.size / 2;
+  const trailSegs = getHillClimbSegments(t.mountain);
+
+  // Spawn zone: first 8 slots × 5 m from west edge inset 24 m (matches room.ts).
+  const spawnXStart = -t.size / 2 + 24;
+  const spawnXEnd = spawnXStart + 40;
+
   const lines: string[] = [];
   for (let z = half; z >= -half; z -= step) {
     let line = '';
@@ -507,51 +525,60 @@ export function asciiSurfaceMap(t: TerrainData, step = 4): string {
       const surf = sampleSurface(t, x, z);
       const idx = worldToTerrainIndex(t, x, z);
       let ch = '.';
+
       if (idx >= 0) {
-        const mountain = t.mountain;
-        const distMtn2 = (x - mountain.x) ** 2 + (z - mountain.z) ** 2;
-        if (distMtn2 < (mountain.sigma * 0.8) ** 2) {
-          ch = 'A';
-        } else {
-          const pad = t.petrolStation;
-          const dx = x - pad.cx;
-          const dz = z - pad.cz;
-          const distPad = Math.hypot(dx, dz);
-          if (distPad < pad.halfW + pad.fade) {
-            ch = 'X';
-          } else if (surf === Surface.Road) {
-            ch = 'R';
-          } else if (surf === Surface.Dirt) {
-            ch = 'D';
-          } else if (surf === Surface.Mud) {
-            ch = 'M';
-          } else if (surf === Surface.DeepMud) {
-            ch = 'm';
-          } else if (surf === Surface.Grass) {
-            ch = 'G';
-          } else if (surf === Surface.Gravel) {
-            ch = 'g';
-          } else if (surf === Surface.Concrete) {
-            ch = 'C';
-          }
+        // Base surface glyph.
+        switch (surf) {
+          case Surface.Road:    ch = 'R'; break;
+          case Surface.Dirt:    ch = 'D'; break;
+          case Surface.Mud:     ch = 'M'; break;
+          case Surface.DeepMud: ch = 'm'; break;
+          case Surface.Grass:   ch = 'G'; break;
+          case Surface.Gravel:  ch = 'g'; break;
+          case Surface.Concrete: ch = 'C'; break;
+          default:              ch = '.'; break;
         }
+
+        // Bog centres (full sigma radius).
+        for (const b of t.bogs) {
+          if (Math.hypot(x - b.x, z - b.z) < b.sigma) { ch = 'B'; break; }
+        }
+
+        // Hill-climb trail (explicit polyline rasterisation).
+        let minTrail = Infinity;
+        for (const seg of trailSegs) {
+          minTrail = Math.min(minTrail, pointToSegmentDist(x, z, seg.ax, seg.az, seg.bx, seg.bz));
+        }
+        if (minTrail < HILL_CLIMB_PATH_HALF_WIDTH) ch = '~';
+
+        // Spawn zone (on road, west end).
+        if (x >= spawnXStart && x <= spawnXEnd && Math.abs(z) < 3) ch = 'S';
+
+        // Petrol station pad.
+        const pad = t.petrolStation;
+        if (Math.hypot(x - pad.cx, z - pad.cz) < pad.halfW + pad.fade) ch = 'X';
+
+        // Mountain summit — tight dot so only the peak reads as A.
+        const mtn = t.mountain;
+        if (Math.hypot(x - mtn.x, z - mtn.z) < mtn.sigma * 0.18) ch = 'A';
       }
-      // Overlay bogs
-      for (const b of t.bogs) {
-        const dist = Math.hypot(x - b.x, z - b.z);
-        if (dist < b.sigma) { ch = 'B'; break; }
-      }
+
       line += ch;
     }
     lines.push(line);
   }
-  return lines.join('\n');
+  return SURFACE_MAP_LEGEND + lines.join('\n');
 }
 
+const HEIGHT_MAP_LEGEND = [
+  'HEIGHT MAP  (north = top)',
+  '  Elevation low → high:  " " . - = + * # % @ ~',
+  '',
+].join('\n');
+
 /** Generate ASCII height map (showing relative elevation).
- *  Characters: ' ' (low) to '~' (high)
- *  @param step - sample spacing in world units (default 4m) */
-export function asciiHeightMap(t: TerrainData, step = 4): string {
+ *  @param step - sample spacing in world units */
+export function asciiHeightMap(t: TerrainData, step = 2): string {
   const half = t.size / 2;
   const n = t.resolution;
   // Find min/max height
@@ -576,5 +603,5 @@ export function asciiHeightMap(t: TerrainData, step = 4): string {
     }
     lines.push(line);
   }
-  return lines.join('\n');
+  return HEIGHT_MAP_LEGEND + lines.join('\n');
 }
