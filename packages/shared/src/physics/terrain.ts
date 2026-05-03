@@ -546,18 +546,6 @@ export function asciiSurfaceMap(t: TerrainData, step = 4): string {
     lines.push(line);
   }
   return lines.join('\n');
-}
-      // Overlay bogs
-      for (const b of t.bogs) {
-        const dist = Math.hypot(x - b.x, z - b.z);
-        if (dist < b.sigma) { ch = 'B'; break; }
-      }
-      line += ch;
-    }
-    lines.push(line);
-  }
-  return lines.join('\n');
-}
 
 /** Generate ASCII height map (showing relative elevation).
  *  Characters: ' ' (low) to '~' (high)
