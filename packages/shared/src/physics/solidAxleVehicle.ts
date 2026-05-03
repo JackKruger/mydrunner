@@ -280,7 +280,11 @@ export class SolidAxleVehicle implements VehicleLike {
         const vpX = lv.x + av.y * armZ - av.z * armY;
         const vpY = lv.y + av.z * armX - av.x * armZ;
         const vpZ = lv.z + av.x * armY - av.y * armX;
-        const vertVel = vpX * up.x + vpY * up.y + vpZ * up.z;
+        // World-up vertical velocity: raycasts go world-down so spring
+        // compression is measured in the world-Y axis. Using chassis-up
+        // (vp·up) here introduced a horizontal component whenever the
+        // chassis was pitched, which caused creep on flat ground.
+        const vertVel = vpY;
         // Engagement ramps from 0→1 as compression reaches ~0.05m
         // (typical equilibrium). Was comp*12 which only reached 0.55 at
         // equilibrium, leaving the chassis underdamped and oscillatory.
@@ -289,8 +293,12 @@ export class SolidAxleVehicle implements VehicleLike {
         // wheels share the load (parallel springs sum to k_total).
         const F = 0.5 * ag.rideStiffness * comp
                 - 0.5 * ag.rideDamping * engagement * vertVel;
+        // Apply in world-up direction. Raycasts go world-down so compression
+        // is a world-Y quantity; pushing in chassis-up instead leaked a
+        // horizontal component at any non-zero pitch and caused the vehicle
+        // to creep forward continuously on flat ground.
         this.body.addForceAtPoint(
-          { x: up.x * F, y: up.y * F, z: up.z * F },
+          { x: 0, y: F, z: 0 },
           side.world,
           true,
         );

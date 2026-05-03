@@ -8,6 +8,9 @@ import {
   RUT_REBUILD_INTERVAL_TICKS,
   RUTS_ENABLED,
   EMPTY_INPUT,
+  VEHICLE,
+  AXLE,
+  GRAVITY_Y,
   Net,
   Physics,
   type PlayerId,
@@ -16,6 +19,16 @@ import {
   type WorldSnapshot,
   type CarKind,
 } from '@mydrunner/shared';
+
+// Spawn chassis at suspension equilibrium so there is no free-fall and the
+// springs are already at their loaded rest position.  Derived from:
+//   comp_eq = weight / (k_front + k_rear)
+//   chassis_y = restLength + wheelRadius + |wheel_local_y| - comp_eq
+const SPAWN_Y_ABOVE_GROUND =
+  VEHICLE.suspensionRestLength +
+  VEHICLE.wheelRadius +
+  Math.abs(VEHICLE.wheelPositions[0]!.y) -
+  (VEHICLE.mass * Math.abs(GRAVITY_Y)) / (AXLE.front.rideStiffness + AXLE.rear.rideStiffness);
 
 export interface PlayerHandle {
   id: PlayerId;
@@ -85,7 +98,7 @@ export class Room {
     const yaw = Math.PI / 2;
     const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);
     const ground = idx >= 0 ? (this.world.terrain.heights[idx] ?? 0) : 0;
-    return { position: { x, y: ground + 1.5, z }, yaw };
+    return { position: { x, y: ground + SPAWN_Y_ABOVE_GROUND, z }, yaw };
   }
 
   addPlayer(handle: PlayerHandle): void {
