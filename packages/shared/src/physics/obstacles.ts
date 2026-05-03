@@ -10,7 +10,7 @@
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import {
-  Surface, type TerrainData, worldToTerrainIndex,
+  Surface, type TerrainData, worldToTerrainIndex, sampleHeightBilinear,
   getHillClimbSegments, pointToSegmentDist, HILL_CLIMB_PATH_HALF_WIDTH,
 } from './terrain.js';
 
@@ -148,7 +148,7 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
     const surf = terrain.surfaces[idx];
     if (surf === Surface.Road || surf === Surface.Concrete) return false;
     if (minDistToTrail(cx, cz) < trailClear) return false;
-    const cy = terrain.heights[idx] ?? 0;
+    const cy = sampleHeightBilinear(terrain, cx, cz);
     out.push({ kind: 'rock', x: cx, y: cy, z: cz, size, height: 0, yaw: rng() * Math.PI });
     return true;
   };
@@ -209,7 +209,7 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
       if (Math.hypot(cx - mtn.x, cz - mtn.z) > mtn.sigma * 1.1) continue;
       const idx = worldToTerrainIndex(terrain, cx, cz);
       if (idx < 0) continue;
-      const cy = terrain.heights[idx] ?? 0;
+      const cy = sampleHeightBilinear(terrain, cx, cz);
       if (cy < 3) continue; // was 8
       const surf = terrain.surfaces[idx];
       if (surf === Surface.Road || surf === Surface.Concrete) continue;
@@ -231,7 +231,7 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
           const ssurf = terrain.surfaces[sidx];
           if (ssurf === Surface.Road || ssurf === Surface.Concrete) continue;
           if (minDistToTrail(sx, sz) < HILL_CLIMB_PATH_HALF_WIDTH + 2) continue;
-          out.push({ kind: 'rock', x: sx, y: terrain.heights[sidx] ?? 0, z: sz, size: 0.15 + rng() * 0.55, height: 0, yaw: rng() * Math.PI });
+          out.push({ kind: 'rock', x: sx, y: sampleHeightBilinear(terrain, sx, sz), z: sz, size: 0.15 + rng() * 0.55, height: 0, yaw: rng() * Math.PI });
         }
       }
     }
@@ -255,7 +255,7 @@ function mountainRocks(terrain: TerrainData): Obstacle[] {
     if (idx < 0) continue;
     const surf = terrain.surfaces[idx];
     if (surf === Surface.Road || surf === Surface.Concrete) continue;
-    const cy = terrain.heights[idx] ?? 0;
+    const cy = sampleHeightBilinear(terrain, cx, cz);
     const radius = 0.4 + rng() * 1.8;
     out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: rng() * Math.PI });
   }
@@ -277,7 +277,7 @@ function mountainTrees(terrain: TerrainData): Obstacle[] {
     const cz = mtn.z + Math.sin(angle) * dist;
     const idx = worldToTerrainIndex(terrain, cx, cz);
     if (idx < 0) continue;
-    const cy = terrain.heights[idx] ?? 0;
+    const cy = sampleHeightBilinear(terrain, cx, cz);
     if (cy < 3 || cy > 20) continue; // lower slopes only
     const surf = terrain.surfaces[idx];
     if (surf === Surface.Road || surf === Surface.Concrete || surf === Surface.DeepMud) continue;
@@ -319,7 +319,7 @@ function perimeterObstacles(terrain: TerrainData): Obstacle[] {
       // need a clear path to the boundary so they can trigger the
       // off-map ejector. Same goes for the concrete pad just in case.
       if (surf === Surface.Road || surf === Surface.Concrete) continue;
-      const py = terrain.heights[idx] ?? 0;
+      const py = sampleHeightBilinear(terrain, px, pz);
       // Every 5th obstacle along the perimeter is a pine; rest are big
       // boulders. Yaw cycles for visual variety without RNG.
       if (i % 5 === 2) {
@@ -354,7 +354,7 @@ export function generateObstacles(terrain: TerrainData): Obstacle[] {
     // Skip placements on road / concrete pad / deep mud so obstacles
     // never block spawn or land in the petrol station forecourt.
     if (surf === Surface.Road || surf === Surface.Concrete || surf === Surface.DeepMud) return null;
-    return terrain.heights[idx] ?? 0;
+    return sampleHeightBilinear(terrain, x, z);
   };
 
   // Scatter rocks (medium + small).
@@ -389,7 +389,7 @@ export function generateObstacles(terrain: TerrainData): Obstacle[] {
   for (const r of FLEX_RAMPS) {
     const idx = worldToTerrainIndex(terrain, r.x, r.z);
     if (idx < 0) continue;
-    const y = terrain.heights[idx] ?? 0;
+    const y = sampleHeightBilinear(terrain, r.x, r.z);
     out.push({
       kind: 'ramp',
       x: r.x, y, z: r.z,
@@ -407,8 +407,7 @@ export function generateObstacles(terrain: TerrainData): Obstacle[] {
   out.push(...perimeterObstacles(terrain));
 
   // Summit lookout marker — one flagpole at the peak as a climb destination.
-  const summitIdx = worldToTerrainIndex(terrain, terrain.mountain.x, terrain.mountain.z);
-  const summitY = summitIdx >= 0 ? (terrain.heights[summitIdx] ?? 0) : terrain.mountain.peak;
+  const summitY = sampleHeightBilinear(terrain, terrain.mountain.x, terrain.mountain.z);
   out.push({
     kind: 'flagpole',
     x: terrain.mountain.x,

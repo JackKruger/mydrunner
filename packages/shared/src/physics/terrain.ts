@@ -528,6 +528,26 @@ export function worldToTerrainIndex(t: TerrainData, x: number, z: number): numbe
   return r * n + c;
 }
 
+/** Bilinearly interpolated terrain height at an arbitrary world-space point.
+ *  More accurate than nearest-neighbour on slopes — avoids floating rocks. */
+export function sampleHeightBilinear(t: TerrainData, x: number, z: number): number {
+  const n = t.resolution;
+  const u = (x / t.size + 0.5) * (n - 1);
+  const v = (z / t.size + 0.5) * (n - 1);
+  if (u < 0 || u > n - 1 || v < 0 || v > n - 1) return 0;
+  const c0 = Math.floor(u);
+  const r0 = Math.floor(v);
+  const c1 = Math.min(c0 + 1, n - 1);
+  const r1 = Math.min(r0 + 1, n - 1);
+  const fu = u - c0;
+  const fv = v - r0;
+  const h00 = t.heights[r0 * n + c0] ?? 0;
+  const h10 = t.heights[r0 * n + c1] ?? 0;
+  const h01 = t.heights[r1 * n + c0] ?? 0;
+  const h11 = t.heights[r1 * n + c1] ?? 0;
+  return h00 * (1 - fu) * (1 - fv) + h10 * fu * (1 - fv) + h01 * (1 - fu) * fv + h11 * fu * fv;
+}
+
 export function sampleSurface(t: TerrainData, x: number, z: number): Surface {
   const idx = worldToTerrainIndex(t, x, z);
   if (idx < 0) return Surface.Dirt;
