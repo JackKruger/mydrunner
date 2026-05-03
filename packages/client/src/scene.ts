@@ -179,7 +179,12 @@ export class Scene {
       }
     }
     if (renderAtMs < this.buffer[0]!.recvAtMs) return null;
-    return null;
+    // renderAtMs is past the newest snapshot (e.g. tab was backgrounded and
+    // the clock ran ahead). Clamp to the last pair at t=1 so vehicles stay at
+    // their last known positions rather than disappearing.
+    const last = this.buffer[this.buffer.length - 1]!;
+    const secondLast = this.buffer[this.buffer.length - 2]!;
+    return { a: secondLast, b: last, t: 1 };
   }
 
   private ensureVehicle(id: PlayerId, isLocal: boolean, kind: CarKind): VehicleVisual {
@@ -387,7 +392,7 @@ export class Scene {
       this.cam.apply();
     }
 
-    this.removeMissing(present);
+    if (pair) this.removeMissing(present);
 
     // Mud splatter: for each visible vehicle, look at the latest snapshot
     // pair to estimate per-wheel spin rate. If a wheel is spinning faster
