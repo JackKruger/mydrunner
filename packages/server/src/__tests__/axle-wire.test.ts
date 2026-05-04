@@ -54,7 +54,7 @@ describe('axle wire round-trip', () => {
     world.dispose();
   });
 
-  it('axles survive JSON encode + decode (no precision loss at this scale)', () => {
+  it('axles survive wire encode + decode (round-trip within mm / millirad)', () => {
     const { world, vehicle } = makeWorld();
     // Drive briefly with steer so the chassis develops some real axle
     // articulation rather than sitting at rest.
@@ -84,10 +84,11 @@ describe('axle wire round-trip', () => {
     if (decoded.t !== 'snapshot') throw new Error('unreachable');
     const after = decoded.snap.players[0]!.vehicle;
     expect(after.axles).toBeDefined();
-    expect(after.axles![0].rideY).toBeCloseTo(before.axles![0].rideY, 5);
-    expect(after.axles![0].rollAngle).toBeCloseTo(before.axles![0].rollAngle, 5);
-    expect(after.axles![1].rideY).toBeCloseTo(before.axles![1].rideY, 5);
-    expect(after.axles![1].rollAngle).toBeCloseTo(before.axles![1].rollAngle, 5);
+    // Wire format quantizes rideY to mm and rollAngle to millirad.
+    expect(after.axles![0].rideY).toBeCloseTo(before.axles![0].rideY, 3);
+    expect(after.axles![0].rollAngle).toBeCloseTo(before.axles![0].rollAngle, 3);
+    expect(after.axles![1].rideY).toBeCloseTo(before.axles![1].rideY, 3);
+    expect(after.axles![1].rollAngle).toBeCloseTo(before.axles![1].rollAngle, 3);
     world.dispose();
   });
 
