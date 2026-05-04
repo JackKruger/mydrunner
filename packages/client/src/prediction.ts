@@ -196,6 +196,20 @@ export class Prediction {
     // Drop acked inputs.
     this.queue = this.queue.filter((q) => q.input.seq > me.lastAckSeq);
 
+    // Cap replay length. Each queued input costs one world.step() in the
+    // loop below; once the queue is large enough that replay takes longer
+    // than the gap between snapshots (~33ms), the next snapshot arrives
+    // mid-replay and the queue grows faster than it drains - a death
+    // spiral that locks the tab. Triggered in practice by GC pauses,
+    // OS scheduler hiccups, or a sibling tab spiking CPU.
+    // Capping at 120 (~2s of input at 60Hz) bounds reconcile cost to a
+    // constant; during a spike the local truck briefly lags reality by
+    // the dropped span instead of freezing the whole tab.
+    const MAX_REPLAY = 120;
+    if (this.queue.length > MAX_REPLAY) {
+      this.queue = this.queue.slice(-MAX_REPLAY);
+    }
+
     const a = this.lastAlpha;
     const supportsAxles = this.vehicle.axleSnaps && this.vehicle.applyAxleSnaps;
 
