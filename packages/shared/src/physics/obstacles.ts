@@ -107,7 +107,7 @@ interface RampSpec {
 const FLEX_RAMPS: readonly RampSpec[] = [
   // Close to the spawn lanes (spawn x: -136..-101, lanes z = +/-1.2)
   // so it's the first off-road thing the player sees driving forward.
-  { x: -90, z: 9, length: 4.0, width: 3.0, rise: 1.0, yaw: 0 },
+  { x: -90, z: 9, length: 4.0, width: 3.0, rise: 1.0, yaw: 1 },
 ];
 
 // Pine forest centred around (-90, 60). Hand-placed cluster in a
