@@ -20,8 +20,8 @@ export const VEHICLE = {
   // Visual roof top relative to the body origin (used to size the collider so
   // the roof doesn't clip the ground when the car is upside-down).
   cabinRoofY: 1.2,
-  wheelRadius: 0.46,
-  wheelWidth: 0.32,
+  wheelRadius: 1.46,
+  wheelWidth: 1.32,
   // Suspension geometry. Chassis-connection points (wp.y) sit at the
   // chassis bottom edge; wheels hang below at restLength. Lifted ride
   // height + chunky tyres for that off-road look: chassis-bottom rests
