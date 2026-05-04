@@ -21,6 +21,10 @@ export interface WheelKinematic {
   contact: boolean;
   /** Compression of the spring at this wheel-end (m, >=0). */
   contactDepth: number;
+  /** Previous tick's clamped compression (in [0, bumpMax]) for compression-
+   *  rate damping. Sentinel -1 means uninitialized — first-contact tick uses
+   *  rate=0 to avoid a 0→equilibrium spike that would slam the chassis. */
+  prevContactDepth: number;
   /** World-space contact point for force application. */
   contactPoint: { x: number; y: number; z: number };
   /** World-space contact normal. */
@@ -35,6 +39,7 @@ export function createWheelKinematic(): WheelKinematic {
     angVel: 0,
     contact: false,
     contactDepth: 0,
+    prevContactDepth: -1,
     contactPoint: { x: 0, y: 0, z: 0 },
     contactNormal: { x: 0, y: 1, z: 0 },
     surface: 1,
@@ -46,6 +51,7 @@ export function resetWheelKinematic(w: WheelKinematic): void {
   w.angVel = 0;
   w.contact = false;
   w.contactDepth = 0;
+  w.prevContactDepth = -1;
 }
 
 /** Integrate wheel angular velocity by net torque this tick.

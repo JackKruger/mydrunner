@@ -272,21 +272,38 @@ export class SolidAxleVehicle implements VehicleLike {
       ];
       for (const side of sides) {
         const w = side.wheel;
-        if (!w.contact) continue;
+        if (!w.contact) {
+          w.prevContactDepth = -1;
+          continue;
+        }
         const comp = Math.min(ag.bumpMax, Math.max(0, w.contactDepth));
-        if (comp <= 0) continue;
-        // Chassis vertical velocity AT this wheel-end (world frame).
-        const armX = side.world.x - t.x;
-        const armY = side.world.y - t.y;
-        const armZ = side.world.z - t.z;
-        const vpX = lv.x + av.y * armZ - av.z * armY;
-        const vpY = lv.y + av.z * armX - av.x * armZ;
-        const vpZ = lv.z + av.x * armY - av.y * armX;
-        // World-up vertical velocity: raycasts go world-down so spring
-        // compression is measured in the world-Y axis. Using chassis-up
-        // (vp·up) here introduced a horizontal component whenever the
-        // chassis was pitched, which caused creep on flat ground.
-        const vertVel = vpY;
+        if (comp <= 0) {
+          w.prevContactDepth = -1;
+          continue;
+        }
+        // Compression-rate damping. Why: the previous formulation damped
+        // chassis vertical velocity at the wheel-end (vpY). On a rising
+        // slope the chassis MUST lift to follow the slope; vertVel
+        // damping then applies a *downward* force during the lift,
+        // fighting the spring exactly when it's saturated against the
+        // bumpstop. The chassis can't keep up, the chassis collider
+        // wedges into the slope, and the truck stalls until friction
+        // grinds it back out (the user's wheel-phasing report).
+        //
+        // Compression rate captures the *suspension* velocity (rate at
+        // which the spring is compressing) independent of chassis
+        // motion. On a rising slope the wheel is pushed up faster than
+        // the chassis lifts → comp increases → compRate > 0 → damping
+        // adds force in the same direction as the spring (helps lift).
+        // On flat ground at rest, compRate ≈ -vpY (ground stationary),
+        // so the damping behaviour matches the old formulation and
+        // settling/rollover stability are preserved.
+        if (w.prevContactDepth < 0) w.prevContactDepth = comp;
+        const rawRate = (comp - w.prevContactDepth) / dt;
+        // Clamp: per-tick rate spikes (e.g. ray jumping over a sharp
+        // edge) would otherwise produce damping forces that exceed the
+        // spring saturation force and destabilise the integrator.
+        const compRate = clamp(rawRate, -3, 3);
         // Engagement ramps from 0→1 as compression reaches ~0.05m
         // (typical equilibrium). Was comp*12 which only reached 0.55 at
         // equilibrium, leaving the chassis underdamped and oscillatory.
@@ -294,7 +311,7 @@ export class SolidAxleVehicle implements VehicleLike {
         // Per-wheel-end stiffness is HALF the axle's total because both
         // wheels share the load (parallel springs sum to k_total).
         const F = 0.5 * ag.rideStiffness * comp
-                - 0.5 * ag.rideDamping * engagement * vertVel;
+                + 0.5 * ag.rideDamping * engagement * compRate;
         // Apply in world-up direction. Raycasts go world-down so compression
         // is a world-Y quantity; pushing in chassis-up instead leaked a
         // horizontal component at any non-zero pitch and caused the vehicle
@@ -304,6 +321,7 @@ export class SolidAxleVehicle implements VehicleLike {
           side.world,
           true,
         );
+        w.prevContactDepth = comp;
       }
 
       // Roll torque dump when terrain demands more articulation than the
