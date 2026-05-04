@@ -43,6 +43,75 @@ initInput();
 initTouchInput();
 const scene = new Scene(app);
 const engineAudio = new EngineAudio();
+
+// Network diagnostics: snapshot arrival jitter + reconcile pop magnitude.
+// Cheap counters, flushed every 5s. Tells us whether the "everyone glitches
+// out" symptom is jitter exceeding the interp buffer (gaps > 100ms),
+// outright stalls (gaps > 200ms), or large prediction divergence (pos
+// errors > 1m / cap hits).
+const NET_DIAG_WINDOW_MS = 5000;
+const netDiag = {
+  windowStart: 0,
+  prevRecvMs: 0,
+  snaps: 0,
+  gapSumMs: 0,
+  gapMaxMs: 0,
+  gapOver100: 0,  // jitter buffer underrun risk
+  gapOver200: 0,  // outright stall - remote players visibly freeze
+  popSum: 0,
+  popMax: 0,
+  popOver1m: 0,
+  capped: 0,
+  queueLenSum: 0,
+  queueLenMax: 0,
+};
+function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: boolean; queueLen: number } | null): void {
+  if (netDiag.windowStart === 0) netDiag.windowStart = recvAtMs;
+  if (netDiag.prevRecvMs > 0) {
+    const gap = recvAtMs - netDiag.prevRecvMs;
+    netDiag.gapSumMs += gap;
+    if (gap > netDiag.gapMaxMs) netDiag.gapMaxMs = gap;
+    if (gap > 100) netDiag.gapOver100 += 1;
+    if (gap > 200) netDiag.gapOver200 += 1;
+  }
+  netDiag.prevRecvMs = recvAtMs;
+  netDiag.snaps += 1;
+  if (stats) {
+    netDiag.popSum += stats.posErr;
+    if (stats.posErr > netDiag.popMax) netDiag.popMax = stats.posErr;
+    if (stats.posErr > 1.0) netDiag.popOver1m += 1;
+    if (stats.capped) netDiag.capped += 1;
+    netDiag.queueLenSum += stats.queueLen;
+    if (stats.queueLen > netDiag.queueLenMax) netDiag.queueLenMax = stats.queueLen;
+  }
+  if (recvAtMs - netDiag.windowStart >= NET_DIAG_WINDOW_MS) {
+    const n = netDiag.snaps || 1;
+    const meanGap = netDiag.gapSumMs / Math.max(1, netDiag.snaps - 1);
+    const meanPop = netDiag.popSum / n;
+    const meanQueue = netDiag.queueLenSum / n;
+    const elapsedS = (recvAtMs - netDiag.windowStart) / 1000;
+    console.log(
+      `[mydrunner-client] net ${elapsedS.toFixed(1)}s snaps=${netDiag.snaps} ` +
+        `gap mean=${meanGap.toFixed(1)}ms max=${netDiag.gapMaxMs.toFixed(1)}ms ` +
+        `over100=${netDiag.gapOver100} over200=${netDiag.gapOver200} ` +
+        `pop mean=${meanPop.toFixed(2)}m max=${netDiag.popMax.toFixed(2)}m ` +
+        `over1m=${netDiag.popOver1m} capped=${netDiag.capped} ` +
+        `queueLen mean=${meanQueue.toFixed(1)} max=${netDiag.queueLenMax}`,
+    );
+    netDiag.windowStart = recvAtMs;
+    netDiag.snaps = 0;
+    netDiag.gapSumMs = 0;
+    netDiag.gapMaxMs = 0;
+    netDiag.gapOver100 = 0;
+    netDiag.gapOver200 = 0;
+    netDiag.popSum = 0;
+    netDiag.popMax = 0;
+    netDiag.popOver1m = 0;
+    netDiag.capped = 0;
+    netDiag.queueLenSum = 0;
+    netDiag.queueLenMax = 0;
+  }
+}
 // Chat module is created up-front; the onSubmit closure references the
 // NetClient via `currentNet` which is reassigned after start() builds
 // the connection. Messages typed before the connection is up are no-ops.
@@ -149,7 +218,8 @@ async function start(): Promise<void> {
     onSnapshot(snap, recvAtMs) {
       lastSnapTick = snap.tick;
       scene.pushSnapshot(snap, recvAtMs);
-      if (prediction && localId) prediction.reconcile(snap, localId);
+      const stats = prediction && localId ? prediction.reconcile(snap, localId) : null;
+      netDiagOnSnapshot(recvAtMs, stats);
       if (localId) {
         const me = snap.players.find((p) => p.id === localId);
         if (me) {

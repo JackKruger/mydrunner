@@ -57,6 +57,8 @@ export class Room {
   private rutBuffer: Physics.RutBuffer;
   private rutVersion = 0;
   private ticksSinceRutFlush = 0;
+  private perf: PerfBucket = newPerfBucket();
+  private lastTickStartMs = 0;
 
   constructor(seed = 1337) {
     this.world = new Physics.World({ generate: { size: 320, resolution: 128, seed } });
@@ -152,6 +154,17 @@ export class Room {
   }
 
   private tickOnce(): void {
+    const tickStart = performance.now();
+    if (this.lastTickStartMs > 0) {
+      const interval = tickStart - this.lastTickStartMs;
+      const drift = Math.abs(interval - TARGET_TICK_MS);
+      this.perf.driftCount += 1;
+      this.perf.driftSumMs += drift;
+      if (drift > this.perf.driftMaxMs) this.perf.driftMaxMs = drift;
+      if (interval > TARGET_TICK_MS * 2) this.perf.lateFires += 1;
+    }
+    this.lastTickStartMs = tickStart;
+
     for (const p of this.players.values()) {
       if ((p.pendingInput.buttons & 1) !== 0) {
         p.vehicle.resetTo(p.spawn);
@@ -196,6 +209,36 @@ export class Room {
       this.snapAccumMs = 0;
       this.broadcastSnapshot();
     }
+
+    const tickMs = performance.now() - tickStart;
+    this.perf.ticks += 1;
+    this.perf.tickSumMs += tickMs;
+    if (tickMs > this.perf.tickMaxMs) this.perf.tickMaxMs = tickMs;
+    if (tickMs > TARGET_TICK_MS) this.perf.tickOverBudget += 1;
+    if (tickMs > TARGET_TICK_MS * 2) this.perf.tickOver2x += 1;
+    if (tickStart - this.perf.startedAtMs >= PERF_WINDOW_MS) this.flushPerf();
+  }
+
+  private flushPerf(): void {
+    if (process.env.NODE_ENV === 'test') {
+      this.perf = newPerfBucket();
+      return;
+    }
+    const p = this.perf;
+    const meanTick = p.ticks > 0 ? p.tickSumMs / p.ticks : 0;
+    const meanDrift = p.driftCount > 0 ? p.driftSumMs / p.driftCount : 0;
+    const meanSnap = p.snaps > 0 ? p.snapSumBytes / p.snaps : 0;
+    const elapsedS = (performance.now() - p.startedAtMs) / 1000;
+    console.log(
+      `[mydrunner-server] perf ${elapsedS.toFixed(1)}s ` +
+        `players=${this.players.size} ` +
+        `tick mean=${meanTick.toFixed(2)}ms max=${p.tickMaxMs.toFixed(2)}ms ` +
+        `over16=${p.tickOverBudget} over33=${p.tickOver2x} ` +
+        `drift mean=${meanDrift.toFixed(2)}ms max=${p.driftMaxMs.toFixed(2)}ms ` +
+        `lateFires=${p.lateFires} ` +
+        `snaps=${p.snaps} meanBytes=${meanSnap.toFixed(0)} maxBytes=${p.snapMaxBytes}`,
+    );
+    this.perf = newPerfBucket();
   }
 
   private broadcastSnapshot(): void {
@@ -216,6 +259,9 @@ export class Room {
     };
     const msg = Net.encode({ t: 'snapshot', snap });
     for (const p of this.players.values()) p.handle.send(msg);
+    this.perf.snaps += 1;
+    this.perf.snapSumBytes += msg.length;
+    if (msg.length > this.perf.snapMaxBytes) this.perf.snapMaxBytes = msg.length;
   }
 
   /** MX-Unleashed-style off-map ejector. If a player gets past the
@@ -287,6 +333,43 @@ export class Room {
 
 const CHAT_MAX_LEN = 200;
 const CHAT_MIN_INTERVAL_MS = 800;
+
+const TARGET_TICK_MS = 1000 / TICK_RATE;
+const PERF_WINDOW_MS = 5000;
+
+interface PerfBucket {
+  startedAtMs: number;
+  ticks: number;
+  tickSumMs: number;
+  tickMaxMs: number;
+  tickOverBudget: number;
+  tickOver2x: number;
+  driftCount: number;
+  driftSumMs: number;
+  driftMaxMs: number;
+  lateFires: number;
+  snaps: number;
+  snapSumBytes: number;
+  snapMaxBytes: number;
+}
+
+function newPerfBucket(): PerfBucket {
+  return {
+    startedAtMs: performance.now(),
+    ticks: 0,
+    tickSumMs: 0,
+    tickMaxMs: 0,
+    tickOverBudget: 0,
+    tickOver2x: 0,
+    driftCount: 0,
+    driftSumMs: 0,
+    driftMaxMs: 0,
+    lateFires: 0,
+    snaps: 0,
+    snapSumBytes: 0,
+    snapMaxBytes: 0,
+  };
+}
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;

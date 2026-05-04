@@ -24,6 +24,18 @@ interface QueuedInput {
   input: PlayerInput;
 }
 
+export interface ReconcileStats {
+  /** Distance (m) between the rendered pose and the authoritative pose
+   *  before replay - the raw prediction error the server just corrected. */
+  posErr: number;
+  /** True if any axis of visualOffset hit its 1.5m clamp - i.e. the
+   *  divergence was big enough that we snapped instead of smoothing. */
+  capped: boolean;
+  /** Inputs left to replay after dropping acked ones. Proxy for RTT in
+   *  ticks (60Hz), so 6 ≈ 100ms RTT. */
+  queueLen: number;
+}
+
 export class Prediction {
   private world: Physics.World;
   private vehicle: Physics.VehicleLike;
@@ -177,9 +189,9 @@ export class Prediction {
    *  which only matched the alpha=1 endpoint and left a residual jump
    *  proportional to (1-alpha) and to the velocity change. That residual
    *  is the "stutter on every snapshot" the user reported. */
-  reconcile(snap: WorldSnapshot, myId: string): void {
+  reconcile(snap: WorldSnapshot, myId: string): ReconcileStats | null {
     const me = snap.players.find((p) => p.id === myId);
-    if (!me) return;
+    if (!me) return null;
 
     // Drop acked inputs.
     this.queue = this.queue.filter((q) => q.input.seq > me.lastAckSeq);
@@ -192,6 +204,13 @@ export class Prediction {
     //    frame; the new offset must match it to keep continuity.
     const renderedPos = this.computeRenderedPos(a);
     const renderedAxles = supportsAxles ? this.computeRenderedAxles(a) : null;
+    // Distance from rendered pose to the authoritative pose, BEFORE
+    // replay - this is the raw divergence the server just told us about.
+    // Reported back to caller for diagnostics.
+    const dxRaw = renderedPos.x - me.vehicle.position.x;
+    const dyRaw = renderedPos.y - me.vehicle.position.y;
+    const dzRaw = renderedPos.z - me.vehicle.position.z;
+    const posErr = Math.hypot(dxRaw, dyRaw, dzRaw);
 
     // 2. Snap to authoritative state. Includes the smoothed steering
     //    angle so replay doesn't double-step currentSteer.
@@ -240,6 +259,11 @@ export class Prediction {
         off.rollAngle = clampAbs(renderedAxles[i]!.rollAngle - newAxlesNoOffset[i]!.rollAngle, AX_CAP_ROLL);
       }
     }
+
+    const posCap = 1.5;
+    const capped =
+      Math.abs(dxRaw) > posCap || Math.abs(dyRaw) > posCap || Math.abs(dzRaw) > posCap;
+    return { posErr, capped, queueLen: this.queue.length };
   }
 
   /** Helpers below mirror the math in state(), so reconcile can compute
