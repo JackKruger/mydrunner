@@ -244,7 +244,10 @@ export class Prediction {
     //    alpha. The offset that makes new render == old render is
     //    exactly (oldRendered - newRenderedNoOffset).
     const newPosNoOffset = this.computeLerpedPos(a);
-    const dxCap = 1.5;
+    // 3m offset cap absorbs RTT-driven divergence on real connections
+    // (~25 m/s × 100ms RTT = 2.5m); the per-step decay still pulls the
+    // visual back toward truth within ~5 ticks.
+    const dxCap = 3.0;
     this.visualOffset.x = clampAbs(renderedPos.x - newPosNoOffset.x, dxCap);
     this.visualOffset.y = clampAbs(renderedPos.y - newPosNoOffset.y, dxCap);
     this.visualOffset.z = clampAbs(renderedPos.z - newPosNoOffset.z, dxCap);
@@ -260,7 +263,7 @@ export class Prediction {
       }
     }
 
-    const posCap = 1.5;
+    const posCap = 3.0;
     const capped =
       Math.abs(dxRaw) > posCap || Math.abs(dyRaw) > posCap || Math.abs(dzRaw) > posCap;
     return { posErr, capped, queueLen: this.queue.length };
