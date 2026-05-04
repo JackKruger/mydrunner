@@ -255,9 +255,9 @@ export const TERRAIN = {
   // Peak and sigma are sized so the switchback traverses stay ≤ ~30 % grade
   // (verified analytically in terrain.ts getHillClimbSegments).
   // Steeper off-trail face is intentional — you can't shortcut the path.
-  mtnPeak: 80,
+  mtnPeak: 70,
   mtnSigmaRatio: 0.19,
-  mtnXRatio: 0.18,
+  mtnXRatio: 0.23,
   mtnZRatio: 0.36,
 
   // Radius of the flat lookout plateau at the summit (m).
