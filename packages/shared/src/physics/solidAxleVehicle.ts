@@ -70,15 +70,15 @@ import type { World } from './world.js';
 // the chassis-forward axis. The per-wheel-end ride forces already give
 // static roll stability, but cornering hard unloads (or lifts) the
 // inside wheels and that loses much of the restoring torque exactly
-// when the chassis needs it. The sway bar fills the gap. Damping
-// targets just past critical so cornering body roll settles in a
-// single half-cycle instead of oscillating - the previous 67% critical
-// rate left a ~1.8 Hz body-roll bounce that read as "body stutter while
-// the wheels stay smooth" because it only fires when wheels are
-// loading the chassis.
-//   c_crit = 2*sqrt(k*I) ~ 2*sqrt(120000*900) ~ 20800 N*m*s/rad.
-const ANTI_ROLL_STIFFNESS = 120_000;
-const ANTI_ROLL_DAMPING = 22_000;
+// when the chassis needs it. The sway bar fills the gap. Tuned soft
+// enough that cornering produces visible body lean (the player
+// feedback "needs a little more body roll") while still preventing
+// the unbounded-roll failure mode the per-wheel-end ride forces alone
+// can't catch when the inside is in the air. Damping at ~critical for
+// the new stiffness so roll oscillation still settles in one cycle:
+//   c_crit = 2*sqrt(k*I) ~ 2*sqrt(70000*900) ~ 15900 N*m*s/rad.
+const ANTI_ROLL_STIFFNESS = 70_000;
+const ANTI_ROLL_DAMPING = 16_000;
 
 type Vec3 = { x: number; y: number; z: number };
 
@@ -276,7 +276,18 @@ export class SolidAxleVehicle implements VehicleLike {
           w.prevContactDepth = -1;
           continue;
         }
-        const comp = Math.min(ag.bumpMax, Math.max(0, w.contactDepth));
+        // Spring is linear in compression. NO bumpMax saturation here:
+        // capping spring force at bumpMax was the original cause of the
+        // wheel-phasing bug. On a rising slope the ray reports comp >>
+        // bumpMax (the slope crest sits above where the wheel-as-point
+        // would contact), and a saturated spring can't lift the chassis
+        // fast enough — the wheel mesh visibly buries before the chassis
+        // catches up. Letting the spring stay linear past bumpMax just
+        // makes it a stiffer-than-equilibrium response that drives the
+        // chassis off the slope quickly. Capped at restLength to bound
+        // the force on degenerate ray reads (e.g. wheel-ray hitting a
+        // vertical wall).
+        const comp = Math.min(ag.suspensionRestLength, Math.max(0, w.contactDepth));
         if (comp <= 0) {
           w.prevContactDepth = -1;
           continue;

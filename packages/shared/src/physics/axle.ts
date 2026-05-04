@@ -107,12 +107,22 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   s.leftContact = input.leftContact;
   s.rightContact = input.rightContact;
 
-  // rideY: average compression, clamped to the axle's bump stop. Below
-  // the bump stop the chassis is supported by the ride spring; at the
-  // stop, anything beyond is taken by the chassis collider directly.
+  // rideY: average compression. Visual only — solidAxleVehicle.ts
+  // ignores stepAxle's chassisRideForce and applies per-wheel-end ride
+  // forces directly, so the cap here only affects the wheel-mesh
+  // position, not the suspension force. We allow rideY to track the
+  // raw compression past bumpMax (capped at restLength * 0.85, which
+  // keeps the wheel mesh below the chassis attachment point so it
+  // doesn't visibly intersect the chassis body when a sharp rise
+  // pushes the ray reading deep). The progressive bumpstop on the
+  // physics side will lift the chassis fast, so this extended visual
+  // range is only exercised for one or two ticks during sharp bumps —
+  // exactly when capping at bumpMax produces the visible "wheel half-
+  // buried in the ground" artefact.
   const avgComp = 0.5 * (lc + rc);
+  const visualMax = g.suspensionRestLength * 0.85;
   let targetY = avgComp;
-  if (targetY > g.bumpMax) targetY = g.bumpMax;
+  if (targetY > visualMax) targetY = visualMax;
   // No droop modelling in the kinematic axle: an in-air axle reports
   // rideY=0 (no support). Real droop with a strap-limited drop is a
   // future refinement; for now the chassis just feels no lift on this

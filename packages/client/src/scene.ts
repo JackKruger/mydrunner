@@ -302,8 +302,14 @@ export class Scene {
       { x: 0, y: 1, z: 0 },
       { x: q.x, y: q.y, z: q.z, w: q.w },
     );
-    // Clamp away from zero so an upside-down chassis doesn't divide by near-zero.
-    const upY = Math.max(0.15, chassisUp.y);
+    // Clamp upY: the cos correction is meaningful for a chassis on a
+    // slope (mild tilt), but blows up the visual spring length when the
+    // chassis is heavily tilted or inverted. At upY=0.15 the spring
+    // visually extended ~3.7 m below the attachment, making the wheels
+    // appear detached from the body during a flip. Clamping at 0.7
+    // preserves the slope correction up to ~45° tilt and bounds the
+    // visual extension to ~0.8 m past that.
+    const upY = Math.max(0.7, chassisUp.y);
     for (let i = 0; i < 2; i++) {
       const ag = i === 0 ? geom.front : geom.rear;
       const ax = axles[i]!;

@@ -182,9 +182,18 @@ export class ChaseCamera {
     const userMag = Math.min(1, Math.hypot(this.userYaw, this.userPitch) * 2);
     const lookAhead = 7 * (1 - userMag);
     const clampedPitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, this.pitch));
+    // Vertical look offset: gives the directional cue of looking up the
+    // hill / down the hill. Clamped to keep the car in frame on steep
+    // climbs — at 30°+ pitch the raw lookAhead*tan(pitch) exceeded the
+    // camera's height-above-target (which is fixed at +3 m), so the
+    // camera tilted up past the car and the player lost sight of it
+    // climbing slopes. ±2 m vertical keeps the lookAt point near
+    // car-level so the chassis stays in view.
+    const rawPitchOff = lookAhead * Math.tan(clampedPitch);
+    const pitchVOff = Math.max(-2, Math.min(2, rawPitchOff));
     _lookTarget.set(
       this.target.x + Math.sin(this.yaw) * lookAhead,
-      this.target.y + 0.5 + lookAhead * Math.tan(clampedPitch),
+      this.target.y + 0.5 + pitchVOff,
       this.target.z + Math.cos(this.yaw) * lookAhead,
     );
     this.camera.lookAt(_lookTarget);

@@ -48,11 +48,20 @@ describe('axle: ride kinematics', () => {
     expect(s.rideY).toBeCloseTo(0.07, 5);
   });
 
-  it('rideY clamps at bumpMax when compression exceeds it', () => {
+  it('rideY clamps at the visual range (restLength * 0.85) past bumpMax', () => {
+    // rideY is visual-only (solidAxleVehicle.ts ignores stepAxle's
+    // chassisRideForce and applies per-wheel-end ride forces directly).
+    // The clamp is set to keep the wheel mesh below the chassis
+    // attachment point during sharp transient incursions, NOT at
+    // bumpMax — capping at bumpMax produced visible "wheel half-buried
+    // in the ground" on slope crests because the mesh couldn't follow
+    // the ray reading higher than the bumpstop. The progressive
+    // bumpstop on the physics side keeps these incursions short.
     const g = frontGeom();
     const s = createAxleState(g);
     step(s, { l: 5.0, r: 5.0 }, 1);
-    expect(s.rideY).toBeCloseTo(g.bumpMax, 5);
+    expect(s.rideY).toBeCloseTo(g.suspensionRestLength * 0.85, 5);
+    expect(s.rideY).toBeGreaterThan(g.bumpMax);
   });
 
   it('rideY drops to zero when no wheel is in contact', () => {
