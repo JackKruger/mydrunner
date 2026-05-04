@@ -301,4 +301,4 @@ export const RUT_REBUILD_INTERVAL_TICKS = 30;
 // never receives rut deltas), producing periodic rubberbanding on mud.
 // Re-enable once terrain resolution bumps or a sub-cell rut overlay
 // (visuals decoupled from the collider) lands.
-export const RUTS_ENABLED = true;
+export const RUTS_ENABLED = false;
