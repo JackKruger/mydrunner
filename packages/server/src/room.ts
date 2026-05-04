@@ -34,7 +34,7 @@ export interface PlayerHandle {
   id: PlayerId;
   name: string;
   carKind: CarKind;
-  send(msg: string): void;
+  send(msg: Uint8Array): void;
 }
 
 interface InternalPlayer {

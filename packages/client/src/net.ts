@@ -28,6 +28,9 @@ export class NetClient {
 
   connect(): void {
     const ws = new WebSocket(this.url);
+    // Wire format is MessagePack binary; default 'blob' would force an
+    // async FileReader hop on every snapshot. ArrayBuffer is sync.
+    ws.binaryType = 'arraybuffer';
     this.ws = ws;
     ws.addEventListener('open', () => {
       ws.send(Net.encode({ t: 'hello', name: this.name, carKind: this.carKind }));
@@ -36,7 +39,7 @@ export class NetClient {
     ws.addEventListener('message', (ev) => {
       let msg;
       try {
-        msg = Net.decodeServer(ev.data as string);
+        msg = Net.decodeServer(ev.data as ArrayBuffer);
       } catch {
         return;
       }

@@ -1,3 +1,4 @@
+import { encode as msgpackEncode, decode as msgpackDecode } from '@msgpack/msgpack';
 import type { CarKind, PlayerId, PlayerInput, WorldSnapshot } from '../types.js';
 
 // Client -> Server
@@ -39,25 +40,29 @@ export type ServerMessage =
   | { t: 'chat'; from: PlayerId; fromName: string; text: string; serverTimeMs: number }
   | { t: 'bye'; reason: string };
 
-// Wire format: JSON for now (simple, debuggable). Can swap to msgpack later by
-// changing only encode/decode here - everything else uses these types.
+// Wire format: MessagePack binary. Roughly half the bytes of JSON for the
+// snapshot shape we send (lots of small numbers + repeated keys), which
+// matters because snapshot bandwidth was filling client downlinks and
+// causing TCP buffer-bloat / congestion collapse. Legacy JSON path was
+// removed in the buffer-bloat fix; if a future regression makes payloads
+// useful to inspect by hand again, swap msgpackEncode for JSON.stringify
+// in this file only.
 type Wire = string | Uint8Array | ArrayBuffer;
 
-const decoder = new TextDecoder('utf-8');
-function toText(raw: Wire): string {
-  if (typeof raw === 'string') return raw;
-  if (raw instanceof ArrayBuffer) return decoder.decode(new Uint8Array(raw));
-  return decoder.decode(raw);
+function toBytes(raw: Wire): Uint8Array {
+  if (typeof raw === 'string') return new TextEncoder().encode(raw);
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  return raw;
 }
 
-export function encode(msg: ClientMessage | ServerMessage): string {
-  return JSON.stringify(msg);
+export function encode(msg: ClientMessage | ServerMessage): Uint8Array {
+  return msgpackEncode(msg);
 }
 
 export function decodeClient(raw: Wire): ClientMessage {
-  return JSON.parse(toText(raw)) as ClientMessage;
+  return msgpackDecode(toBytes(raw)) as ClientMessage;
 }
 
 export function decodeServer(raw: Wire): ServerMessage {
-  return JSON.parse(toText(raw)) as ServerMessage;
+  return msgpackDecode(toBytes(raw)) as ServerMessage;
 }

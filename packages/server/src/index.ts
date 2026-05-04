@@ -32,8 +32,8 @@ async function main(): Promise<void> {
       id,
       name: 'anon',
       carKind: DEFAULT_CAR_KIND,
-      send: (msg: string) => {
-        if (ws.readyState === ws.OPEN) ws.send(msg);
+      send: (msg: Uint8Array) => {
+        if (ws.readyState === ws.OPEN) ws.send(msg, { binary: true });
       },
     };
 

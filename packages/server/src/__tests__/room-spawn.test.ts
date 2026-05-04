@@ -13,12 +13,12 @@ beforeAll(async () => {
 describe('room spawn behavior', () => {
   it('first player settles on the road, upright', () => {
     const room = new Room();
-    const sent: string[] = [];
+    const sent: Uint8Array[] = [];
     const handle = {
       id: 'p1',
       name: 'tester',
       carKind: 'patrol' as const,
-      send: (m: string) => sent.push(m),
+      send: (m: Uint8Array) => sent.push(m),
     };
     room.addPlayer(handle);
     // Drive forward.

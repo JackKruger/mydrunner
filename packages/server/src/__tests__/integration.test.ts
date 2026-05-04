@@ -28,7 +28,9 @@ describe('server integration', () => {
         id,
         name: 'test',
         carKind: 'patrol',
-        send: (m: string) => ws.readyState === ws.OPEN && ws.send(m),
+        send: (m: Uint8Array) => {
+          if (ws.readyState === ws.OPEN) ws.send(m, { binary: true });
+        },
       };
       handles.set(id, handle);
       ws.on('message', (raw) => {
