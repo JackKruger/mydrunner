@@ -114,21 +114,28 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   // raw compression past bumpMax (capped at restLength * 0.85, which
   // keeps the wheel mesh below the chassis attachment point so it
   // doesn't visibly intersect the chassis body when a sharp rise
-  // pushes the ray reading deep). The progressive bumpstop on the
-  // physics side will lift the chassis fast, so this extended visual
-  // range is only exercised for one or two ticks during sharp bumps —
-  // exactly when capping at bumpMax produces the visible "wheel half-
-  // buried in the ground" artefact.
-  const avgComp = 0.5 * (lc + rc);
+  // pushes the ray reading deep).
+  //
+  // In-air handling: when neither wheel is in contact we hold the
+  // previous rideY rather than snapping to zero (full droop). The
+  // snap-to-zero behaviour produced a visible "diffs extend / wheels
+  // detach from the body" pop the moment all four wheels left the
+  // ground (jumps, flips, the airborne phase of cresting a sharp
+  // ridge). Holding lets the wheels stay where they were last loaded;
+  // when they next make contact the visual catches up to the new
+  // ground reading next tick. rideY is visual-only so this doesn't
+  // change the physics behaviour at all.
   const visualMax = g.suspensionRestLength * 0.85;
-  let targetY = avgComp;
-  if (targetY > visualMax) targetY = visualMax;
-  // No droop modelling in the kinematic axle: an in-air axle reports
-  // rideY=0 (no support). Real droop with a strap-limited drop is a
-  // future refinement; for now the chassis just feels no lift on this
-  // axle, which is the correct gameplay behaviour.
-  if (targetY < 0) targetY = 0;
   const prevY = s.rideY;
+  let targetY: number;
+  if (!input.leftContact && !input.rightContact) {
+    targetY = prevY;
+  } else {
+    const avgComp = 0.5 * (lc + rc);
+    targetY = avgComp;
+    if (targetY > visualMax) targetY = visualMax;
+    if (targetY < 0) targetY = 0;
+  }
   s.rideY = targetY;
   s.rideVelY = input.dt > 0 ? (s.rideY - prevY) / input.dt : 0;
 

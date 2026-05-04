@@ -64,18 +64,21 @@ describe('axle: ride kinematics', () => {
     expect(s.rideY).toBeGreaterThan(g.bumpMax);
   });
 
-  it('rideY drops to zero when no wheel is in contact', () => {
-    // Kinematic axle: in-air -> no support reported. Real strap-limited
-    // droop is a future refinement; today the chassis just gets no lift
-    // from this axle, which is what we want gameplay-wise.
+  it('rideY holds its previous value when no wheel is in contact', () => {
+    // rideY is visual-only (solidAxleVehicle.ts applies per-wheel-end
+    // ride forces directly and ignores stepAxle's chassisRideForce).
+    // In-air we hold the previous compression instead of snapping to
+    // full droop, which avoids the visible "wheels detach from body"
+    // pop on jumps and flips. Physics is unaffected.
     const g = frontGeom();
     const s = createAxleState(g);
-    // First, settle in contact so rideY is non-zero.
     step(s, { l: 0.05, r: 0.05 }, 1);
-    expect(s.rideY).toBeGreaterThan(0);
-    // Then drop to no contact.
+    const settled = s.rideY;
+    expect(settled).toBeGreaterThan(0);
+    // Drop to no contact: rideY holds. (step() derives contact from
+    // l/r > 0, so { l:0, r:0 } makes both contacts false.)
     step(s, { l: 0, r: 0 }, 1);
-    expect(s.rideY).toBe(0);
+    expect(s.rideY).toBeCloseTo(settled, 5);
   });
 
   it('chassis ride force is positive (pushes chassis up) under compression', () => {
