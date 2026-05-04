@@ -11,7 +11,7 @@ export const GRAVITY_Y = -9.81;
 // Vehicle (tunable - feel comes from here). Tuned for a 4x4 SUV / off-road
 // car: AWD, smaller than a truck, peppy enough to be fun on dirt.
 export const VEHICLE = {
-  mass: 1500,
+  mass: 2500, //1500
   chassisHalfExtents: { x: 0.85, y: 0.45, z: 1.9 }, // ~1.7m wide, 3.8m long
   // Rounded edge radius on the chassis collider so bumpers slide off obstacles
   // instead of catching square.  Inner box shrinks by this amount so total
@@ -20,8 +20,8 @@ export const VEHICLE = {
   // Visual roof top relative to the body origin (used to size the collider so
   // the roof doesn't clip the ground when the car is upside-down).
   cabinRoofY: 1.2,
-  wheelRadius: 1.46,
-  wheelWidth: 1.32,
+  wheelRadius: 0.76, //0.46
+  wheelWidth: 0.42, //0.42
   // Suspension geometry. Chassis-connection points (wp.y) sit at the
   // chassis bottom edge; wheels hang below at restLength. Lifted ride
   // height + chunky tyres for that off-road look: chassis-bottom rests
