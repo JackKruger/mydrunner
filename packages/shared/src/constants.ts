@@ -43,7 +43,7 @@ export const VEHICLE = {
   engineForce: 3200,
   driveSplit: { front: 0.5, rear: 0.5 },
   brakeForce: 2500,
-  maxSteer: 0.42,
+  maxSteer: 0.72,
   steerSpeed: 2.2,
   // Wheel friction multipliers - front slightly less grippy than rear so
   // the car understeers (slides front-end-out) instead of pivoting hard
