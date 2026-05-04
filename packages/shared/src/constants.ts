@@ -257,7 +257,7 @@ export const TERRAIN = {
   // Steeper off-trail face is intentional — you can't shortcut the path.
   mtnPeak: 80,
   mtnSigmaRatio: 0.19,
-  mtnXRatio: 0.22,
+  mtnXRatio: 0.18,
   mtnZRatio: 0.36,
 
   // Radius of the flat lookout plateau at the summit (m).
@@ -274,7 +274,7 @@ export const TERRAIN = {
 
   // Map edges
   edgeRamp: 14,
-  edgeLift: 18,
+  edgeLift: 14,
 
   // Mud bogs: world-space coords, depth (m), sigma (m)
   bogs: [
@@ -291,8 +291,8 @@ export const TERRAIN = {
 //   delta_y = RUT_RATE * (1 - grip) * |throttle| * wheelInContact
 // Capped to RUT_MAX_DEPTH per cell. Heightfield collider is rebuilt every
 // RUT_REBUILD_INTERVAL_TICKS to keep physics in sync with visuals.
-export const RUT_RATE = 0.0035;        // m per tick at full slip
-export const RUT_MAX_DEPTH = 0.6;      // m below original height
+export const RUT_RATE = 0.3035;        // m per tick at full slip  0.0035;
+export const RUT_MAX_DEPTH = 0.9;      // m below original height 0.6;    
 export const RUT_REBUILD_INTERVAL_TICKS = 30;
 // Disabled for now: at the current world size (200m) / heightfield
 // resolution (64), each rut cell is ~3.17m across - much wider than a
@@ -301,4 +301,4 @@ export const RUT_REBUILD_INTERVAL_TICKS = 30;
 // never receives rut deltas), producing periodic rubberbanding on mud.
 // Re-enable once terrain resolution bumps or a sub-cell rut overlay
 // (visuals decoupled from the collider) lands.
-export const RUTS_ENABLED = false;
+export const RUTS_ENABLED = TRUE;
