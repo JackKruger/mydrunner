@@ -683,7 +683,8 @@ function castWheelRay(
   if (hit) {
     const toi = hit.timeOfImpact;
     out.contact = true;
-    out.contactDepth = Math.max(0, restLength - (toi - wheelRadius));
+    // Depth can be negative when the ground is below restLength (droop).
+    out.contactDepth = restLength - (toi - wheelRadius);
     out.contactPoint = {
       x: origin.x + dir.x * toi,
       y: origin.y + dir.y * toi,
