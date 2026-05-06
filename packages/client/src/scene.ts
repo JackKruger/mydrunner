@@ -8,6 +8,7 @@ import {
   Physics,
   DEFAULT_CAR_KIND,
   type CarKind,
+  type PlayerSnapshot,
   type WorldSnapshot,
   type PlayerId,
 } from '@mydrunner/shared';
@@ -59,6 +60,14 @@ export class Scene {
   private particles: ParticleSystem;
   private sky: Sky;
   private lastFrameTimeMs = 0;
+  // Pre-allocated render-loop scratch buffers — avoids per-frame GC pressure.
+  private _bMap = new Map<PlayerId, PlayerSnapshot>();
+  private _qa = new THREE.Quaternion();
+  private _qb = new THREE.Quaternion();
+  private _axleBuf: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] = [
+    { rideY: 0, rollAngle: 0 },
+    { rideY: 0, rollAngle: 0 },
+  ];
 
   constructor(canvasParent: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -333,9 +342,10 @@ export class Scene {
 
     if (pair) {
       const { a, b, t } = pair;
-      const bMap = new Map(b.snap.players.map((p) => [p.id, p]));
+      this._bMap.clear();
+      for (const p of b.snap.players) this._bMap.set(p.id, p);
       for (const pa of a.snap.players) {
-        const pb = bMap.get(pa.id) ?? pa;
+        const pb = this._bMap.get(pa.id) ?? pa;
         present.add(pa.id);
         const isLocal = pa.id === this.localId;
         const vis = this.ensureVehicle(pa.id, isLocal, pa.carKind);
@@ -349,27 +359,25 @@ export class Scene {
             pa.vehicle.position.y + (pb.vehicle.position.y - pa.vehicle.position.y) * t,
             pa.vehicle.position.z + (pb.vehicle.position.z - pa.vehicle.position.z) * t,
           );
-          const qa = new THREE.Quaternion(pa.vehicle.rotation.x, pa.vehicle.rotation.y, pa.vehicle.rotation.z, pa.vehicle.rotation.w);
-          const qb = new THREE.Quaternion(pb.vehicle.rotation.x, pb.vehicle.rotation.y, pb.vehicle.rotation.z, pb.vehicle.rotation.w);
-          qa.slerp(qb, t);
-          vis.group.quaternion.copy(qa);
+          this._qa.set(pa.vehicle.rotation.x, pa.vehicle.rotation.y, pa.vehicle.rotation.z, pa.vehicle.rotation.w);
+          this._qb.set(pb.vehicle.rotation.x, pb.vehicle.rotation.y, pb.vehicle.rotation.z, pb.vehicle.rotation.w);
+          this._qa.slerp(this._qb, t);
+          vis.group.quaternion.copy(this._qa);
 
           // Interpolate axle DOFs from the snapshot pair. Falls back to
           // rest if the server omitted axles (legacy raycast vehicle).
           const axA = pa.vehicle.axles ?? null;
           const axB = pb.vehicle.axles ?? axA;
-          const axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] = [
-            { rideY: 0, rollAngle: 0 },
-            { rideY: 0, rollAngle: 0 },
-          ];
+          this._axleBuf[0]!.rideY = 0; this._axleBuf[0]!.rollAngle = 0;
+          this._axleBuf[1]!.rideY = 0; this._axleBuf[1]!.rollAngle = 0;
           if (axA && axB) {
             for (let i = 0; i < 2; i++) {
               const a0 = axA[i]!, a1 = axB[i]!;
-              axles[i]!.rideY = a0.rideY + (a1.rideY - a0.rideY) * t;
-              axles[i]!.rollAngle = a0.rollAngle + (a1.rollAngle - a0.rollAngle) * t;
+              this._axleBuf[i]!.rideY = a0.rideY + (a1.rideY - a0.rideY) * t;
+              this._axleBuf[i]!.rollAngle = a0.rollAngle + (a1.rollAngle - a0.rollAngle) * t;
             }
           }
-          this.poseAxles(vis, axles);
+          this.poseAxles(vis, this._axleBuf);
 
           for (let i = 0; i < 4; i++) {
             const wheel = vis.wheels[i]!;

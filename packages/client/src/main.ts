@@ -163,6 +163,11 @@ let lastGear = 0;
 let prediction: Prediction | null = null;
 let lastFrameTimeMs = performance.now();
 let terrainData: Physics.TerrainData | null = null;
+// Snapshot deferred from the WebSocket handler so reconcile (which replays
+// up to MAX_REPLAY physics steps) runs inside requestAnimationFrame where
+// we control the budget, not on an async message callback that interrupts
+// the render loop mid-frame.
+let pendingSnap: { snap: import('@mydrunner/shared').WorldSnapshot; recvAtMs: number } | null = null;
 
 async function start(): Promise<void> {
   // Rapier WASM init - prediction depends on the same physics as the server.
@@ -218,8 +223,8 @@ async function start(): Promise<void> {
     onSnapshot(snap, recvAtMs) {
       lastSnapTick = snap.tick;
       scene.pushSnapshot(snap, recvAtMs);
-      const stats = prediction && localId ? prediction.reconcile(snap, localId) : null;
-      netDiagOnSnapshot(recvAtMs, stats);
+      // Defer reconcile to the render loop — see pendingSnap declaration above.
+      pendingSnap = { snap, recvAtMs };
       if (localId) {
         const me = snap.players.find((p) => p.id === localId);
         if (me) {
@@ -325,6 +330,18 @@ async function start(): Promise<void> {
     const frameDt = Math.min(0.25, (now - lastFrameTimeMs) / 1000);
     lastFrameTimeMs = now;
 
+    // Process deferred reconcile before stepping inputs. Doing this at the
+    // top of the frame (inside rAF) keeps the heavy replay work inside our
+    // frame budget instead of interrupting the render mid-frame via a
+    // WebSocket callback. The snap was already pushed to scene.pushSnapshot
+    // in the handler, so interpolation is unaffected by the one-frame delay.
+    if (pendingSnap && prediction && localId) {
+      const { snap, recvAtMs } = pendingSnap;
+      pendingSnap = null;
+      const stats = prediction.reconcile(snap, localId);
+      netDiagOnSnapshot(recvAtMs, stats);
+    }
+
     if (connected && prediction) {
       predictAcc += frameDt;
       prediction.beginFrame();
@@ -349,19 +366,20 @@ async function start(): Promise<void> {
     // Override the local vehicle pose with the predicted state so the local
     // car is responsive instead of 100ms behind. alpha lerps between
     // the start-of-step and end-of-step body poses for smoothness.
+    let predState: ReturnType<Prediction['state']> | null = null;
     if (prediction) {
-      const s = prediction.state(alpha);
-      scene.setLocalVehiclePose(s.position, s.rotation, s.wheels, s.axles);
+      predState = prediction.state(alpha);
+      scene.setLocalVehiclePose(predState.position, predState.rotation, predState.wheels, predState.axles);
       // Update debug axle overlay for debug users.
-      updateAxleDebug(s.axles[0], s.axles[1]);
+      updateAxleDebug(predState.axles[0], predState.axles[1]);
     }
 
     scene.render(now);
     if (connected) {
       const kmh = (lastSpeed * 3.6).toFixed(0);
       let surfaceLabel = '';
-      if (terrainData && prediction) {
-        const p = prediction.state().position;
+      if (terrainData && predState) {
+        const p = predState.position;
         const s = Physics.sampleSurface(terrainData, p.x, p.z);
         surfaceLabel = ` · ${SURFACE_LABELS[s] ?? '?'}`;
       }

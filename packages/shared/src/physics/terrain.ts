@@ -280,33 +280,32 @@ export function pointToSegmentDist(px: number, pz: number, ax: number, az: numbe
   return Math.hypot(px - cx, pz - cz);
 }
 
-/** Road height layer - flattens terrain under roads and eases at shoulders. */
+/** Road height layer - flattens terrain under roads and eases at shoulders.
+ *
+ *  Core check is done independently per road: a point in the core of any
+ *  road is flat regardless of whether a narrower road is geometrically
+ *  closer. Without this, the mountain trail's narrow shoulder can shadow
+ *  the main road's wider core for points near the trail but well inside
+ *  the main road's flat zone (e.g. spawn corridor at |z| < roadCore). */
 export const roadLayer: HeightLayer = (ctx, x, z, currentH) => {
-  let minDist = Infinity;
-  let closestRoadCoreDist = TERRAIN.roadCore;
-  let closestRoadShoulderDist = TERRAIN.roadShoulder;
+  let bestShoulderH = currentH;
   for (const road of ctx.roads) {
+    const halfCore = road.width / 2;
+    const halfShoulder = halfCore + road.shoulderWidth;
     for (let i = 0; i < road.points.length - 1; i++) {
       const a = road.points[i]!;
       const b = road.points[i + 1]!;
       const dist = pointToSegmentDist(x, z, a.x, a.z, b.x, b.z);
-      if (dist < minDist) {
-        minDist = dist;
-        closestRoadCoreDist = road.width / 2;
-        closestRoadShoulderDist = road.width / 2 + road.shoulderWidth;
+      if (dist <= halfCore) return 0; // In this road's core — flat
+      if (dist < halfShoulder) {
+        const t = (dist - halfCore) / (halfShoulder - halfCore);
+        const ease = t * t * (3 - 2 * t);
+        const blended = currentH * ease;
+        if (blended < bestShoulderH) bestShoulderH = blended;
       }
     }
   }
-  if (minDist <= closestRoadCoreDist) {
-    return 0; // Flat at y=0 inside road core
-  }
-  if (minDist < closestRoadShoulderDist) {
-    // Smooth ease from 0 to natural height over shoulder
-    const t = (minDist - closestRoadCoreDist) / (closestRoadShoulderDist - closestRoadCoreDist);
-    const ease = t * t * (3 - 2 * t);
-    return currentH * ease;
-  }
-  return currentH;
+  return bestShoulderH;
 };
 
 /** Petrol station pad layer - flattens pad and adjacent fade zone to y=0. */

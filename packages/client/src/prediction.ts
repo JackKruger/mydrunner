@@ -71,6 +71,22 @@ export class Prediction {
    *  endpoint, leaving a visible jump proportional to (1-alpha) and the
    *  velocity change - the source of "stutter on snapshot tick" pops. */
   private lastAlpha = 1;
+  // Pre-allocated return value for state() — eliminates per-frame GC pressure.
+  // Callers must consume the result within the same frame and not hold references.
+  private _state = {
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0, w: 1 },
+    wheels: [
+      { steer: 0, spin: 0, suspensionLength: 0 },
+      { steer: 0, spin: 0, suspensionLength: 0 },
+      { steer: 0, spin: 0, suspensionLength: 0 },
+      { steer: 0, spin: 0, suspensionLength: 0 },
+    ],
+    axles: [
+      { rideY: 0, rollAngle: 0 },
+      { rideY: 0, rollAngle: 0 },
+    ] as [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
+  };
   /** Body pose at the start of the most recent physics step. Together
    *  with the body's current pose, lets state(alpha) return an
    *  interpolated state - smooth motion when the rAF accumulator runs
@@ -372,41 +388,30 @@ export class Prediction {
     let rw = pr.w + (s.rotation.w * sgn - pr.w) * a;
     const rl = Math.hypot(rx, ry, rz, rw) || 1;
     rx /= rl; ry /= rl; rz /= rl; rw /= rl;
-    const axCurrent = s.axles ?? [
-      { rideY: 0, rollAngle: 0 },
-      { rideY: 0, rollAngle: 0 },
-    ];
-    const axles: [
-      { rideY: number; rollAngle: number },
-      { rideY: number; rollAngle: number },
-    ] = [
-      { rideY: 0, rollAngle: 0 },
-      { rideY: 0, rollAngle: 0 },
-    ];
+    const axCurrent = s.axles;
     for (let i = 0; i < 2; i++) {
-      const cur = axCurrent[i] ?? { rideY: 0, rollAngle: 0 };
+      const cur = axCurrent?.[i];
       const prev = this.prev.axles[i]!;
       const off = this.axleVisualOffset[i]!;
-      axles[i]!.rideY = prev.rideY + (cur.rideY - prev.rideY) * a + off.rideY;
-      axles[i]!.rollAngle = prev.rollAngle + (cur.rollAngle - prev.rollAngle) * a + off.rollAngle;
+      const ax = this._state.axles[i]!;
+      ax.rideY = prev.rideY + ((cur?.rideY ?? 0) - prev.rideY) * a + off.rideY;
+      ax.rollAngle = prev.rollAngle + ((cur?.rollAngle ?? 0) - prev.rollAngle) * a + off.rollAngle;
     }
-    return {
-      position: {
-        x: p.x + (s.position.x - p.x) * a + this.visualOffset.x,
-        y: p.y + (s.position.y - p.y) * a + this.visualOffset.y,
-        z: p.z + (s.position.z - p.z) * a + this.visualOffset.z,
-      },
-      rotation: { x: rx, y: ry, z: rz, w: rw },
-      wheels: s.wheels.map((w, i) => {
-        const pw = this.prev.wheels[i]!;
-        return {
-          steer: pw.steer + (w.steer - pw.steer) * a,
-          spin: pw.spin + (w.spin - pw.spin) * a,
-          suspensionLength: pw.suspensionLength + (w.suspensionLength - pw.suspensionLength) * a,
-        };
-      }),
-      axles,
-    };
+    const pos = this._state.position;
+    pos.x = p.x + (s.position.x - p.x) * a + this.visualOffset.x;
+    pos.y = p.y + (s.position.y - p.y) * a + this.visualOffset.y;
+    pos.z = p.z + (s.position.z - p.z) * a + this.visualOffset.z;
+    const rot = this._state.rotation;
+    rot.x = rx; rot.y = ry; rot.z = rz; rot.w = rw;
+    for (let i = 0; i < 4; i++) {
+      const w = s.wheels[i]!;
+      const pw = this.prev.wheels[i]!;
+      const wOut = this._state.wheels[i]!;
+      wOut.steer = pw.steer + (w.steer - pw.steer) * a;
+      wOut.spin = pw.spin + (w.spin - pw.spin) * a;
+      wOut.suspensionLength = pw.suspensionLength + (w.suspensionLength - pw.suspensionLength) * a;
+    }
+    return this._state;
   }
 
   dispose(): void {
