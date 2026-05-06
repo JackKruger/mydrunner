@@ -124,7 +124,7 @@ export class SolidAxleVehicle implements VehicleLike {
     const colDesc = RAPIER.ColliderDesc.roundCuboid(ext.x - r, colHalfH - r, ext.z - r, r)
       .setTranslation(0, colOffsetY, 0)
       .setDensity(VEHICLE.mass / (8 * ext.x * ext.y * ext.z))
-      .setFriction(0.3);
+      .setFriction(0.1);
     this.chassis = world.world.createCollider(colDesc, this.body);
     // Same low CoM trick the legacy Vehicle uses: pull principal moments
     // toward a low centre so the chassis feels bottom-heavy and resists
@@ -219,16 +219,20 @@ export class SolidAxleVehicle implements VehicleLike {
       const wL = this.wheels[wIdxL]!;
       const wR = this.wheels[wIdxR]!;
 
-      const leftLocal = { x: -ag.trackHalf, y: ag.centerLocalY, z: ag.centerLocalZ };
-      const rightLocal = { x: +ag.trackHalf, y: ag.centerLocalY, z: ag.centerLocalZ };
+      // Lift ray origins by 0.5m to prevent rays starting inside terrain.
+      // This is vital when the chassis is belly-out or wheels are deep.
+      const rayLift = 0.5;
+      const leftLocal = { x: -ag.trackHalf, y: ag.centerLocalY + rayLift, z: ag.centerLocalZ };
+      const rightLocal = { x: +ag.trackHalf, y: ag.centerLocalY + rayLift, z: ag.centerLocalZ };
       const leftWorld = addVec(t, rotateVecByQuat(leftLocal, r));
       const rightWorld = addVec(t, rotateVecByQuat(rightLocal, r));
 
       const rayDir: Vec3 = { x: 0, y: -1, z: 0 };
-      const maxToi = ag.suspensionRestLength + this.geom.wheelRadius + 0.10;
+      // Max range includes the lift, full rest length, droop, and wheel radius.
+      const maxToi = rayLift + ag.suspensionRestLength + ag.droopMax + this.geom.wheelRadius;
 
-      castWheelRay(this.world, this.body, leftWorld, rayDir, maxToi, ag.suspensionRestLength, this.geom.wheelRadius, wL);
-      castWheelRay(this.world, this.body, rightWorld, rayDir, maxToi, ag.suspensionRestLength, this.geom.wheelRadius, wR);
+      castWheelRay(this.world, this.body, leftWorld, rayDir, maxToi, ag.suspensionRestLength + rayLift, this.geom.wheelRadius, wL);
+      castWheelRay(this.world, this.body, rightWorld, rayDir, maxToi, ag.suspensionRestLength + rayLift, this.geom.wheelRadius, wR);
 
       wL.surface = sampleSurface(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
       wR.surface = sampleSurface(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
@@ -315,14 +319,13 @@ export class SolidAxleVehicle implements VehicleLike {
         // edge) would otherwise produce damping forces that exceed the
         // spring saturation force and destabilise the integrator.
         const compRate = clamp(rawRate, -3, 3);
-        // Engagement ramps from 0→1 as compression reaches ~0.05m
-        // (typical equilibrium). Was comp*12 which only reached 0.55 at
-        // equilibrium, leaving the chassis underdamped and oscillatory.
+        // Engagement ramps from 0→1 as compression reaches ~0.05m.
+        // Suspension only exerts force while compressed (comp > 0).
         const engagement = Math.min(1, comp / 0.05);
-        // Per-wheel-end stiffness is HALF the axle's total because both
-        // wheels share the load (parallel springs sum to k_total).
+        // Per-wheel-end stiffness is HALF the axle's total.
         const F = 0.5 * ag.rideStiffness * comp
                 + 0.5 * ag.rideDamping * engagement * compRate;
+        w.lastForce = F;
         // Apply in world-up direction. Raycasts go world-down so compression
         // is a world-Y quantity; pushing in chassis-up instead leaked a
         // horizontal component at any non-zero pitch and caused the vehicle
@@ -481,10 +484,12 @@ export class SolidAxleVehicle implements VehicleLike {
 
       const surfMult = surfaceGrip(w.surface);
       const axleGripMult = isFront ? TUNING.frontGripMult : TUNING.rearGripMult;
-      // Normal load: even weight share + load transfer from spring compression.
-      const baseLoad = VEHICLE.mass * Math.abs(GRAVITY_Y) / 4;
-      const loadFromSpring = ag.rideStiffness * Math.max(0, w.contactDepth) * 0.25;
-      const normalLoad = baseLoad + loadFromSpring;
+      // Normal load: the friction circle should use the actual vertical
+      // force the tire is pushing with. We take the dynamic suspension
+      // force (which can be 0 or negative during unweighting) and clamp
+      // it to a minimum to avoid zero-grip singularities while still
+      // allowing the car to slide when unweighted.
+      const normalLoad = Math.max(500, w.lastForce ?? 0);
       const longGripCap =
         TIRE_LONG_FRICTION * surfMult * axleGripMult * inclineMult * normalLoad;
 
@@ -564,14 +569,15 @@ export class SolidAxleVehicle implements VehicleLike {
       const ag = axle.geom;
       const wL = this.wheels[aIdx * 2]!;
       const wR = this.wheels[aIdx * 2 + 1]!;
-      const leftLocal = { x: -ag.trackHalf, y: ag.centerLocalY, z: ag.centerLocalZ };
-      const rightLocal = { x: +ag.trackHalf, y: ag.centerLocalY, z: ag.centerLocalZ };
+      const rayLift = 0.5;
+      const leftLocal = { x: -ag.trackHalf, y: ag.centerLocalY + rayLift, z: ag.centerLocalZ };
+      const rightLocal = { x: +ag.trackHalf, y: ag.centerLocalY + rayLift, z: ag.centerLocalZ };
       const leftWorld = addVec(t, rotateVecByQuat(leftLocal, r));
       const rightWorld = addVec(t, rotateVecByQuat(rightLocal, r));
       const rayDir: Vec3 = { x: 0, y: -1, z: 0 };
-      const maxToi = ag.suspensionRestLength + this.geom.wheelRadius + 0.10;
-      castWheelRay(this.world, this.body, leftWorld, rayDir, maxToi, ag.suspensionRestLength, this.geom.wheelRadius, wL);
-      castWheelRay(this.world, this.body, rightWorld, rayDir, maxToi, ag.suspensionRestLength, this.geom.wheelRadius, wR);
+      const maxToi = rayLift + ag.suspensionRestLength + ag.droopMax + this.geom.wheelRadius;
+      castWheelRay(this.world, this.body, leftWorld, rayDir, maxToi, ag.suspensionRestLength + rayLift, this.geom.wheelRadius, wL);
+      castWheelRay(this.world, this.body, rightWorld, rayDir, maxToi, ag.suspensionRestLength + rayLift, this.geom.wheelRadius, wR);
       stepAxle(axle, {
         leftDepth: wL.contactDepth,
         rightDepth: wR.contactDepth,
@@ -677,7 +683,8 @@ function castWheelRay(
   if (hit) {
     const toi = hit.timeOfImpact;
     out.contact = true;
-    out.contactDepth = Math.max(0, restLength - (toi - wheelRadius));
+    // Depth can be negative when the ground is below restLength (droop).
+    out.contactDepth = restLength - (toi - wheelRadius);
     out.contactPoint = {
       x: origin.x + dir.x * toi,
       y: origin.y + dir.y * toi,

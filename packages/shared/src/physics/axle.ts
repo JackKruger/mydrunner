@@ -100,8 +100,8 @@ export interface StepAxleInputs {
 export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   const g = s.geom;
 
-  const lc = input.leftContact ? Math.max(0, input.leftDepth) : 0;
-  const rc = input.rightContact ? Math.max(0, input.rightDepth) : 0;
+  const lc = input.leftContact ? input.leftDepth : 0;
+  const rc = input.rightContact ? input.rightDepth : 0;
   s.leftDepth = lc;
   s.rightDepth = rc;
   s.leftContact = input.leftContact;
@@ -129,12 +129,14 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   const prevY = s.rideY;
   let targetY: number;
   if (!input.leftContact && !input.rightContact) {
-    targetY = prevY;
+    targetY = -g.droopMax;
   } else {
     const avgComp = 0.5 * (lc + rc);
     targetY = avgComp;
     if (targetY > visualMax) targetY = visualMax;
-    if (targetY < 0) targetY = 0;
+    // Allow negative rideY for droop (wheels hanging below rest).
+    // Clamped at -droopMax to match physical limit.
+    if (targetY < -g.droopMax) targetY = -g.droopMax;
   }
   s.rideY = targetY;
   s.rideVelY = input.dt > 0 ? (s.rideY - prevY) / input.dt : 0;

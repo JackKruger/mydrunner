@@ -31,6 +31,8 @@ export interface WheelKinematic {
   contactNormal: { x: number; y: number; z: number };
   /** Sampled surface id under the wheel (Surface enum value). */
   surface: number;
+  /** Vertical force from the suspension last tick (N). */
+  lastForce?: number;
 }
 
 export function createWheelKinematic(): WheelKinematic {
@@ -43,6 +45,7 @@ export function createWheelKinematic(): WheelKinematic {
     contactPoint: { x: 0, y: 0, z: 0 },
     contactNormal: { x: 0, y: 1, z: 0 },
     surface: 1,
+    lastForce: 0,
   };
 }
 
@@ -52,6 +55,7 @@ export function resetWheelKinematic(w: WheelKinematic): void {
   w.contact = false;
   w.contactDepth = 0;
   w.prevContactDepth = -1;
+  w.lastForce = 0;
 }
 
 /** Integrate wheel angular velocity by net torque this tick.
