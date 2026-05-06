@@ -461,6 +461,13 @@ export class SolidAxleVehicle implements VehicleLike {
         continue;
       }
 
+      // Surface-dependent rolling resistance. Mud and deep mud provide
+      // significantly more drag than hard surfaces.
+      let rollingMult = 1.0;
+      if (w.surface === Surface.Mud) rollingMult = 4.0;
+      else if (w.surface === Surface.DeepMud) rollingMult = 12.0;
+      const rollingResistance = WHEEL.rollingResistance * rollingMult;
+
       // Velocity of the chassis at the contact point.
       const cp = w.contactPoint;
       const armX = cp.x - t.x;
@@ -481,40 +488,47 @@ export class SolidAxleVehicle implements VehicleLike {
       const longGripCap =
         TIRE_LONG_FRICTION * surfMult * axleGripMult * inclineMult * normalLoad;
 
-      // Impulse-clamped wheel integration. The Pacejka groundTq (≈1200 N·m
-      // at 1 rad/s contact) is 14× larger than what Euler-at-60Hz can
-      // integrate stably: it flung angVel to ±14 rad/s per frame, which
-      // bypassed the |angVel|<1 spin-guard and let spin accumulate while
-      // "parked". Fix: compute the torque needed to reach zero-slip in one
-      // step and clamp it to grip capacity — the wheel can never overshoot.
+      // Friction circle (elliptical) coupling. We compute the forces
+      // needed for zero longitudinal slip and zero lateral velocity,
+      // then clamp the combined vector to the available friction limit.
+      // This ensures that spinning the wheels (high longitudinal force)
+      // reduces the available lateral grip, making the car slide — the
+      // essential "drifting in mud" or "power-sliding" feel.
       const groundAngVel = longV / this.geom.wheelRadius;
-      const maxGroundTq = longGripCap * this.geom.wheelRadius;
       const neededTq = (groundAngVel - w.angVel) * WHEEL.inertia / dt;
-      const groundTq = Math.sign(neededTq) * Math.min(Math.abs(neededTq), maxGroundTq);
-      integrateWheelSpin(w, driveTq, brakeTq, groundTq, dt);
+      const rawLongForce = -neededTq / this.geom.wheelRadius;
+      const rawLatForce = -TUNING.tireLatStiffness * latV;
 
-      // Chassis force = Newton's 3rd law of the clamped wheel impulse.
-      const longForceSigned = -groundTq / this.geom.wheelRadius;
+      let finalLongForce = 0;
+      let finalLatForce = 0;
+
+      if (longGripCap > 1e-6) {
+        const longMax = longGripCap;
+        const latMax = longGripCap * TIRE_LATERAL.longRatio;
+        const longNorm = rawLongForce / longMax;
+        const latNorm = rawLatForce / latMax;
+        const combined = Math.sqrt(longNorm * longNorm + latNorm * latNorm);
+
+        if (combined > 1) {
+          finalLongForce = rawLongForce / combined;
+          finalLatForce = rawLatForce / combined;
+        } else {
+          finalLongForce = rawLongForce;
+          finalLatForce = rawLatForce;
+        }
+      }
+
+      // Update wheel angular velocity using the force actually transmitted
+      // through the contact patch (impulse-clamped integration).
+      const finalGroundTq = -finalLongForce * this.geom.wheelRadius;
+      integrateWheelSpin(w, driveTq, brakeTq, finalGroundTq, dt, rollingResistance);
+
+      // Apply combined tire force to chassis at contact point.
       this.body.addForceAtPoint(
         {
-          x: wheelFwd.x * longForceSigned,
-          y: wheelFwd.y * longForceSigned,
-          z: wheelFwd.z * longForceSigned,
-        },
-        cp,
-        true,
-      );
-
-      // Lateral force: linear in lateral velocity, clamped by friction
-      // circle (longRatio of the longitudinal cap).
-      const latStiff = TUNING.tireLatStiffness;
-      const latMax = longGripCap * TIRE_LATERAL.longRatio;
-      const latForceMag = clamp(-latStiff * latV, -latMax, latMax);
-      this.body.addForceAtPoint(
-        {
-          x: wheelRight.x * latForceMag,
-          y: wheelRight.y * latForceMag,
-          z: wheelRight.z * latForceMag,
+          x: wheelFwd.x * finalLongForce + wheelRight.x * finalLatForce,
+          y: wheelFwd.y * finalLongForce + wheelRight.y * finalLatForce,
+          z: wheelFwd.z * finalLongForce + wheelRight.z * finalLatForce,
         },
         cp,
         true,

@@ -72,6 +72,7 @@ export function integrateWheelSpin(
   brakeTorque: number,
   groundTorque: number,
   dt: number,
+  rollingResistance: number = WHEEL.rollingResistance,
 ): void {
   // Brake torque opposes the current angVel; if the wheel is stopped
   // and only brake is applied, hold it at zero (don't let brake reverse
@@ -84,10 +85,10 @@ export function integrateWheelSpin(
     w.angVel = 0;
     return;
   }
-  // Rolling resistance: small drag torque proportional to angVel that
-  // bleeds spin off when the throttle is off, so the truck doesn't
-  // coast forever.
-  const rolling = -WHEEL.rollingResistance * w.angVel;
+  // Rolling resistance: drag torque proportional to angVel that
+  // bleeds spin off when the throttle is off. Can be increased on
+  // soft surfaces like mud.
+  const rolling = -rollingResistance * w.angVel;
   const net = driveTorque + brake + groundTorque + rolling;
   w.angVel += (net / WHEEL.inertia) * dt;
 }
