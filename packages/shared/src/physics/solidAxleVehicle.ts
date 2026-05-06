@@ -276,6 +276,7 @@ export class SolidAxleVehicle implements VehicleLike {
       ];
       for (const side of sides) {
         const w = side.wheel;
+        w.lastForce = 0;
         if (!w.contact) {
           w.prevContactDepth = -1;
           continue;
