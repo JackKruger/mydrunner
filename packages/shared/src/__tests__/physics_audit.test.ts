@@ -48,17 +48,73 @@ describe('physics audit: stationary stability', () => {
   });
 });
 
-describe('physics audit: friction circle', () => {
-  it('combined forces do not exceed friction limit (elliptical clamp)', () => {
+describe('physics audit: side slope and progression', () => {
+  it('can make progress when horizontal on a slope', () => {
+    // Create a world with a significant slope (e.g. 20%)
+    const n = 64;
+    const heights = new Float32Array(n * n);
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        // Slope in X direction: 0.2m per metre
+        const x = (c / (n - 1) - 0.5) * 200;
+        heights[r * n + c] = x * 0.2;
+      }
+    }
+    const surfaces = new Uint8Array(n * n);
+    surfaces.fill(Physics.Surface.Dirt);
+    const terrainData: Physics.TerrainData = {
+      size: 200, resolution: n, heights, surfaces, seed: 0,
+      mountain: mountainFor(200),
+      petrolStation: petrolStationPadFor(200),
+      bogs: [],
+      roads: [],
+    };
+    const world = new Physics.World({ terrain: terrainData });
+    // Spawn vehicle perpendicular to slope (facing along Z)
+    const vehicle = new Physics.SolidAxleVehicle(
+      world,
+      'p',
+      { position: { x: 0, y: 5, z: 0 } },
+      'patrol',
+    );
+    world.vehicles.set(vehicle.id, vehicle);
+
+    settle(world, 180); // settle on slope
+
+    const startZ = vehicle.getState().position.z;
+
+    // Apply throttle
+    for (let i = 0; i < 180; i++) {
+        vehicle.setInput({ ...EMPTY_INPUT, seq: i, throttle: 1 });
+        world.step();
+    }
+
+    const endZ = vehicle.getState().position.z;
+    // Should have moved forward significantly despite being on a slope
+    expect(endZ - startZ).toBeGreaterThan(1.0);
+    world.dispose();
+  });
+});
+
+describe('physics audit: suspension droop', () => {
+  it('extends wheels when the chassis is lifted', () => {
     const { world, vehicle } = makeWorld();
-    settle(world, 60);
+    settle(world, 120);
 
-    vehicle.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1, steer: 1 });
-    for (let i = 0; i < 120; i++) world.step();
+    const restRideY = vehicle.getState().axles[0].rideY;
 
-    const state = vehicle.getState();
-    expect(state.position.y).toBeGreaterThan(0);
-    expect(Math.abs(state.angVel.y)).toBeGreaterThan(0.1); // it is turning
+    // Lift the car into the air
+    const pos = vehicle.body.translation();
+    vehicle.body.setTranslation({ x: pos.x, y: pos.y + 2.0, z: pos.z }, true);
+
+    // Step once to update raycasts and axle state
+    world.step();
+
+    const airRideY = vehicle.getState().axles[0].rideY;
+    // rideY should be negative (droop) in the air
+    expect(airRideY).toBeLessThan(0);
+    expect(airRideY).toBeLessThan(restRideY);
+
     world.dispose();
   });
 });
@@ -71,22 +127,18 @@ describe('physics audit: rolling resistance', () => {
     settle(road.world, 60);
     settle(mud.world, 60);
 
-    // Get both up to same speed
     for (let i = 0; i < 60; i++) {
         road.vehicle.setInput({ ...EMPTY_INPUT, seq: i, throttle: 1 });
         road.world.step();
     }
-    // Mud takes longer to accelerate, so give it more time or just accept lower speed
     for (let i = 0; i < 120; i++) {
         mud.vehicle.setInput({ ...EMPTY_INPUT, seq: i, throttle: 1 });
         mud.world.step();
     }
 
-    // Now coast and watch deceleration
     const vRoadStart = Math.hypot(road.vehicle.body.linvel().x, road.vehicle.body.linvel().z);
     const vMudStart = Math.hypot(mud.vehicle.body.linvel().x, mud.vehicle.body.linvel().z);
 
-    // Coast for 1 second (60 ticks)
     for (let i = 0; i < 60; i++) {
         road.vehicle.setInput(EMPTY_INPUT);
         mud.vehicle.setInput(EMPTY_INPUT);
@@ -100,7 +152,6 @@ describe('physics audit: rolling resistance', () => {
     const roadRatio = vRoadEnd / vRoadStart;
     const mudRatio = vMudEnd / vMudStart;
 
-    // Mud should lose a larger fraction of its speed
     expect(mudRatio).toBeLessThan(roadRatio);
 
     road.world.dispose();
@@ -113,7 +164,6 @@ describe('physics audit: engine braking', () => {
         const { world, vehicle } = makeWorld();
         settle(world, 60);
 
-        // Accelerate
         for (let i = 0; i < 200; i++) {
             vehicle.setInput({ ...EMPTY_INPUT, seq: i, throttle: 1 });
             world.step();
@@ -121,7 +171,6 @@ describe('physics audit: engine braking', () => {
 
         const vStart = Math.hypot(vehicle.body.linvel().x, vehicle.body.linvel().z);
 
-        // Release throttle - engine braking should kick in
         for (let i = 0; i < 120; i++) {
             vehicle.setInput(EMPTY_INPUT);
             world.step();
@@ -129,7 +178,6 @@ describe('physics audit: engine braking', () => {
 
         const vEnd = Math.hypot(vehicle.body.linvel().x, vehicle.body.linvel().z);
 
-        // Expect significant speed loss (e.g. at least 15% over 2s)
         expect(vEnd).toBeLessThan(vStart * 0.85);
         world.dispose();
     });

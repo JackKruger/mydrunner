@@ -129,12 +129,13 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   const prevY = s.rideY;
   let targetY: number;
   if (!input.leftContact && !input.rightContact) {
-    targetY = prevY;
+    targetY = -g.droopMax;
   } else {
     const avgComp = 0.5 * (lc + rc);
     targetY = avgComp;
     if (targetY > visualMax) targetY = visualMax;
-    if (targetY < 0) targetY = 0;
+    // Allow negative rideY for droop (wheels hanging below rest).
+    if (targetY < -g.droopMax) targetY = -g.droopMax;
   }
   s.rideY = targetY;
   s.rideVelY = input.dt > 0 ? (s.rideY - prevY) / input.dt : 0;
