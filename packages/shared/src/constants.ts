@@ -87,7 +87,7 @@ export const ENGINE = {
   firstGear: 2,
   shiftUpRpm: 4600,
   shiftDownRpm: 1700,
-  engineBrakeCoef: 0.12,
+  engineBrakeCoef: 0.25,
   rpmLimiterFalloff: 800,
   // Minimum ticks between automatic RPM-triggered shifts (~1.5 s at 60 Hz).
   // Prevents hunting when vehicle speed oscillates near a shift threshold.
