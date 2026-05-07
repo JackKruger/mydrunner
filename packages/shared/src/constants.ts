@@ -76,15 +76,14 @@ export const ENGINE = {
   idleRpm: 850,
   redlineRpm: 5800,
   peakTorqueRpm: 3500,
-  // Off-roader peak torque - bumped from 320 so the truck has enough
-  // grunt to climb the hills around the road. Matches what a real ~3L
-  // SUV diesel would put down.
-  peakTorqueNm: 480,
+  // Off-roader peak torque - bumped from 480 → 560 so the truck has the
+  // grunt to overcome drag at the new taller top gear.
+  peakTorqueNm: 560,
   finalDrive: 4.1,
-  // Reverse ratio softened from -3.6 → -2.6 so reverse pulls noticeably
-  // longer before redlining; top-gear ratio dropped from 0.82 → 0.72 to
-  // give a meaningful top-end bump on the road.
-  gears: [-2.6, 0, 4.0, 2.3, 1.5, 1.05, 0.72],
+  // Reverse ratio softened to -2.2 (from -2.6) for a noticeably faster
+  // reverse top end; top-gear ratio dropped to 0.60 (from 0.72) so the
+  // engine has more headroom in 5th and the truck cruises faster on road.
+  gears: [-2.2, 0, 4.0, 2.3, 1.5, 1.05, 0.60],
   reverseGear: 0,
   neutralGear: 1,
   firstGear: 2,
@@ -204,7 +203,7 @@ export const TIRE_LONG_FRICTION = 1.15;
 // when the throttle is off, so the truck doesn't coast forever.
 export const WHEEL = {
   inertia: 1.6,
-  rollingResistance: 0.015,
+  rollingResistance: 0.010,
 } as const;
 
 // Hill-climb traction assist. Real 4x4s lose grip on slopes because
