@@ -96,44 +96,28 @@ export interface Road {
   shoulderWidth: number;
 }
 
-/** Default straight road along z=0 (horizontal strip).
+/** Default straight road along z = TERRAIN.roadZ (horizontal strip).
  *  Segment extends beyond map edges so the perpendicular distance
- *  equals |z| for all points within the map, matching the original
- *  behaviour where the road was infinite in X. */
+ *  equals |z - roadZ| for all points within the map, matching the
+ *  original behaviour where the road was infinite in X. */
 function defaultRoad(size: number): Road {
   const extended = size * 2; // well beyond map edges
+  const z = TERRAIN.roadZ;
   return {
-    points: [{ x: -extended, z: 0 }, { x: extended, z: 0 }],
+    points: [{ x: -extended, z }, { x: extended, z }],
     width: TERRAIN.roadCore * 2,
     surface: Surface.Road,
     shoulderWidth: TERRAIN.roadShoulder - TERRAIN.roadCore,
   };
 }
 
-/** Second road: south loop from the main road up to the mountain trail base.
- *  Connects (40,-60) on the south side to the mountain trail entry at (55,18),
- *  giving the map a circuit: main road → south branch → mountain approach. */
-function secondRoad(size: number): Road {
-  const mtn = mountainFor(size);
-  const trailBaseX = mtn.x - 15;
-  const trailBaseZ = mtn.z - mtn.sigma * 1.6;
-  return {
-    points: [{ x: 40, z: -60 }, { x: trailBaseX, z: trailBaseZ }],
-    width: 10,
-    surface: Surface.Dirt,
-    shoulderWidth: 4,
-  };
-}
-
-/** Dirt connector from main road (z=0) to the start of traverse 1.
- *  With the wider sigma the trail base is only ~18 m north of the road,
- *  so this is a short straight north-south approach track. */
+/** Dirt connector from the main road up to the start of traverse 1. */
 function mountainTrail(size: number): Road {
   const mtn = mountainFor(size);
   const baseX = mtn.x - 15; // aligns with traverse-1 start x
   const baseZ = mtn.z - mtn.sigma * 1.6; // trail base z
   return {
-    points: [{ x: baseX, z: 0 }, { x: baseX, z: baseZ }],
+    points: [{ x: baseX, z: TERRAIN.roadZ }, { x: baseX, z: baseZ }],
     width: 6,
     surface: Surface.Dirt,
     shoulderWidth: 2,
@@ -161,9 +145,9 @@ export interface TerrainGenContext {
   roads: Road[];
 }
 
-/** Base FBM noise with distance-based roughness. */
+/** Base FBM noise with distance-based roughness (measured from the main road). */
 export const baseNoiseLayer: HeightLayer = (ctx, x, z, currentH) => {
-  const az = Math.abs(z);
+  const az = Math.abs(z - TERRAIN.roadZ);
   const roughness = Math.min(1, Math.max(0, (az - TERRAIN.roadShoulder) / TERRAIN.roughnessDist));
   const baseAmp = TERRAIN.baseAmpMin + roughness * (TERRAIN.baseAmpMax - TERRAIN.baseAmpMin);
   let h = ctx.noise(x * TERRAIN.noiseFreq, z * TERRAIN.noiseFreq) * baseAmp;
@@ -171,9 +155,9 @@ export const baseNoiseLayer: HeightLayer = (ctx, x, z, currentH) => {
   return currentH + h;
 };
 
-/** Symmetrical mud valley hugging the road shoulder. */
+/** Symmetrical mud valley hugging the main road shoulder. */
 export const valleyLayer: HeightLayer = (ctx, x, z, currentH) => {
-  const az = Math.abs(z);
+  const az = Math.abs(z - TERRAIN.roadZ);
   if (az <= TERRAIN.roadShoulder) return currentH;
   const valley = Math.exp(-((az - TERRAIN.roadShoulder) ** 2) / (TERRAIN.valleySigma * TERRAIN.valleySigma)) * TERRAIN.valleyAmp;
   return currentH - valley;
@@ -425,7 +409,8 @@ export interface TerrainOptions {
   extraHeightLayers?: HeightLayer[];
   /** Additional surface rules (appended after defaults). */
   extraSurfaceRules?: SurfaceRule[];
-  /** Custom roads (defaults to single straight road along z=0). */
+  /** Custom roads (defaults to a single straight road along z = TERRAIN.roadZ
+   *  plus a short dirt connector to the mountain trail). */
   roads?: Road[];
 }
 
@@ -474,7 +459,7 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const mountain = mountainFor(size);
   const pad = petrolStationPadFor(size);
   const bogs = TERRAIN.bogs;
-  const roads = opts.roads ?? [defaultRoad(size), secondRoad(size), mountainTrail(size)];
+  const roads = opts.roads ?? [defaultRoad(size), mountainTrail(size)];
 
   const ctx: TerrainGenContext = {
     size,
@@ -610,7 +595,7 @@ export function asciiSurfaceMap(t: TerrainData, step = 2): string {
         if (minTrail < HILL_CLIMB_PATH_HALF_WIDTH) ch = '~';
 
         // Spawn zone (on road, west end).
-        if (x >= spawnXStart && x <= spawnXEnd && Math.abs(z) < 3) ch = 'S';
+        if (x >= spawnXStart && x <= spawnXEnd && Math.abs(z - TERRAIN.roadZ) < 3) ch = 'S';
 
         // Petrol station pad.
         const pad = t.petrolStation;

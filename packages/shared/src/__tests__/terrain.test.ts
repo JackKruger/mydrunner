@@ -11,6 +11,7 @@ import {
   petrolStationPadFor,
   type TerrainData,
 } from '../physics/terrain.js';
+import { TERRAIN } from '../constants.js';
 
 function makeTerrain(resolution: number, size: number, heights: number[]): TerrainData {
   return {
@@ -113,18 +114,21 @@ describe('pointToSegmentDist', () => {
 describe('generateTerrain road properties', () => {
   it('road core cells are exactly flat at height 0', () => {
     const t = generateTerrain({ size: 100, resolution: 64, seed: 42 });
-    // Default road runs along z=0; roadCore=8 → all cells with |z|<8 are flat
+    // Default road runs along z = TERRAIN.roadZ; roadCore=8 → all cells with
+    // |z - roadZ| < 8 are flat.
+    const rz = TERRAIN.roadZ;
     for (const x of [-30, -15, 0, 15, 30]) {
-      const h = sampleHeightBilinear(t, x, 0);
-      expect(h, `height at (${x}, 0)`).toBeCloseTo(0, 1);
+      const h = sampleHeightBilinear(t, x, rz);
+      expect(h, `height at (${x}, ${rz})`).toBeCloseTo(0, 1);
     }
   });
 
   it('terrain height increases significantly away from the road', () => {
     const t = generateTerrain({ size: 100, resolution: 64, seed: 42 });
-    // Far from road (z=45) should have meaningful elevation
-    const hRoad = Math.abs(sampleHeightBilinear(t, 0, 0));
-    const hFar = Math.abs(sampleHeightBilinear(t, 0, 45));
+    const rz = TERRAIN.roadZ;
+    // 45 m perpendicular from the road should have meaningful elevation.
+    const hRoad = Math.abs(sampleHeightBilinear(t, 0, rz));
+    const hFar = Math.abs(sampleHeightBilinear(t, 0, rz + 45));
     expect(hFar).toBeGreaterThan(hRoad + 0.5);
   });
 });

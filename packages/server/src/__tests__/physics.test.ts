@@ -2,7 +2,9 @@
 // Runs Rapier WASM in node - same code path as production server.
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { Physics, FIXED_DT, EMPTY_INPUT } from '@mydrunner/shared';
+import { Physics, FIXED_DT, EMPTY_INPUT, TERRAIN } from '@mydrunner/shared';
+
+const ROAD_Z = TERRAIN.roadZ;
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -15,8 +17,8 @@ function simSeconds(world: Physics.World, seconds: number): void {
 
 describe('vehicle physics', () => {
   it('falls onto the ground from a small height and settles', () => {
-    const world = new Physics.World({ generate: { size: 100, resolution: 32, seed: 1 } });
-    const v = world.spawnVehicle('p1', { position: { x: 0, y: 3, z: 0 } });
+    const world = new Physics.World({ generate: { size: 200, resolution: 64, seed: 1 } });
+    const v = world.spawnVehicle('p1', { position: { x: 0, y: 3, z: ROAD_Z } });
     simSeconds(world, 2);
     const s = v.getState();
     expect(s.position.y).toBeLessThan(2);
@@ -28,8 +30,8 @@ describe('vehicle physics', () => {
   });
 
   it('drives forward when throttle is applied', () => {
-    const world = new Physics.World({ generate: { size: 100, resolution: 32, seed: 1 } });
-    const v = world.spawnVehicle('p1', { position: { x: 0, y: 1.5, z: 0 } });
+    const world = new Physics.World({ generate: { size: 200, resolution: 64, seed: 1 } });
+    const v = world.spawnVehicle('p1', { position: { x: 0, y: 1.5, z: ROAD_Z } });
     simSeconds(world, 1); // settle on ground
 
     const before = v.getState().position.z;
@@ -43,15 +45,15 @@ describe('vehicle physics', () => {
   });
 
   it('responds to steering', () => {
-    const world = new Physics.World({ generate: { size: 100, resolution: 32, seed: 1 } });
-    const v = world.spawnVehicle('p1', { position: { x: 0, y: 1.5, z: 0 } });
+    const world = new Physics.World({ generate: { size: 200, resolution: 64, seed: 1 } });
+    const v = world.spawnVehicle('p1', { position: { x: 0, y: 1.5, z: ROAD_Z } });
     simSeconds(world, 1);
 
     v.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1, steer: 1 });
     simSeconds(world, 4);
     const s = v.getState();
     // Should have moved laterally as well as forward.
-    expect(Math.abs(s.position.x) + Math.abs(s.position.z)).toBeGreaterThan(2);
+    expect(Math.abs(s.position.x) + Math.abs(s.position.z - ROAD_Z)).toBeGreaterThan(2);
     // Yaw should be non-zero.
     const yaw = Math.atan2(
       2 * (s.rotation.w * s.rotation.y + s.rotation.x * s.rotation.z),
@@ -111,9 +113,9 @@ describe('vehicle physics', () => {
   });
 
   it('multiple vehicles do not penetrate each other', () => {
-    const world = new Physics.World({ generate: { size: 100, resolution: 32, seed: 1 } });
-    const a = world.spawnVehicle('a', { position: { x: -2, y: 1.5, z: 0 } });
-    const b = world.spawnVehicle('b', { position: { x: 2, y: 1.5, z: 0 } });
+    const world = new Physics.World({ generate: { size: 200, resolution: 64, seed: 1 } });
+    const a = world.spawnVehicle('a', { position: { x: -2, y: 1.5, z: ROAD_Z } });
+    const b = world.spawnVehicle('b', { position: { x: 2, y: 1.5, z: ROAD_Z } });
     simSeconds(world, 2);
     const sa = a.getState();
     const sb = b.getState();

@@ -81,7 +81,10 @@ export const ENGINE = {
   // SUV diesel would put down.
   peakTorqueNm: 480,
   finalDrive: 4.1,
-  gears: [-3.6, 0, 4.0, 2.3, 1.5, 1.05, 0.82],
+  // Reverse ratio softened from -3.6 → -2.6 so reverse pulls noticeably
+  // longer before redlining; top-gear ratio dropped from 0.82 → 0.72 to
+  // give a meaningful top-end bump on the road.
+  gears: [-2.6, 0, 4.0, 2.3, 1.5, 1.05, 0.72],
   reverseGear: 0,
   neutralGear: 1,
   firstGear: 2,
@@ -246,8 +249,9 @@ export const TERRAIN = {
   roughnessDist: 60,
 
   // Road
-  roadCore: 8,       // |z| < roadCore is exactly flat at y=0
-  roadShoulder: 14,   // roadCore <= |z| < roadShoulder eases into terrain
+  roadZ: -50,        // world-space z of the main straight road centreline
+  roadCore: 8,       // |z - roadZ| < roadCore is exactly flat at y=0
+  roadShoulder: 14,  // roadCore <= |z - roadZ| < roadShoulder eases into terrain
   valleyAmp: 1.4,
   valleySigma: 12,
 
@@ -263,9 +267,9 @@ export const TERRAIN = {
   // Radius of the flat lookout plateau at the summit (m).
   lookoutRadius: 8,
 
-  // Petrol station pad (must not overlap road at z=0 with core |z|<8)
+  // Petrol station pad (sits 28 m north of the main road on the mountain side)
   padCxRatio: -0.20,
-  padCz: 28,
+  padCz: -22,
   padHalfW: 14,
   padHalfD: 18,
   padWingDelta: 14,

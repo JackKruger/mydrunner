@@ -11,6 +11,7 @@ import {
   VEHICLE,
   AXLE,
   GRAVITY_Y,
+  TERRAIN,
   Net,
   Physics,
   type PlayerId,
@@ -108,7 +109,7 @@ export class Room {
     // which can push one through the heightfield and trip the off-map
     // ejector. 5m gives about 1m of clearance.
     const x = startX + col * 5;
-    const z = row === 0 ? -1.2 : 1.2;                 // two lanes
+    const z = TERRAIN.roadZ + (row === 0 ? -1.2 : 1.2); // two lanes on the main road
     // yaw = pi/2 rotates local +Z (vehicle forward) to world +X.
     const yaw = Math.PI / 2;
     const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);

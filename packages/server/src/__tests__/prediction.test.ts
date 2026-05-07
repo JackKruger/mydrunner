@@ -7,7 +7,9 @@
 // amount of reconciliation will hide it.
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { Physics, EMPTY_INPUT } from '@mydrunner/shared';
+import { Physics, EMPTY_INPUT, TERRAIN } from '@mydrunner/shared';
+
+const ROAD_Z = TERRAIN.roadZ;
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -15,7 +17,7 @@ beforeAll(async () => {
 
 function makeWorld(): { world: Physics.World; vehicle: Physics.VehicleLike } {
   const world = new Physics.World({ generate: { size: 100, resolution: 32, seed: 42 } });
-  const vehicle = world.spawnVehicle('p', { position: { x: 0, y: 1.5, z: 0 } });
+  const vehicle = world.spawnVehicle('p', { position: { x: 0, y: 1.5, z: ROAD_Z } });
   return { world, vehicle };
 }
 
@@ -60,13 +62,13 @@ describe('client prediction', () => {
     // 0.5m in 2 seconds is still conclusive evidence it drove.
     vehicle.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1 });
     for (let i = 0; i < 120; i++) world.step();
-    expect(Math.abs(vehicle.getState().position.z)).toBeGreaterThan(0.5);
+    expect(Math.abs(vehicle.getState().position.z - ROAD_Z)).toBeGreaterThan(0.5);
 
-    vehicle.resetTo({ position: { x: 0, y: 1.5, z: 0 }, yaw: 0 });
+    vehicle.resetTo({ position: { x: 0, y: 1.5, z: ROAD_Z }, yaw: 0 });
     const s = vehicle.getState();
     expect(s.position.x).toBeCloseTo(0, 5);
     expect(s.position.y).toBeCloseTo(1.5, 5);
-    expect(s.position.z).toBeCloseTo(0, 5);
+    expect(s.position.z).toBeCloseTo(ROAD_Z, 5);
     expect(Math.hypot(s.linVel.x, s.linVel.y, s.linVel.z)).toBeLessThan(0.01);
     world.dispose();
   });
