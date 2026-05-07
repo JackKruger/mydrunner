@@ -94,5 +94,24 @@ export function integrateWheelSpin(
   // soft surfaces like mud.
   const rolling = -rollingResistance * w.angVel;
   const net = driveTorque + brake + groundTorque + rolling;
-  w.angVel += (net / WHEEL.inertia) * dt;
+  const newAngVel = w.angVel + (net / WHEEL.inertia) * dt;
+  // Brake-induced wheel-sign flip protection: if a brake (and only a
+  // brake) is strong enough to reverse the wheel's direction in a
+  // single tick, the integrator without this clamp will overshoot to
+  // the opposite sign and then flip back next tick, producing a high-
+  // frequency oscillation. The friction-circle reads alternating
+  // signed slip, so chassis-side longitudinal force averages near zero
+  // and braking force is mostly self-cancelling. Real-world wheels
+  // can't reverse direction under brake alone — they lock at zero —
+  // so clamp the result to 0 whenever brake (without help from drive
+  // torque or ground reaction) is what flipped the sign.
+  if (
+    Math.abs(w.angVel) > 1e-3
+    && Math.sign(newAngVel) !== Math.sign(w.angVel)
+    && brakeTorque > Math.abs(driveTorque + groundTorque)
+  ) {
+    w.angVel = 0;
+    return;
+  }
+  w.angVel = newAngVel;
 }

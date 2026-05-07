@@ -42,7 +42,7 @@ export const VEHICLE = {
   // AWD torque split front:rear. 0.5/0.5 for symmetric 4x4 feel.
   engineForce: 3200,
   driveSplit: { front: 0.5, rear: 0.5 },
-  brakeForce: 2500,
+  brakeForce: 4500,
   maxSteer: 0.72,
   steerSpeed: 7,
   // Wheel friction multipliers - front slightly less grippy than rear so
@@ -80,10 +80,16 @@ export const ENGINE = {
   // grunt to overcome drag at the new taller top gear.
   peakTorqueNm: 560,
   finalDrive: 4.1,
-  // Reverse ratio softened to -1.8 (from -2.2) for a much faster reverse
-  // top end; top-gear ratio dropped to 0.60 (from 0.72) so the engine
-  // has more headroom in 5th and the truck cruises faster on road.
-  gears: [-1.8, 0, 4.0, 2.3, 1.5, 1.05, 0.60],
+  // Reverse ratio bumped back to -2.5 (from -1.8). The softer -1.8
+  // gave a high theoretical reverse top end but anaemic acceleration
+  // (~1.65 m/s² peak; only ~5 m/s after 10 s of full reverse from
+  // a stop). -2.5 gives ~39% more wheel torque so reverse pulls away
+  // from a stop briskly, while the redline-limited top end is still
+  // ~27 m/s — far higher than the player ever actually reaches in
+  // practice when reversing.
+  // Top-gear ratio kept at 0.60 (was 0.72) so the engine still has
+  // headroom in 5th and the truck cruises faster on road.
+  gears: [-2.5, 0, 4.0, 2.3, 1.5, 1.05, 0.60],
   reverseGear: 0,
   neutralGear: 1,
   firstGear: 2,
