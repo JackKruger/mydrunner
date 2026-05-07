@@ -26,6 +26,7 @@ import { initInput, sampleInput, clearKeys } from './input.js';
 import { initTouchInput, onTouchEdge } from './touchInput.js';
 import { NetClient } from './net.js';
 import { Scene } from './scene.js';
+import { Prediction } from './prediction.js';
 
 function getServerUrl(): string {
   const explicit = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -160,6 +161,7 @@ let lastRpm = 0;
 let lastGear = 0;
 let lastFrameTimeMs = performance.now();
 let terrainData: Physics.TerrainData | null = null;
+let prediction: Prediction | null = null;
 
 async function start(): Promise<void> {
   // Rapier WASM init - the shared physics package still depends on it
@@ -196,24 +198,33 @@ async function start(): Promise<void> {
       connected = true;
       chat.pushSystem('connected — press T to chat');
     },
-    onWelcome(id, _serverTimeMs, terrain, _spawn) {
+    onWelcome(id, _serverTimeMs, terrain, spawn) {
       localId = id;
       scene.setLocalPlayer(id, choice.carKind);
       scene.setTerrain(terrain.seed, terrain.size, terrain.resolution);
-      // Cache terrain data for the surface-name HUD lookup. The client
-      // does not run physics, but sampleSurface() reads the same heightmap
-      // that the server uses, so the surface label matches what the
-      // server is integrating against.
+      // Cache terrain data for the surface-name HUD lookup and for the
+      // local prediction sim's terrain.
       terrainData = Physics.generateTerrain({
         seed: terrain.seed,
         size: terrain.size,
         resolution: terrain.resolution,
       });
+      // Build the local prediction world. Same seed + spawn as server,
+      // so the local Rapier sim is integrating against an identical
+      // heightmap and starts at the same pose.
+      prediction?.dispose();
+      prediction = new Prediction(terrain.seed, terrain.size, terrain.resolution, spawn);
+      if (import.meta.env.DEV) {
+        (window as unknown as { __prediction: unknown }).__prediction = prediction;
+      }
     },
     onSnapshot(snap, recvAtMs) {
       lastSnapTick = snap.tick;
       scene.pushSnapshot(snap, recvAtMs);
       netDiagOnSnapshot(recvAtMs);
+      // Soft-correct the local sim toward the server's authoritative
+      // pose. Cheap (~0.2 ms), no replay, no queue.
+      if (prediction && localId) prediction.applyServerSnapshot(snap, localId);
       if (localId) {
         const me = snap.players.find((p) => p.id === localId);
         if (me) {
@@ -337,28 +348,28 @@ async function start(): Promise<void> {
       while (inputAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
         const input = sampleInput();
         net.sendInput(input);
+        // Step the local prediction sim with the same input. Local body
+        // responds within 1 tick (~16 ms) - the basis of the perceived
+        // responsiveness improvement.
+        if (prediction) prediction.step(input);
         lastInputSteer = input.steer;
         inputAcc -= FIXED_DT;
         steps += 1;
       }
-      // Hit the hard cap means a >200 ms tab stall - drop the leftover
-      // accumulator instead of spinning to catch up.
       if (steps >= HARD_STEP_CAP) inputAcc = 0;
-      // Hand the latest steer intent to the scene so it can drive the
-      // local truck's front-wheel mesh immediately, without waiting for
-      // the next snapshot. On frames between input ticks (render rate
-      // higher than 60 Hz) we reuse the cached value, which is still
-      // ≤16 ms old.
       scene.setLocalInputSteer(lastInputSteer);
+    }
+    // Push the predicted local state into the scene each frame so it
+    // overrides the snapshot interp/extrapolation for the local truck.
+    if (prediction) {
+      const ps = prediction.state();
+      scene.setLocalVehiclePose(ps.position, ps.rotation, ps.wheels, ps.axles);
+      updateAxleDebug(ps.axles[0], ps.axles[1]);
     }
 
     const renderStart = performance.now();
     scene.render(now);
     const renderMs = performance.now() - renderStart;
-
-    // Update debug axle overlay from the most recent snapshot interpolation.
-    const localAxles = scene.localAxles();
-    if (localAxles) updateAxleDebug(localAxles[0], localAxles[1]);
 
     const frameTotalMs = performance.now() - now;
     frameDiag.frames += 1;
