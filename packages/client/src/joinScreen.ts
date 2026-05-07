@@ -99,6 +99,20 @@ const CAR_OPTIONS: CarOption[] = [
     glyph: '[=#]',
     swatchBg: '#e8e3da',
   },
+  {
+    kind: 'ute',
+    name: 'Falcon Ute',
+    desc: 'Sedan-based ute. Low cabin, open tray, chrome sport bar.',
+    glyph: '[=_]',
+    swatchBg: '#f2c200',
+  },
+  {
+    kind: 'motorbike',
+    name: 'Dual-Sport',
+    desc: 'Lightweight motorbike. Thin frame, knobby tyres, no roof.',
+    glyph: 'oo',
+    swatchBg: '#2a8acb',
+  },
 ];
 
 export function showJoinScreen(initial: Partial<JoinChoice>): Promise<JoinChoice> {

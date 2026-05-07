@@ -74,8 +74,8 @@ const ROLL_SCALE = 1000;     // millirad
 const WHEEL_ANGVEL_SCALE = 100; // centirads/s; ±327 rad/s fits int16
 const TWO_PI = Math.PI * 2;
 
-const CAR_KIND_TO_IDX: Record<CarKind, number> = { patrol: 0, hilux: 1 };
-const CAR_KIND_FROM_IDX: CarKind[] = ['patrol', 'hilux'];
+const CAR_KIND_TO_IDX: Record<CarKind, number> = { patrol: 0, hilux: 1, ute: 2, motorbike: 3 };
+const CAR_KIND_FROM_IDX: CarKind[] = ['patrol', 'hilux', 'ute', 'motorbike'];
 
 function q(v: number, scale: number): number {
   return Math.round(v * scale) | 0;

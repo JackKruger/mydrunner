@@ -18,12 +18,13 @@ export type PlayerId = string;
  *  rendered for the player. Add a kind by extending the union here, the
  *  hello/snapshot wire, the server normaliser, and the client mesh
  *  registry in carMesh/. */
-export type CarKind = 'patrol' | 'hilux';
+export type CarKind = 'patrol' | 'hilux' | 'ute' | 'motorbike';
 
 export const DEFAULT_CAR_KIND: CarKind = 'patrol';
 
 export function normalizeCarKind(v: unknown): CarKind {
-  return v === 'hilux' ? 'hilux' : 'patrol';
+  if (v === 'hilux' || v === 'ute' || v === 'motorbike') return v;
+  return 'patrol';
 }
 
 export interface PlayerInput {

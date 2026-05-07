@@ -3,10 +3,14 @@
 // across kinds because physics is shared - only the visual changes.
 //
 // Kinds:
-//   patrol - Nissan-Patrol-GQ-style boxy 4x4: full SUV cabin, roof rack,
-//            snorkel, bullbar, rear spare wheel.
-//   hilux  - Toyota-Hilux-style ute: short forward cab + bed with a
-//            hardtop canopy, low-profile bullbar, no roof rack.
+//   patrol    - Nissan-Patrol-GQ-style boxy 4x4: full SUV cabin, roof rack,
+//               snorkel, bullbar, rear spare wheel.
+//   hilux     - Toyota-Hilux-style ute: short forward cab + bed with a
+//               hardtop canopy, low-profile bullbar, no roof rack.
+//   ute       - Falcon-style sedan-based ute: low cabin, flat open tray,
+//               sport bar over the tray, no canopy.
+//   motorbike - Dual-sport bike: thin frame, fuel tank, seat, handlebars,
+//               two visible wheels (overlapped per axle at chassis centre).
 
 import * as THREE from 'three';
 import { Physics, VEHICLE, type CarKind } from '@mydrunner/shared';
@@ -41,6 +45,24 @@ const HILUX_COLORS = [
   0x3a5a3a, // forest
   0xc1342f, // cherry red
   0x8aa0b5, // silver-blue
+];
+
+const UTE_COLORS = [
+  0xf2c200, // canary yellow (local default)
+  0x1a1a1a, // jet black
+  0xb91212, // racing red
+  0x2d4a8a, // royal blue
+  0x6f7a85, // gunmetal
+  0xd87b1c, // burnt amber
+];
+
+const MOTORBIKE_COLORS = [
+  0x2a8acb, // electric blue (local default)
+  0x111111, // satin black
+  0xd11a1a, // rally red
+  0x1a8c3a, // racing green
+  0xefa61c, // amber
+  0x9b2cd1, // ultraviolet
 ];
 
 interface Materials {
@@ -131,6 +153,13 @@ function buildAxles(group: THREE.Group, kind: CarKind): {
   const beamMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.85 });
   const diffMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.75, metalness: 0.2 });
 
+  // Motorbike visualises both per-axle wheels overlapped at the chassis
+  // centreline so the silhouette reads as 1 front + 1 rear wheel. The
+  // physics still drives 4 wheels at full trackHalf - the visual is just
+  // collapsed onto x=0. Side beams and diff pumpkins are skipped because
+  // a bike doesn't have a solid axle.
+  const isBike = kind === 'motorbike';
+
   for (let aIdx = 0; aIdx < 2; aIdx++) {
     const ag = aIdx === 0 ? geom.front : geom.rear;
     const axle = axles[aIdx]!;
@@ -141,30 +170,36 @@ function buildAxles(group: THREE.Group, kind: CarKind): {
     // each frame from the physics axle state.
     axle.position.set(0, ag.centerLocalY - ag.suspensionRestLength, ag.centerLocalZ);
 
-    // Beam: thin cylinder along chassis-X. Slightly shorter than full
-    // track so the wheel hubs visually overlap the beam ends.
-    const beamLen = ag.trackHalf * 2 - 0.18;
-    const beamRad = 0.07;
-    const beamGeo = new THREE.CylinderGeometry(beamRad, beamRad, beamLen, 12);
-    beamGeo.rotateZ(Math.PI / 2);
-    const beam = new THREE.Mesh(beamGeo, beamMat);
-    beam.castShadow = true;
-    axle.add(beam);
+    if (!isBike) {
+      // Beam: thin cylinder along chassis-X. Slightly shorter than full
+      // track so the wheel hubs visually overlap the beam ends.
+      const beamLen = ag.trackHalf * 2 - 0.18;
+      const beamRad = 0.07;
+      const beamGeo = new THREE.CylinderGeometry(beamRad, beamRad, beamLen, 12);
+      beamGeo.rotateZ(Math.PI / 2);
+      const beam = new THREE.Mesh(beamGeo, beamMat);
+      beam.castShadow = true;
+      axle.add(beam);
 
-    // Diff pumpkin: a stout box at the centre of the beam, slightly
-    // offset toward the chassis side that historically housed the diff
-    // (rear axle = forward of centre). Pure visual identifier.
-    const diffSize = aIdx === 0 ? { x: 0.34, y: 0.30, z: 0.34 } : { x: 0.36, y: 0.32, z: 0.36 };
-    const diffGeo = new THREE.BoxGeometry(diffSize.x, diffSize.y, diffSize.z);
-    const diff = new THREE.Mesh(diffGeo, diffMat);
-    diff.position.set(0, 0, aIdx === 0 ? 0 : 0.04);
-    diff.castShadow = true;
-    axle.add(diff);
+      // Diff pumpkin: a stout box at the centre of the beam, slightly
+      // offset toward the chassis side that historically housed the diff
+      // (rear axle = forward of centre). Pure visual identifier.
+      const diffSize = aIdx === 0 ? { x: 0.34, y: 0.30, z: 0.34 } : { x: 0.36, y: 0.32, z: 0.36 };
+      const diffGeo = new THREE.BoxGeometry(diffSize.x, diffSize.y, diffSize.z);
+      const diff = new THREE.Mesh(diffGeo, diffMat);
+      diff.position.set(0, 0, aIdx === 0 ? 0 : 0.04);
+      diff.castShadow = true;
+      axle.add(diff);
+    }
 
-    // Two wheels at the beam ends.
+    // Two wheels at the beam ends (overlapped at centre for the bike).
+    const wheelXOffset = isBike ? 0 : ag.trackHalf;
+    // Bike tyres are narrower than truck tyres - keeps the silhouette
+    // bike-like even though the underlying physics width is shared.
+    const wheelW = isBike ? geom.wheelWidth * 0.45 : geom.wheelWidth;
     for (let side = 0; side < 2; side++) {
-      const wheel = buildSingleWheel(geom.wheelRadius, geom.wheelWidth);
-      wheel.position.set(side === 0 ? -ag.trackHalf : +ag.trackHalf, 0, 0);
+      const wheel = buildSingleWheel(geom.wheelRadius, wheelW);
+      wheel.position.set(side === 0 ? -wheelXOffset : +wheelXOffset, 0, 0);
       axle.add(wheel);
       wheels.push(wheel);
     }
@@ -425,17 +460,229 @@ function buildHiluxBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExten
   }
 }
 
+function paletteFor(kind: CarKind): readonly number[] {
+  switch (kind) {
+    case 'hilux': return HILUX_COLORS;
+    case 'ute': return UTE_COLORS;
+    case 'motorbike': return MOTORBIKE_COLORS;
+    default: return PATROL_COLORS;
+  }
+}
+
+function buildUteBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExtents, mats: Materials): void {
+  // Sedan-based ute: low, sleek cabin in the front 45% of the body, then
+  // a flat open tray with side walls and a sport bar. No canopy.
+  const cabinLen = ext.z * 0.85;
+  const cabinHeight = ext.y * 1.35;     // lower than Hilux (1.55) - sedan-like
+  const cabinWide = ext.x * 1.84;
+  const cabinCenterZ = ext.z * 0.5;
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(cabinWide, cabinHeight, cabinLen), mats.body);
+  cabin.position.set(0, ext.y + cabinHeight / 2, cabinCenterZ);
+  cabin.castShadow = true;
+  group.add(cabin);
+
+  // Glass: side windows + raked windshield + sloped rear cab glass.
+  const winThickness = 0.025;
+  const winH = cabinHeight * 0.55;
+  const winYCenter = ext.y + cabinHeight / 2 + cabinHeight * 0.08;
+  for (const sign of [-1, 1]) {
+    const win = new THREE.Mesh(new THREE.BoxGeometry(winThickness, winH, cabinLen * 0.8), mats.glass);
+    win.position.set(sign * (cabinWide / 2 + winThickness / 2), winYCenter, cabinCenterZ);
+    group.add(win);
+  }
+  const windshield = new THREE.Mesh(new THREE.BoxGeometry(cabinWide * 0.94, winH, winThickness), mats.glass);
+  windshield.position.set(0, winYCenter, cabinCenterZ + cabinLen / 2 + winThickness / 2);
+  windshield.rotation.x = -0.22;        // sleeker rake than the Hilux
+  group.add(windshield);
+  const rearCabGlass = new THREE.Mesh(new THREE.BoxGeometry(cabinWide * 0.88, winH * 0.85, winThickness), mats.glass);
+  rearCabGlass.position.set(0, winYCenter, cabinCenterZ - cabinLen / 2 - winThickness / 2);
+  rearCabGlass.rotation.x = 0.18;
+  group.add(rearCabGlass);
+
+  // Open tray: low side walls along the rear half, no canopy. Tailgate
+  // sits at the back edge of the body. Floor is the lower body box.
+  const trayStartZ = cabinCenterZ - cabinLen / 2;
+  const trayEndZ = -ext.z;
+  const trayLen = trayStartZ - trayEndZ;
+  const trayCenterZ = (trayStartZ + trayEndZ) / 2;
+  const wallH = ext.y * 0.45;
+  const wallY = ext.y + wallH / 2;
+  const trayFront = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.92, wallH, 0.06), mats.body);
+  trayFront.position.set(0, wallY, trayStartZ - 0.03);
+  group.add(trayFront);
+  const tailgate = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.92, wallH * 0.95, 0.06), mats.body);
+  tailgate.position.set(0, wallY - wallH * 0.025, trayEndZ + 0.03);
+  group.add(tailgate);
+  for (const sign of [-1, 1]) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(0.06, wallH, trayLen), mats.body);
+    wall.position.set(sign * ext.x * 0.96, wallY, trayCenterZ);
+    group.add(wall);
+  }
+
+  // Sport bar (chrome roll-bar over the front of the tray) - the
+  // signature ute styling cue.
+  const barRadius = 0.05;
+  const barTopY = ext.y + cabinHeight * 0.85;
+  const barTopWidth = ext.x * 1.55;
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(barRadius, barRadius, barTopWidth, 10), mats.chrome);
+  top.rotation.z = Math.PI / 2;
+  top.position.set(0, barTopY, trayStartZ - 0.05);
+  top.castShadow = true;
+  group.add(top);
+  for (const sign of [-1, 1]) {
+    const post = new THREE.Mesh(
+      new THREE.CylinderGeometry(barRadius * 0.95, barRadius * 0.95, barTopY - (ext.y + wallH), 10),
+      mats.chrome,
+    );
+    post.position.set(sign * (barTopWidth / 2), (barTopY + ext.y + wallH) / 2, trayStartZ - 0.05);
+    post.castShadow = true;
+    group.add(post);
+  }
+
+  // Low-profile nudge bar across the front (no upper loop, sits under
+  // the bonnet line - sportier than the Patrol's bullbar).
+  const nudgeLen = ext.x * 1.65;
+  const nudge = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, nudgeLen, 10), mats.chrome);
+  nudge.rotation.z = Math.PI / 2;
+  nudge.position.set(0, -ext.y * 0.2, ext.z + 0.14);
+  nudge.castShadow = true;
+  group.add(nudge);
+
+  // Slim rectangular headlights flush with the front fascia.
+  const headlightMat = new THREE.MeshStandardMaterial({ color: 0xfff4d2, emissive: 0xffd070, emissiveIntensity: 0.55 });
+  for (const sign of [-1, 1]) {
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.10, 0.04), headlightMat);
+    hl.position.set(sign * ext.x * 0.5, ext.y * 0.05, ext.z + 0.025);
+    group.add(hl);
+  }
+  // Wide grille slot.
+  const grille = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.0, 0.14, 0.04), mats.trim);
+  grille.position.set(0, -ext.y * 0.12, ext.z + 0.025);
+  group.add(grille);
+
+  // Horizontal tail lights inset on the tailgate.
+  const tailMat = new THREE.MeshStandardMaterial({ color: 0xa31818, emissive: 0xa31818, emissiveIntensity: 0.4 });
+  for (const sign of [-1, 1]) {
+    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.14, 0.04), tailMat);
+    tl.position.set(sign * ext.x * 0.62, wallY * 0.95, trayEndZ - 0.04);
+    group.add(tl);
+  }
+}
+
+function buildMotorbikeBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExtents, mats: Materials): void {
+  // Bike silhouette built along the chassis centreline. The wide chassis
+  // collider is shared (physics is identical across kinds), so the visual
+  // intentionally does NOT draw the full chassis box - we draw only the
+  // bike frame, tank, seat, and handlebars at the centreline. The two
+  // visible wheels are placed by buildAxles with x=0 overlap.
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.6, metalness: 0.4 });
+
+  // Lower frame backbone: a thin rail from front to rear at chassis
+  // bottom edge.
+  const backbone = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.10, ext.z * 1.7), frameMat);
+  backbone.position.set(0, -ext.y + 0.08, 0);
+  backbone.castShadow = true;
+  group.add(backbone);
+
+  // Fuel tank: teardrop-ish (use a stretched box) above the front-mid
+  // section in body colour.
+  const tankLen = ext.z * 0.55;
+  const tankHeight = ext.y * 0.65;
+  const tankWidth = 0.30;
+  const tank = new THREE.Mesh(new THREE.BoxGeometry(tankWidth, tankHeight, tankLen), mats.body);
+  tank.position.set(0, ext.y * 0.25, ext.z * 0.15);
+  tank.castShadow = true;
+  group.add(tank);
+
+  // Seat: a longer dark slab behind the tank.
+  const seatLen = ext.z * 0.55;
+  const seatHeight = 0.12;
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.32, seatHeight, seatLen), mats.trim);
+  seat.position.set(0, ext.y * 0.55, -ext.z * 0.18);
+  seat.castShadow = true;
+  group.add(seat);
+
+  // Tail / rear fender + tail light cluster at the very back.
+  const tailFender = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.10, 0.40), mats.body);
+  tailFender.position.set(0, ext.y * 0.55, -ext.z * 0.78);
+  group.add(tailFender);
+  const tailMat = new THREE.MeshStandardMaterial({ color: 0xa31818, emissive: 0xa31818, emissiveIntensity: 0.5 });
+  const tailLight = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 0.03), tailMat);
+  tailLight.position.set(0, ext.y * 0.55, -ext.z * 0.96);
+  group.add(tailLight);
+
+  // Front fork: two thin posts running from the front-axle area up to the
+  // headstock above the tank. Slight rake.
+  const forkRad = 0.025;
+  const forkLen = ext.y * 1.6;
+  for (const sign of [-1, 1]) {
+    const fork = new THREE.Mesh(new THREE.CylinderGeometry(forkRad, forkRad, forkLen, 10), frameMat);
+    fork.position.set(sign * 0.10, ext.y * 0.15, ext.z * 0.85);
+    fork.rotation.x = -0.18;
+    fork.castShadow = true;
+    group.add(fork);
+  }
+
+  // Headstock + headlight cowl at the top of the forks.
+  const headstockY = ext.y * 0.95;
+  const headstockZ = ext.z * 0.97;
+  const cowl = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.22, 0.18), mats.body);
+  cowl.position.set(0, headstockY, headstockZ);
+  cowl.castShadow = true;
+  group.add(cowl);
+  const headlightMat = new THREE.MeshStandardMaterial({ color: 0xfff4d2, emissive: 0xffd070, emissiveIntensity: 0.7 });
+  const headlight = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.05, 14), headlightMat);
+  headlight.rotation.x = Math.PI / 2;
+  headlight.position.set(0, headstockY, headstockZ + 0.10);
+  group.add(headlight);
+
+  // Handlebars: a wide horizontal bar across the headstock, with two
+  // grip stubs at the ends.
+  const barLen = 0.70;
+  const bars = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, barLen, 10), frameMat);
+  bars.rotation.z = Math.PI / 2;
+  bars.position.set(0, headstockY + 0.14, headstockZ - 0.04);
+  group.add(bars);
+  const gripMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.95 });
+  for (const sign of [-1, 1]) {
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.10, 10), gripMat);
+    grip.rotation.z = Math.PI / 2;
+    grip.position.set(sign * (barLen / 2 - 0.05), headstockY + 0.14, headstockZ - 0.04);
+    group.add(grip);
+  }
+
+  // Engine block: a chunky dark box slung beneath the tank between the
+  // wheels.
+  const engine = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.36, 0.50), mats.black);
+  engine.position.set(0, -ext.y * 0.15, 0);
+  engine.castShadow = true;
+  group.add(engine);
+
+  // Exhaust: a short chrome cylinder along the right side, sloping up
+  // toward the rear.
+  const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.7, 12), mats.chrome);
+  exhaust.rotation.x = Math.PI / 2;
+  exhaust.rotation.y = -0.05;
+  exhaust.position.set(0.18, -ext.y * 0.05, -ext.z * 0.45);
+  group.add(exhaust);
+}
+
 export function buildCarMesh(kind: CarKind, isLocal: boolean, idHash: number): CarMesh {
   const group = new THREE.Group();
   const ext = VEHICLE.chassisHalfExtents;
-  const palette = kind === 'hilux' ? HILUX_COLORS : PATROL_COLORS;
-  const mats = makeMaterials(pickColor(palette, isLocal, idHash));
+  const mats = makeMaterials(pickColor(paletteFor(kind), isLocal, idHash));
 
-  buildLowerBodyAndFlares(group, ext, mats, kind);
-  if (kind === 'hilux') {
-    buildHiluxBody(group, ext, mats);
+  if (kind === 'motorbike') {
+    buildMotorbikeBody(group, ext, mats);
   } else {
-    buildPatrolBody(group, ext, mats);
+    buildLowerBodyAndFlares(group, ext, mats, kind);
+    if (kind === 'hilux') {
+      buildHiluxBody(group, ext, mats);
+    } else if (kind === 'ute') {
+      buildUteBody(group, ext, mats);
+    } else {
+      buildPatrolBody(group, ext, mats);
+    }
   }
   const { axles, wheels } = buildAxles(group, kind);
   return { group, wheels, axles };

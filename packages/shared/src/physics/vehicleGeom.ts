@@ -67,9 +67,34 @@ const hiluxGeom: VehicleGeom = {
   },
 };
 
+// Ute (Falcon-style flat-tray): same wheelbase as Patrol but slightly
+// stiffer rear axle (no rear suspension softening for cargo, since the
+// flat tray sits low and is treated as part of the chassis).
+const uteGeom: VehicleGeom = {
+  chassisHalfExtents: { ...VEHICLE.chassisHalfExtents },
+  wheelRadius: VEHICLE.wheelRadius,
+  wheelWidth: VEHICLE.wheelWidth,
+  front: { ...AXLE.front },
+  rear: { ...AXLE.rear },
+};
+
+// Motorbike: physics-identical to Patrol (chassis extents, trackHalf,
+// wheel radius are shared so the simulation stays fair). The visual
+// layer in carMesh.ts overrides wheel placement to draw a 2-wheeled
+// silhouette - the underlying 4-wheel solid-axle solver is unchanged.
+const motorbikeGeom: VehicleGeom = {
+  chassisHalfExtents: { ...VEHICLE.chassisHalfExtents },
+  wheelRadius: VEHICLE.wheelRadius,
+  wheelWidth: VEHICLE.wheelWidth,
+  front: { ...AXLE.front },
+  rear: { ...AXLE.rear },
+};
+
 export const VEHICLE_GEOM: Record<CarKind, VehicleGeom> = {
   patrol: patrolGeom,
   hilux: hiluxGeom,
+  ute: uteGeom,
+  motorbike: motorbikeGeom,
 };
 
 export function geomFor(kind: CarKind): VehicleGeom {
@@ -94,6 +119,8 @@ const buildRest = (g: VehicleGeom): WheelRest =>
 const REST_WHEEL_POSITIONS: Record<CarKind, WheelRest> = {
   patrol: buildRest(patrolGeom),
   hilux: buildRest(hiluxGeom),
+  ute: buildRest(uteGeom),
+  motorbike: buildRest(motorbikeGeom),
 };
 
 /** Rest-pose wheel positions in chassis-local space, derived from the
