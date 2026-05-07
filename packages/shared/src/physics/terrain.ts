@@ -94,6 +94,13 @@ export interface Road {
   surface: Surface;
   /** Shoulder width on each side where terrain eases in. */
   shoulderWidth: number;
+  /** When true, the road core blends BACK toward natural terrain in
+   *  zones where natural h has climbed significantly above sea level
+   *  (e.g. the dirt approaches that meet the mountain base). Without
+   *  this, the road forces h=0 inside its core and cuts a vertical
+   *  cliff where it crosses elevated terrain. Defaults to false so the
+   *  main asphalt road stays exactly flat. */
+  gradeIntoTerrain?: boolean;
 }
 
 /** Default straight road along z=0 (horizontal strip).
@@ -122,6 +129,7 @@ function secondRoad(size: number): Road {
     width: 10,
     surface: Surface.Dirt,
     shoulderWidth: 4,
+    gradeIntoTerrain: true,
   };
 }
 
@@ -137,6 +145,7 @@ function mountainTrail(size: number): Road {
     width: 6,
     surface: Surface.Dirt,
     shoulderWidth: 2,
+    gradeIntoTerrain: true,
   };
 }
 
@@ -296,7 +305,22 @@ export const roadLayer: HeightLayer = (ctx, x, z, currentH) => {
       const a = road.points[i]!;
       const b = road.points[i + 1]!;
       const dist = pointToSegmentDist(x, z, a.x, a.z, b.x, b.z);
-      if (dist <= halfCore) return 0; // In this road's core — flat
+      if (dist <= halfCore) {
+        // Road core. By default forces flat at h=0. Roads marked
+        // gradeIntoTerrain (the dirt approaches that meet the mountain
+        // base) blend BACK toward natural terrain when h has climbed
+        // significantly above sea level, so the road grades up smoothly
+        // instead of cutting a vertical cliff into the mountain. The
+        // main asphalt road keeps the strict-flat behaviour because it
+        // never approaches elevated terrain.
+        if (!road.gradeIntoTerrain) return 0;
+        const coreCap = 8.0;
+        const coreRamp = 8.0;
+        if (currentH <= coreCap) return 0;
+        const t = Math.min(1, (currentH - coreCap) / coreRamp);
+        const ease = t * t * (3 - 2 * t);
+        return currentH * ease;
+      }
       if (dist < halfShoulder) {
         const t = (dist - halfCore) / (halfShoulder - halfCore);
         const ease = t * t * (3 - 2 * t);
