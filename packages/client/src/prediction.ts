@@ -113,22 +113,18 @@ export class Prediction {
     this.vehicle = this.world.spawnVehicle('local', this.spawn);
   }
 
-  /** Call once per render frame (before any physics steps) to capture
-   *  the current body state as the "previous" pose. This is needed for
-   *  smooth alpha-based interpolation in state(). Without calling this
-   *  every frame, `prev` goes stale on displays whose refresh rate isn't
-   *  an exact multiple of the physics tick rate (e.g. 144Hz vs 60Hz),
-   *  causing the car to stutter as the lerp endpoints don't advance
-   *  smoothly between physics steps. */
-  beginFrame(): void {
-    this.capturePrev();
-  }
-
   /** Push a sampled input. Caller has already sent it to the server.
    *  Steps the local sim once at FIXED_DT regardless of frame timing -
    *  prediction is on the input axis, not the frame axis. */
   pushAndStep(input: PlayerInput): void {
     if (input.seq <= this.lastSteppedSeq) return;
+
+    // Capture the state BEFORE the step as 'prev'. Combined with the
+    // post-step body state and the fractional accumulator (alpha), this
+    // lets state(alpha) interpolate smoothly between physics ticks
+    // even when the render rate is higher than 60Hz.
+    this.capturePrev();
+
     this.queue.push({ input });
     if ((input.buttons & 1) !== 0) {
       this.vehicle.resetTo(this.spawn);

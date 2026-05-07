@@ -105,7 +105,7 @@ float vnoise(vec2 p) {
 float fbm(vec2 p) {
   float v = 0.0;
   float a = 0.5;
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 3; i++) {
     v += a * vnoise(p);
     p *= 2.07;
     a *= 0.5;
@@ -125,28 +125,28 @@ vec3 surfaceColor(int s, vec2 p) {
   }
   if (s == 1) {
     // Dirt: tan with brown variation.
-    float n = fbm(p * 0.6);
+    float n = vnoise(p * 0.6);
     float g = vnoise(p * 7.0);
     vec3 base = mix(vec3(0.42, 0.30, 0.16), vec3(0.66, 0.52, 0.32), n);
     return base * (0.85 + g * 0.30);
   }
   if (s == 2) {
     // Mud: dark wet brown with broad streaks.
-    float n = fbm(p * 0.45);
-    float wet = fbm(p * 1.7 + 13.0);
+    float n = vnoise(p * 0.45);
+    float wet = vnoise(p * 1.7 + 13.0);
     vec3 base = mix(vec3(0.18, 0.12, 0.07), vec3(0.36, 0.24, 0.14), n);
     return base * (0.85 + wet * 0.40);
   }
   if (s == 3) {
     // Deep mud: nearly black with slick variation.
-    float n = fbm(p * 0.5 + 7.0);
+    float n = vnoise(p * 0.5 + 7.0);
     return mix(vec3(0.05, 0.03, 0.02), vec3(0.18, 0.11, 0.06), n);
   }
   if (s == 4) {
     // Grass: green with darker patches and the occasional yellow blade.
-    float macro = fbm(p * 0.5);
+    float macro = vnoise(p * 0.5);
     float blade = vnoise(p * 14.0);
-    float yellow = step(0.80, fbm(p * 0.25 + 3.0));
+    float yellow = step(0.80, vnoise(p * 0.25 + 3.0));
     vec3 base = mix(vec3(0.16, 0.30, 0.11), vec3(0.32, 0.50, 0.20), macro);
     base = mix(base, vec3(0.55, 0.50, 0.20), yellow * 0.35);
     return base * (0.78 + blade * 0.34);
@@ -154,7 +154,7 @@ vec3 surfaceColor(int s, vec2 p) {
   if (s == 5) {
     // Gravel: cool gray-brown with high-contrast pebble noise.
     float pebble = vnoise(p * 9.0);
-    float macro = fbm(p * 0.7);
+    float macro = vnoise(p * 0.7);
     vec3 base = mix(vec3(0.34, 0.32, 0.30), vec3(0.58, 0.52, 0.48), macro);
     return base * (0.50 + pebble * 0.95);
   }
@@ -163,7 +163,7 @@ vec3 surfaceColor(int s, vec2 p) {
     // patch variation and a thin "expansion joint" line every few
     // metres so the eye reads it as paving rather than flat colour.
     float grain = vnoise(p * 18.0);
-    float patches = fbm(p * 0.5);
+    float patches = vnoise(p * 0.5);
     vec3 base = mix(vec3(0.22, 0.22, 0.22), vec3(0.32, 0.31, 0.30), patches);
     base *= (0.88 + grain * 0.18);
     float jointX = step(0.92, abs(fract(p.x / 4.0) - 0.5) * 2.0);
@@ -192,17 +192,16 @@ void main() {
 
   vec3 albedo = surfaceColor(sid, wp);
 
-  // Soften the boundary further with a fine secondary jitter that picks
-  // the neighbour cell occasionally. This is the "blend" - a fragment
-  // near a cell edge has a chance to render as the neighbour, which
-  // dithers the transition. Cheap: a single extra texture sample.
+  // Soften the boundary further with a fine secondary jitter.
   float blend = vnoise(wp * 1.3);
-  if (blend > 0.62) {
-    vec2 lookup2 = wp + vec2(jx, jz) * 7.0; // larger jitter for variety
+  if (blend > 0.65) {
+    vec2 lookup2 = wp + vec2(jx, jz) * 7.0;
     vec2 uv2 = lookup2 / uTerrainSize + 0.5;
     int sid2 = int(texture2D(uSurfaceMap, uv2).r * 255.0 + 0.5);
-    vec3 a2 = surfaceColor(sid2, wp);
-    albedo = mix(albedo, a2, smoothstep(0.62, 0.78, blend));
+    if (sid != sid2) {
+      vec3 a2 = surfaceColor(sid2, wp);
+      albedo = mix(albedo, a2, smoothstep(0.65, 0.8, blend));
+    }
   }
 
   // Lambert + ambient.

@@ -67,12 +67,25 @@ export class Room {
 
   start(): void {
     if (this.loopHandle) return;
-    const intervalMs = 1000 / TICK_RATE;
-    this.loopHandle = setInterval(() => this.tickOnce(), intervalMs);
+    this.runLoop();
+  }
+
+  private runLoop(): void {
+    const startMs = performance.now();
+    this.tickOnce();
+    const endMs = performance.now();
+    const workMs = endMs - startMs;
+    const waitMs = Math.max(0, TARGET_TICK_MS - workMs);
+
+    // Using setTimeout(..., wait) is generally more stable than setInterval
+    // because it ensures at least 'wait' ms between the end of one tick
+    // and the start of the next, preventing ticks from "stacking" if
+    // one takes too long.
+    this.loopHandle = setTimeout(() => this.runLoop(), waitMs) as unknown as NodeJS.Timeout;
   }
 
   stop(): void {
-    if (this.loopHandle) clearInterval(this.loopHandle);
+    if (this.loopHandle) clearTimeout(this.loopHandle);
     this.loopHandle = null;
   }
 
