@@ -420,11 +420,12 @@ export function generateObstacles(terrain: TerrainData): Obstacle[] {
   });
 
   // Trailhead markers — two flagpoles flanking the mountain-trail entrance
-  // so it's findable from the main road. The entrance sits at
-  // (mountain.x - 15, roadZ) where the dirt connector meets the road; we
-  // offset the poles ~5 m to either side of the 6 m-wide trail core.
+  // so it's findable from the main road. Placed ~18 m north of the road
+  // (well clear of the asphalt + shoulder) and ~5 m to either side of the
+  // 6 m-wide trail core, so they're visible at distance without sitting
+  // in the road or in the trail itself.
   const trailX = terrain.mountain.x - 15;
-  const trailZ = TERRAIN.roadZ;
+  const trailZ = TERRAIN.roadZ + 18;
   for (const dx of [-5, 5]) {
     const px = trailX + dx;
     const pz = trailZ;
