@@ -308,6 +308,10 @@ async function start(): Promise<void> {
   // would otherwise see a halved input rate and the truck would feel
   // sluggish on weak hardware).
   let inputAcc = 0;
+  // Last sampled steer (-1..1) cached across render frames. Drives
+  // the local truck's front-wheel mesh visual override; updated every
+  // time the input loop samples and consumes a new PlayerInput.
+  let lastInputSteer = 0;
   const HARD_STEP_CAP = 12; // catastrophic-stall safety net
 
   let fps = 0;
@@ -333,12 +337,19 @@ async function start(): Promise<void> {
       while (inputAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
         const input = sampleInput();
         net.sendInput(input);
+        lastInputSteer = input.steer;
         inputAcc -= FIXED_DT;
         steps += 1;
       }
       // Hit the hard cap means a >200 ms tab stall - drop the leftover
       // accumulator instead of spinning to catch up.
       if (steps >= HARD_STEP_CAP) inputAcc = 0;
+      // Hand the latest steer intent to the scene so it can drive the
+      // local truck's front-wheel mesh immediately, without waiting for
+      // the next snapshot. On frames between input ticks (render rate
+      // higher than 60 Hz) we reuse the cached value, which is still
+      // ≤16 ms old.
+      scene.setLocalInputSteer(lastInputSteer);
     }
 
     const renderStart = performance.now();

@@ -78,6 +78,15 @@ export class Scene {
     { rideY: 0, rollAngle: 0 },
   ];
   private _localHasState = false;
+  // Visual override for the local truck's front-wheel steer angle. The
+  // server smooths input.steer toward maxSteer at TUNING.steerSpeed
+  // (~327 ms full-lock); rendering only off the snapshot stream meant
+  // the wheel mesh sat still for ~100-400 ms after a key press,
+  // which read as "is my input being registered?". Driven directly
+  // from input each render frame, the wheel snaps with the player and
+  // the chassis follow-through (server steer ramp + tire bite) reads
+  // as normal driving inertia rather than network lag.
+  private _localInputSteer = 0;
   private _present = new Set<PlayerId>();
 
   constructor(canvasParent: HTMLElement) {
@@ -293,6 +302,12 @@ export class Scene {
   localAxles(): [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] | null {
     return this._localHasState ? this._localAxlesLast : null;
   }
+  /** Push the latest sampled input steer (range -1..1) so the local
+   *  truck's front wheels can snap to the player's intent visually
+   *  even though the chassis pose still comes from snapshots. */
+  setLocalInputSteer(steer: number): void {
+    this._localInputSteer = Math.max(-1, Math.min(1, steer)) * VEHICLE.maxSteer;
+  }
 
   /** Pose the two axle groups from per-axle (rideY, rollAngle) state.
    *
@@ -394,7 +409,12 @@ export class Scene {
           const wheel = vis.wheels[i]!;
           const wa = pa.vehicle.wheels[i];
           const wb = pb.vehicle.wheels[i];
-          const steer = wa ? wa.steer : 0;
+          // Local truck's front wheels override snapshot steer with the
+          // most recent input so the player gets immediate visual
+          // feedback. Rear wheels and remote vehicles still come from
+          // the snapshot.
+          const useInputSteer = isLocal && i < 2;
+          const steer = useInputSteer ? this._localInputSteer : (wa ? wa.steer : 0);
           const spin = wa && wb ? wa.spin + (wb.spin - wa.spin) * t : 0;
           wheel.rotation.set(spin, -steer, 0);
         }
