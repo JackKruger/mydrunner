@@ -87,7 +87,12 @@ export const ENGINE = {
   reverseGear: 0,
   neutralGear: 1,
   firstGear: 2,
-  shiftUpRpm: 4600,
+  // Upshift near peak-torque RPM (3500) instead of close to redline (4600).
+  // The heavy chassis can't actually reach the chassis-speed equivalent of
+  // 4600 RPM in 2nd gear, so the box was getting stuck there. Shifting at
+  // peak-torque keeps the engine in its sweet spot and lets the box walk
+  // up through 3rd/4th/5th on the road.
+  shiftUpRpm: 3500,
   shiftDownRpm: 1700,
   engineBrakeCoef: 0.25,
   rpmLimiterFalloff: 800,
