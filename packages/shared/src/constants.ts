@@ -11,7 +11,14 @@ export const GRAVITY_Y = -9.81;
 // Vehicle (tunable - feel comes from here). Tuned for a 4x4 SUV / off-road
 // car: AWD, smaller than a truck, peppy enough to be fun on dirt.
 export const VEHICLE = {
-  mass: 2500, //1500
+  // Reverted 2500 → 1500. Mass had been bumped to 2500 without
+  // rebalancing the rest of the tuning: the suspension damping
+  // comment block below derives c=11000 from m=1500 (target ζ≈0.70),
+  // so at m=2500 the truck was running ζ≈0.53 (under-damped, wallowy).
+  // Brake force, anti-roll, and engine torque headroom were all
+  // sized for the lighter mass too. With m=1500 every other tuned
+  // value lines up with the comments that explain it.
+  mass: 1500,
   chassisHalfExtents: { x: 0.85, y: 0.45, z: 1.9 }, // ~1.7m wide, 3.8m long
   // Rounded edge radius on the chassis collider so bumpers slide off obstacles
   // instead of catching square.  Inner box shrinks by this amount so total

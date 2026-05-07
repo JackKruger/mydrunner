@@ -57,6 +57,10 @@ describe('client prediction', () => {
 
   it('reset returns vehicle to spawn pose with zero velocity', () => {
     const { world, vehicle } = makeWorld();
+    // Settle on the ground first — without this the truck is still
+    // bouncing on its suspension when throttle is applied, and the
+    // amount it covers in the next 2 s depends on bounce phase.
+    for (let i = 0; i < 60; i++) world.step();
     // Drive forward a bit. With the engine + gearbox model the car needs a
     // moment to shift out of neutral into 1st before it accelerates -
     // 0.5m in 2 seconds is still conclusive evidence it drove.
