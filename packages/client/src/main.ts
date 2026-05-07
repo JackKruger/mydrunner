@@ -410,6 +410,12 @@ async function start(): Promise<void> {
       lastFpsUpdate = now;
     }
 
+    // Drain any in-flight reconcile replay from previous snapshots first.
+    // Multi-frame replay spreads the ~9 ms cost of replaying ~18 queued
+    // inputs across 3 frames; this call processes the next chunk
+    // (capped by the budget below).
+    if (prediction) prediction.tickReplay(3.5);
+
     // Process deferred reconcile before stepping inputs. Doing this at the
     // top of the frame (inside rAF) keeps the heavy replay work inside our
     // frame budget instead of interrupting the render mid-frame via a

@@ -24,6 +24,14 @@ interface QueuedInput {
   input: PlayerInput;
 }
 
+/** Wall-clock budget for the inline first chunk of replay inside reconcile.
+ *  At ~0.5 ms per replay tick on the local prediction sim this lets short
+ *  replays (queueLen ≤ 6) complete in the snapshot frame, while longer
+ *  ones drain over subsequent frames via tickReplay(). 4 ms keeps the
+ *  reconcile-frame total well under the 16.67 ms 60 FPS budget even when
+ *  it lands on a heavy render frame. */
+const REPLAY_FIRST_CHUNK_MS = 4.0;
+
 export interface ReconcileStats {
   /** Distance (m) between the rendered pose and the authoritative pose
    *  before replay - the raw prediction error the server just corrected. */
@@ -54,6 +62,11 @@ export class Prediction {
   private acc = 0;
   /** Highest seq we've ever stepped locally. */
   private lastSteppedSeq = 0;
+  /** Inputs queued for multi-frame replay after a snapshot. While this is
+   *  non-empty, pushAndStep defers stepping (just appending to this list)
+   *  so that wall-clock time spent on reconcile is bounded per frame.
+   *  tickReplay() drains it across subsequent frames. */
+  private replayPending: PlayerInput[] = [];
   /** Spawn pose - used for resets. */
   private spawn: { position: { x: number; y: number; z: number }; yaw: number };
   /** Visual position offset that decays each step. On reconcile, the body
@@ -126,17 +139,45 @@ export class Prediction {
 
   /** Push a sampled input. Caller has already sent it to the server.
    *  Steps the local sim once at FIXED_DT regardless of frame timing -
-   *  prediction is on the input axis, not the frame axis. */
+   *  prediction is on the input axis, not the frame axis.
+   *  When a multi-frame reconcile replay is in flight (replayPending
+   *  non-empty), the input is deferred onto the replay tail instead of
+   *  stepping immediately. tickReplay() will drain it once it reaches
+   *  the head. This bounds the per-frame physics cost during reconcile. */
   pushAndStep(input: PlayerInput): void {
     if (input.seq <= this.lastSteppedSeq) return;
-
-    // Capture the state BEFORE the step as 'prev'. Combined with the
-    // post-step body state and the fractional accumulator (alpha), this
-    // lets state(alpha) interpolate smoothly between physics ticks
-    // even when the render rate is higher than 60Hz.
-    this.capturePrev();
-
     this.queue.push({ input });
+    if (this.replayPending.length > 0) {
+      this.replayPending.push(input);
+      return;
+    }
+    this.stepOne(input);
+  }
+
+  /** Drain pending replay inputs until either the queue empties or the
+   *  wall-clock budget expires. Called once per render frame from the
+   *  main loop so reconcile work is amortised across multiple frames
+   *  instead of paying the entire 18-tick replay cost on the snapshot
+   *  frame (which produced a visible 30 Hz heartbeat at high queueLen). */
+  tickReplay(budgetMs: number): void {
+    if (this.replayPending.length === 0) return;
+    const start = performance.now();
+    while (this.replayPending.length > 0) {
+      const input = this.replayPending.shift()!;
+      this.stepOne(input);
+      if (performance.now() - start >= budgetMs) break;
+    }
+    if (this.replayPending.length === 0) {
+      this.vehicle.setReplaying?.(false);
+    }
+  }
+
+  /** Run a single physics tick for one input. Shared by the normal-mode
+   *  pushAndStep path and the in-flight replay drain. Captures prev so
+   *  state(alpha) lerp endpoints span exactly one tick, decays the visual
+   *  reconcile offset, and advances lastSteppedSeq. */
+  private stepOne(input: PlayerInput): void {
+    this.capturePrev();
     if ((input.buttons & 1) !== 0) {
       this.vehicle.resetTo(this.spawn);
     }
@@ -144,8 +185,10 @@ export class Prediction {
     this.world.step();
     this.lastSteppedSeq = input.seq;
     // Decay the visual reconcile offset toward zero each step. 0.82 per
-    // step at 60Hz gives a ~80ms half-life, so a small reconcile snap
-    // converges away within a couple of frames - invisible.
+    // step at 60 Hz gives a ~80 ms half-life, so a small reconcile snap
+    // converges away within a couple of frames - invisible. Same factor
+    // applies during multi-frame replay: by the time replay finishes
+    // (~18 ticks) the offset has decayed to ~3 % of its initial value.
     this.visualOffset.x *= 0.82;
     this.visualOffset.y *= 0.82;
     this.visualOffset.z *= 0.82;
@@ -216,6 +259,15 @@ export class Prediction {
     const me = snap.players.find((p) => p.id === myId);
     if (!me) return null;
 
+    // If a previous snapshot's replay is still draining, discard the
+    // remainder. The newer snapshot is a more recent baseline; the
+    // un-replayed inputs are still in this.queue and will either be
+    // dropped (if acked by the new snapshot) or replayed below.
+    if (this.replayPending.length > 0) {
+      this.replayPending.length = 0;
+      this.vehicle.setReplaying?.(false);
+    }
+
     // Drop acked inputs in place. queue.filter() and queue.slice() both
     // allocate a fresh array on every snapshot (30/s); doing this in place
     // with splice() reuses the existing one and removes a steady GC
@@ -226,16 +278,9 @@ export class Prediction {
     }
     if (drop > 0) this.queue.splice(0, drop);
 
-    // Cap replay length. Each queued input costs one world.step() in the
-    // loop below; once the queue is large enough that replay takes longer
-    // than the gap between snapshots (~33ms), the next snapshot arrives
-    // mid-replay and the queue grows faster than it drains - a death
-    // spiral that locks the tab. Triggered in practice by GC pauses,
-    // OS scheduler hiccups, or a sibling tab spiking CPU.
-    // 30 ticks ≈ 500 ms of input at 60 Hz. Past that the local truck is
-    // so far ahead of the server that the user perceives a snap regardless
-    // of how much we replay; spending more CPU on a longer replay just
-    // starves the render loop and grows the divergence further.
+    // Cap replay length. 30 ticks ≈ 500 ms of input at 60 Hz; past that
+    // the local truck is far enough ahead of the server that the user
+    // perceives a snap regardless of how much we replay.
     const MAX_REPLAY = 30;
     if (this.queue.length > MAX_REPLAY) {
       this.queue.splice(0, this.queue.length - MAX_REPLAY);
@@ -300,70 +345,66 @@ export class Prediction {
       this.vehicle.applyEngineSnap(v.rpm, v.gear);
     }
 
-    // 3. Replay queued inputs. capturePrev() is called just before the
-    //    LAST replay step so that lerp(prev, body, alpha) spans exactly
-    //    one physics tick — identical to the invariant in pushAndStep.
-    //
-    //    Old approach: capturePrev() before ALL replay steps → prev=snap_pos.
-    //    computeLerpedPos(alpha) then = lerp(snap_pos, P_replay, alpha).
-    //    At alpha≈0.2 that lands near snap_pos (280ms behind prediction),
-    //    so visualOffset = rendered(now) - snap_pos ≈ v*280ms ≈ 2-3m,
-    //    hitting the cap on every snapshot and creating 30Hz rubberbanding.
-    //
-    //    New approach: prev = P_replay_minus_1 → lerp spans 1 step (~17cm
-    //    at 10 m/s). The visual offset is now pure replay divergence, not
-    //    "how far ahead is the prediction" distance.
-    const qLen = this.queue.length;
-    // Suppress the engine's auto-shift state machine for the duration of
-    // the replay. Without this it can flip the gear within the first
-    // replayed tick, undoing applyEngineSnap and producing the
-    // gearMismatch / replayDiv we observe in netDiag logs.
-    this.vehicle.setReplaying?.(true);
-    for (let qi = 0; qi < qLen; qi++) {
-      if (qi === qLen - 1) this.capturePrev(); // capture one step before end
-      this.vehicle.setInput(this.queue[qi]!.input);
-      this.world.step();
-    }
-    this.vehicle.setReplaying?.(false);
-    if (qLen === 0) this.capturePrev(); // nothing to replay; snap IS prev
+    // 3. Reset state(alpha) lerp endpoints. After the body snap, prev
+    //    holds the OLD pre-snap pose, so lerp(prev, body, alpha) would
+    //    interpolate halfway between the old prediction and the server
+    //    pose - a visible glitch on the next render. Snap prev to body
+    //    so the lerp degenerates to body until the next stepOne() runs
+    //    a real tick and updates prev to body-before-step.
+    this.capturePrev();
 
-    // 4. Measure actual replay divergence: |rendered - P_replay|.
-    //    With correct prev, this is the true physics error, not v*RTT.
+    // 4. Compute the visual reconcile offset that keeps the rendered
+    //    pose continuous across the snap. After step 3, computeLerpedPos
+    //    returns the server pose; we want it to render as the OLD
+    //    rendered pose, so the offset must equal (oldRender - serverPose).
+    //    For multi-frame replay this is large (~velocity × queueLen ≈
+    //    2-3 m at 10 m/s); the per-step ×0.82 decay inside stepOne() and
+    //    the slow forward integration during replay pull it back to
+    //    near-zero by the time replay completes (~18 ticks). The cap is
+    //    raised to 5 m so legitimate replays don't get truncated; tiny
+    //    actual physics divergence (the post-replay error) will still
+    //    sit well under it.
+    const dxCap = 5.0;
+    this.visualOffset.x = clampAbs(renderedPos.x - v.position.x, dxCap);
+    this.visualOffset.y = clampAbs(renderedPos.y - v.position.y, dxCap);
+    this.visualOffset.z = clampAbs(renderedPos.z - v.position.z, dxCap);
+
+    if (supportsAxles && renderedAxles && v.axles) {
+      const AX_CAP_RIDE = 0.5;
+      const AX_CAP_ROLL = 0.5;
+      for (let i = 0; i < 2; i++) {
+        const off = this.axleVisualOffset[i]!;
+        off.rideY = clampAbs(renderedAxles[i]!.rideY - v.axles[i]!.rideY, AX_CAP_RIDE);
+        off.rollAngle = clampAbs(renderedAxles[i]!.rollAngle - v.axles[i]!.rollAngle, AX_CAP_ROLL);
+      }
+    }
+
+    const capped =
+      Math.abs(this.visualOffset.x) >= dxCap ||
+      Math.abs(this.visualOffset.y) >= dxCap ||
+      Math.abs(this.visualOffset.z) >= dxCap;
+
+    // 5. Schedule the queued inputs for replay across the next few
+    //    frames. The first chunk is pumped inline so short replays
+    //    (small queueLen) still complete in one frame; longer ones
+    //    drain via tickReplay() each subsequent frame.
+    if (this.queue.length > 0) {
+      for (const q of this.queue) this.replayPending.push(q.input);
+      this.vehicle.setReplaying?.(true);
+      this.tickReplay(REPLAY_FIRST_CHUNK_MS);
+    }
+
+    // 6. replayDiv: measured immediately after the inline first chunk.
+    //    With multi-frame replay this is an UPPER BOUND on the eventual
+    //    divergence (the body still has more replay to do, so it's
+    //    further from the rendered pose than after full replay would be).
+    //    Useful as a "is the system converging" signal even mid-flight.
     const replayBody = this.vehicle.body.translation();
     const replayDiv = Math.hypot(
       renderedPos.x - replayBody.x,
       renderedPos.y - replayBody.y,
       renderedPos.z - replayBody.z,
     );
-
-    // 5. Compute the new visual pose with NO offset and at the same
-    //    alpha. The offset that makes new render == old render is
-    //    exactly (oldRendered - newRenderedNoOffset).
-    const newPosNoOffset = this.computeLerpedPos(a);
-    // 0.5m cap: with the corrected prev the offset is only ~v*dt per
-    // step, so legitimate corrections are well under 0.5m. Larger values
-    // mean genuine divergence worth snapping.
-    const dxCap = 0.5;
-    this.visualOffset.x = clampAbs(renderedPos.x - newPosNoOffset.x, dxCap);
-    this.visualOffset.y = clampAbs(renderedPos.y - newPosNoOffset.y, dxCap);
-    this.visualOffset.z = clampAbs(renderedPos.z - newPosNoOffset.z, dxCap);
-
-    if (supportsAxles && renderedAxles) {
-      const newAxlesNoOffset = this.computeLerpedAxles(a);
-      const AX_CAP_RIDE = 0.2;
-      const AX_CAP_ROLL = 0.2;
-      for (let i = 0; i < 2; i++) {
-        const off = this.axleVisualOffset[i]!;
-        off.rideY = clampAbs(renderedAxles[i]!.rideY - newAxlesNoOffset[i]!.rideY, AX_CAP_RIDE);
-        off.rollAngle = clampAbs(renderedAxles[i]!.rollAngle - newAxlesNoOffset[i]!.rollAngle, AX_CAP_ROLL);
-      }
-    }
-
-    // capped: visual offset hit its cap, meaning genuine divergence > 0.5m.
-    const capped =
-      Math.abs(this.visualOffset.x) >= dxCap ||
-      Math.abs(this.visualOffset.y) >= dxCap ||
-      Math.abs(this.visualOffset.z) >= dxCap;
     return { posErr, capped, queueLen: this.queue.length, wheelAngVelErr, gearMismatch, replayDiv };
   }
 
