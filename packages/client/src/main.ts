@@ -1,5 +1,10 @@
-// Client entry point. Owns the net client, the scene, the input loop, and
-// the local prediction sim.
+// Client entry point. Owns the net client, the scene, and the input loop.
+//
+// The render path is purely server-authoritative: input is sampled at
+// 60 Hz and shipped to the server, the server simulates physics, snapshots
+// arrive at 30 Hz, and Scene.render() interpolates everything (local
+// truck included) ~100 ms behind the server clock. There is no local
+// physics sim, no prediction, and no reconcile.
 
 import { Physics, FIXED_DT, type PlayerId } from '@mydrunner/shared';
 
@@ -21,7 +26,6 @@ import { initInput, sampleInput, clearKeys } from './input.js';
 import { initTouchInput, onTouchEdge } from './touchInput.js';
 import { NetClient } from './net.js';
 import { Scene } from './scene.js';
-import { Prediction } from './prediction.js';
 
 function getServerUrl(): string {
   const explicit = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -44,11 +48,12 @@ initTouchInput();
 const scene = new Scene(app);
 const engineAudio = new EngineAudio();
 
-// Network diagnostics: snapshot arrival jitter + reconcile pop magnitude.
-// Cheap counters, flushed every 5s. Tells us whether the "everyone glitches
-// out" symptom is jitter exceeding the interp buffer (gaps > 100ms),
-// outright stalls (gaps > 200ms), or large prediction divergence (pos
-// errors > 1m / cap hits).
+// Network + frame diagnostics: snapshot arrival jitter and per-frame
+// CPU/GPU breakdown. Cheap counters, flushed every 5 s. Now that there
+// is no client-side prediction, the relevant signals are jitter (gaps
+// over the interpolation buffer) and frame time. The reconcile/replay/
+// wheel-angVel-error fields the previous version tracked are gone with
+// the prediction layer they were diagnosing.
 const NET_DIAG_WINDOW_MS = 5000;
 const netDiag = {
   windowStart: 0,
@@ -58,34 +63,15 @@ const netDiag = {
   gapMaxMs: 0,
   gapOver100: 0,  // jitter buffer underrun risk
   gapOver200: 0,  // outright stall - remote players visibly freeze
-  popSum: 0,
-  popMax: 0,
-  popOver1m: 0,
-  capped: 0,
-  queueLenSum: 0,
-  queueLenMax: 0,
-  wheelAngVelErrSum: 0,
-  wheelAngVelErrMax: 0,
-  gearMismatches: 0,
-  replayDivSum: 0,
-  replayDivMax: 0,
-  reconcileMsSum: 0,
-  reconcileMsMax: 0,
 };
-// Per-frame phase telemetry, flushed on the same 5 s cadence by piggy-
-// backing on netDiag's window. Tells us whether a slow frame is render
-// (GPU-bound), prediction (CPU-bound physics), or "other" (DOM, GC).
 const frameDiag = {
   frames: 0,
   totalMsSum: 0,
   totalMsMax: 0,
-  predictMsSum: 0,
-  predictMsMax: 0,
   renderMsSum: 0,
   renderMsMax: 0,
-  steps: 0,
 };
-function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: boolean; queueLen: number; wheelAngVelErr: number; gearMismatch: boolean; replayDiv: number } | null, reconcileMs: number): void {
+function netDiagOnSnapshot(recvAtMs: number): void {
   if (netDiag.windowStart === 0) netDiag.windowStart = recvAtMs;
   if (netDiag.prevRecvMs > 0) {
     const gap = recvAtMs - netDiag.prevRecvMs;
@@ -96,80 +82,32 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
   }
   netDiag.prevRecvMs = recvAtMs;
   netDiag.snaps += 1;
-  if (stats) {
-    netDiag.popSum += stats.posErr;
-    if (stats.posErr > netDiag.popMax) netDiag.popMax = stats.posErr;
-    if (stats.posErr > 1.0) netDiag.popOver1m += 1;
-    if (stats.capped) netDiag.capped += 1;
-    netDiag.queueLenSum += stats.queueLen;
-    if (stats.queueLen > netDiag.queueLenMax) netDiag.queueLenMax = stats.queueLen;
-    netDiag.wheelAngVelErrSum += stats.wheelAngVelErr;
-    if (stats.wheelAngVelErr > netDiag.wheelAngVelErrMax) netDiag.wheelAngVelErrMax = stats.wheelAngVelErr;
-    if (stats.gearMismatch) netDiag.gearMismatches += 1;
-    netDiag.replayDivSum += stats.replayDiv;
-    if (stats.replayDiv > netDiag.replayDivMax) netDiag.replayDivMax = stats.replayDiv;
-  }
-  netDiag.reconcileMsSum += reconcileMs;
-  if (reconcileMs > netDiag.reconcileMsMax) netDiag.reconcileMsMax = reconcileMs;
   if (recvAtMs - netDiag.windowStart >= NET_DIAG_WINDOW_MS) {
-    const n = netDiag.snaps || 1;
     const meanGap = netDiag.gapSumMs / Math.max(1, netDiag.snaps - 1);
-    const meanPop = netDiag.popSum / n;
-    const meanQueue = netDiag.queueLenSum / n;
     const elapsedS = (recvAtMs - netDiag.windowStart) / 1000;
-    const meanWheelErr = netDiag.wheelAngVelErrSum / n;
-    const meanReplayDiv = netDiag.replayDivSum / n;
-    const meanReconcileMs = netDiag.reconcileMsSum / n;
     const frames = frameDiag.frames || 1;
     const meanFrameMs = frameDiag.totalMsSum / frames;
-    const meanPredictMs = frameDiag.predictMsSum / frames;
     const meanRenderMs = frameDiag.renderMsSum / frames;
-    const stepsPerFrame = frameDiag.steps / frames;
     const fps = frameDiag.frames / Math.max(0.001, elapsedS);
     console.log(
       `[mydrunner-client] net ${elapsedS.toFixed(1)}s snaps=${netDiag.snaps} ` +
         `gap mean=${meanGap.toFixed(1)}ms max=${netDiag.gapMaxMs.toFixed(1)}ms ` +
         `over100=${netDiag.gapOver100} over200=${netDiag.gapOver200} ` +
-        `pop mean=${meanPop.toFixed(2)}m max=${netDiag.popMax.toFixed(2)}m ` +
-        `over1m=${netDiag.popOver1m} capped=${netDiag.capped} ` +
-        `queueLen mean=${meanQueue.toFixed(1)} max=${netDiag.queueLenMax} ` +
-        `wAVerr mean=${meanWheelErr.toFixed(2)}r/s max=${netDiag.wheelAngVelErrMax.toFixed(2)}r/s ` +
-        `gearMismatch=${netDiag.gearMismatches} ` +
-        `replayDiv mean=${meanReplayDiv.toFixed(3)}m max=${netDiag.replayDivMax.toFixed(3)}m ` +
-        `reconcile mean=${meanReconcileMs.toFixed(2)}ms max=${netDiag.reconcileMsMax.toFixed(2)}ms ` +
         `| fps=${fps.toFixed(0)} ` +
         `frame mean=${meanFrameMs.toFixed(1)}ms max=${frameDiag.totalMsMax.toFixed(1)}ms ` +
-        `predict mean=${meanPredictMs.toFixed(2)}ms max=${frameDiag.predictMsMax.toFixed(2)}ms ` +
-        `render mean=${meanRenderMs.toFixed(2)}ms max=${frameDiag.renderMsMax.toFixed(2)}ms ` +
-        `steps/frame=${stepsPerFrame.toFixed(2)}`,
+        `render mean=${meanRenderMs.toFixed(2)}ms max=${frameDiag.renderMsMax.toFixed(2)}ms`,
     );
     frameDiag.frames = 0;
     frameDiag.totalMsSum = 0;
     frameDiag.totalMsMax = 0;
-    frameDiag.predictMsSum = 0;
-    frameDiag.predictMsMax = 0;
     frameDiag.renderMsSum = 0;
     frameDiag.renderMsMax = 0;
-    frameDiag.steps = 0;
     netDiag.windowStart = recvAtMs;
     netDiag.snaps = 0;
     netDiag.gapSumMs = 0;
     netDiag.gapMaxMs = 0;
     netDiag.gapOver100 = 0;
     netDiag.gapOver200 = 0;
-    netDiag.popSum = 0;
-    netDiag.popMax = 0;
-    netDiag.popOver1m = 0;
-    netDiag.capped = 0;
-    netDiag.queueLenSum = 0;
-    netDiag.queueLenMax = 0;
-    netDiag.wheelAngVelErrSum = 0;
-    netDiag.wheelAngVelErrMax = 0;
-    netDiag.gearMismatches = 0;
-    netDiag.replayDivSum = 0;
-    netDiag.replayDivMax = 0;
-    netDiag.reconcileMsSum = 0;
-    netDiag.reconcileMsMax = 0;
   }
 }
 // Chat module is created up-front; the onSubmit closure references the
@@ -206,7 +144,6 @@ window.addEventListener('keydown', (e) => {
 });
 onTouchEdge('mute', () => engineAudio.toggleMute());
 
-// Expose scene + prediction for E2E diagnostics.
 // Diagnostic hooks for E2E / browser debugging. Only exposed in dev (Vite
 // sets DEV; production builds skip this) so production bundles do not ship
 // the internals to the window object.
@@ -221,17 +158,13 @@ let lastSnapTick = 0;
 let lastSpeed = 0;
 let lastRpm = 0;
 let lastGear = 0;
-let prediction: Prediction | null = null;
 let lastFrameTimeMs = performance.now();
 let terrainData: Physics.TerrainData | null = null;
-// Snapshot deferred from the WebSocket handler so reconcile (which replays
-// up to MAX_REPLAY physics steps) runs inside requestAnimationFrame where
-// we control the budget, not on an async message callback that interrupts
-// the render loop mid-frame.
-let pendingSnap: { snap: import('@mydrunner/shared').WorldSnapshot; recvAtMs: number } | null = null;
 
 async function start(): Promise<void> {
-  // Rapier WASM init - prediction depends on the same physics as the server.
+  // Rapier WASM init - the shared physics package still depends on it
+  // for terrain generation (sampleSurface etc), even though the client
+  // no longer runs a physics simulation.
   await Physics.initRapier();
 
   // Show the name + car picker on every load so the player can pick a
@@ -263,30 +196,24 @@ async function start(): Promise<void> {
       connected = true;
       chat.pushSystem('connected — press T to chat');
     },
-    onWelcome(id, _serverTimeMs, terrain, spawn) {
+    onWelcome(id, _serverTimeMs, terrain, _spawn) {
       localId = id;
       scene.setLocalPlayer(id, choice.carKind);
       scene.setTerrain(terrain.seed, terrain.size, terrain.resolution);
-      // Cache terrain data for surface HUD lookups (cheap - we already
-      // generate it for the prediction sim).
+      // Cache terrain data for the surface-name HUD lookup. The client
+      // does not run physics, but sampleSurface() reads the same heightmap
+      // that the server uses, so the surface label matches what the
+      // server is integrating against.
       terrainData = Physics.generateTerrain({
         seed: terrain.seed,
         size: terrain.size,
         resolution: terrain.resolution,
       });
-      // Build local prediction world with the same seed + spawn.
-      prediction?.dispose();
-      prediction = new Prediction(terrain.seed, terrain.size, terrain.resolution, spawn);
-      if (import.meta.env.DEV) {
-        (window as unknown as { __prediction: unknown }).__prediction = prediction;
-      }
-      scene.markLocalOverridden();
     },
     onSnapshot(snap, recvAtMs) {
       lastSnapTick = snap.tick;
       scene.pushSnapshot(snap, recvAtMs);
-      // Defer reconcile to the render loop — see pendingSnap declaration above.
-      pendingSnap = { snap, recvAtMs };
+      netDiagOnSnapshot(recvAtMs);
       if (localId) {
         const me = snap.players.find((p) => p.id === localId);
         if (me) {
@@ -375,22 +302,12 @@ async function start(): Promise<void> {
   });
   onTouchEdge('chat', () => chat.open());
 
-  // Input + prediction stepping is driven from the render loop with a
-  // fixed-step accumulator. Earlier this lived on a setInterval timer
-  // independent of requestAnimationFrame; the two ran at the same rate
-  // but drifted in phase, which made the visual sometimes a tick stale
-  // (visible as stutter when driving). Now each render frame catches
-  // up the prediction sim by however many fixed steps fit.
-  let predictAcc = 0;
-  // Bound prediction work per frame by wall-clock instead of a hard step
-  // count. A hard cap (e.g. 5 steps/frame) combined with a slow frame
-  // forces predictAcc to 0 and leaves the local prediction one or two
-  // ticks behind the server, which makes the next reconcile larger,
-  // which makes that frame slower - a feedback loop that lands at
-  // 20-30 FPS. Stepping until 8 ms have been spent inside the loop
-  // keeps the prediction in lockstep with the server when we have
-  // time, and yields to the renderer when we don't.
-  const PREDICT_BUDGET_MS = 8;
+  // Input loop is a fixed-step accumulator at the same 60 Hz cadence the
+  // server consumes. The accumulator is decoupled from the render rate so
+  // that a 30 FPS client still sends 60 inputs per second (the server
+  // would otherwise see a halved input rate and the truck would feel
+  // sluggish on weak hardware).
+  let inputAcc = 0;
   const HARD_STEP_CAP = 12; // catastrophic-stall safety net
 
   let fps = 0;
@@ -410,77 +327,41 @@ async function start(): Promise<void> {
       lastFpsUpdate = now;
     }
 
-    // Process deferred reconcile before stepping inputs. Doing this at the
-    // top of the frame (inside rAF) keeps the heavy replay work inside our
-    // frame budget instead of interrupting the render mid-frame via a
-    // WebSocket callback. The snap was already pushed to scene.pushSnapshot
-    // in the handler, so interpolation is unaffected by the one-frame delay.
-    if (pendingSnap && prediction && localId) {
-      const { snap, recvAtMs } = pendingSnap;
-      pendingSnap = null;
-      const reconStart = performance.now();
-      const stats = prediction.reconcile(snap, localId);
-      const reconMs = performance.now() - reconStart;
-      netDiagOnSnapshot(recvAtMs, stats, reconMs);
-    }
-
-    let predictMs = 0;
-    let stepsThisFrame = 0;
-    if (connected && prediction) {
-      predictAcc += frameDt;
+    if (connected) {
+      inputAcc += frameDt;
       let steps = 0;
-      const stepStart = performance.now();
-      while (predictAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
+      while (inputAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
         const input = sampleInput();
         net.sendInput(input);
-        prediction.pushAndStep(input);
-        predictAcc -= FIXED_DT;
+        inputAcc -= FIXED_DT;
         steps += 1;
-        if (performance.now() - stepStart >= PREDICT_BUDGET_MS) break;
       }
-      predictMs = performance.now() - stepStart;
-      stepsThisFrame = steps;
-      // If we hit the hard cap (>200 ms of unstepped accumulator) we're
-      // never catching up, so drop the leftover. The wall-clock cap is
-      // not an over-budget signal - we just yielded to the renderer.
-      if (steps >= HARD_STEP_CAP) predictAcc = 0;
-    }
-    // Fractional time left over in the accumulator becomes the alpha
-    // for state interpolation. This ensures smooth motion even when
-    // the render frame rate doesn't match the physics tick rate (60Hz).
-    const alpha = predictAcc / FIXED_DT;
-
-    // Override the local vehicle pose with the predicted state so the local
-    // car is responsive instead of 100ms behind. alpha lerps between
-    // the start-of-step and end-of-step body poses for smoothness.
-    let predState: ReturnType<Prediction['state']> | null = null;
-    if (prediction) {
-      predState = prediction.state(alpha);
-      scene.setLocalVehiclePose(predState.position, predState.rotation, predState.wheels, predState.axles);
-      // Update debug axle overlay for debug users.
-      updateAxleDebug(predState.axles[0], predState.axles[1]);
+      // Hit the hard cap means a >200 ms tab stall - drop the leftover
+      // accumulator instead of spinning to catch up.
+      if (steps >= HARD_STEP_CAP) inputAcc = 0;
     }
 
     const renderStart = performance.now();
     scene.render(now);
     const renderMs = performance.now() - renderStart;
 
+    // Update debug axle overlay from the most recent snapshot interpolation.
+    const localAxles = scene.localAxles();
+    if (localAxles) updateAxleDebug(localAxles[0], localAxles[1]);
+
     const frameTotalMs = performance.now() - now;
     frameDiag.frames += 1;
     frameDiag.totalMsSum += frameTotalMs;
     if (frameTotalMs > frameDiag.totalMsMax) frameDiag.totalMsMax = frameTotalMs;
-    frameDiag.predictMsSum += predictMs;
-    if (predictMs > frameDiag.predictMsMax) frameDiag.predictMsMax = predictMs;
     frameDiag.renderMsSum += renderMs;
     if (renderMs > frameDiag.renderMsMax) frameDiag.renderMsMax = renderMs;
-    frameDiag.steps += stepsThisFrame;
 
     if (connected) {
       const kmh = (lastSpeed * 3.6).toFixed(0);
       let surfaceLabel = '';
-      if (terrainData && predState) {
-        const p = predState.position;
-        const s = Physics.sampleSurface(terrainData, p.x, p.z);
+      const lp = scene.localPosition();
+      if (terrainData && lp) {
+        const s = Physics.sampleSurface(terrainData, lp.x, lp.z);
         surfaceLabel = ` · ${SURFACE_LABELS[s] ?? '?'}`;
       }
       const gearLabel = lastGear === -1 ? 'R' : lastGear === 0 ? 'N' : String(lastGear);

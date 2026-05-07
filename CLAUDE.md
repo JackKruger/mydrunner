@@ -15,8 +15,8 @@ Rollover is intentionally a real risk on slopes and at-speed turns into ruts —
 ## Stack
 
 - **TypeScript everywhere**, ESM, Node 22+, pnpm workspaces.
-- **Physics:** Rapier (`@dimforge/rapier3d-compat`, WASM). Same library on client and server, same fixed timestep, same `World` / `Vehicle` classes. Lives in `packages/shared/src/physics/`.
-- **Client:** Vite + Three.js. No React. Render loop is `requestAnimationFrame` driving `Scene.render()` in `packages/client/src/scene.ts`. Local prediction sim runs alongside the renderer in `packages/client/src/prediction.ts`.
+- **Physics:** Rapier (`@dimforge/rapier3d-compat`, WASM). Server-only — the client does not run a physics simulation. Lives in `packages/shared/src/physics/` (the package is still loaded on the client for terrain generation and `sampleSurface()` lookups).
+- **Client:** Vite + Three.js. No React. Render loop is `requestAnimationFrame` driving `Scene.render()` in `packages/client/src/scene.ts`. Render is purely server-authoritative: snapshots arrive at 30 Hz and `Scene.render()` interpolates everything (local truck included) ~100 ms behind the server clock.
 - **Server:** Node + `ws` + `http`. Single authoritative `Room` running a fixed 60Hz physics loop, broadcasting 30Hz JSON snapshots. Lives in `packages/server/src/`.
 - **Wire format:** JSON for now. Encode/decode is centralised in `packages/shared/src/net/messages.ts` so swapping to msgpack/binary is a one-file change.
 - **Tests:** Vitest for unit + Rapier integration; Playwright for browser smoke + multiplayer.
@@ -65,36 +65,28 @@ Playwright browsers: in sandboxed environments without internet, the config auto
 packages/
   shared/   types, constants, net protocol, World+Vehicle+terrain+ruts+obstacles physics
   server/   WS+HTTP entry point, Room (one world, all players, fixed loop, rut buffer)
-  client/   Vite app: input + touch -> NetClient -> Scene (Three.js) + ChaseCamera + Prediction
+  client/   Vite app: input + touch -> NetClient -> Scene (Three.js) + ChaseCamera (no local physics)
   e2e/      Playwright tests + screenshot capture (boots client + server via webServer config)
 ```
 
 `shared` is consumed via TypeScript source (`"main": "./src/index.ts"`) — no build step needed for inter-package use during dev.
 
-### Authoritative server, client-side prediction
+### Server-authoritative, no client prediction
 
-The server is the source of truth for physics. Each tick (60Hz):
+The server is the only source of truth for physics. Each tick (60 Hz):
 
 1. Read pending input for each player.
 2. `vehicle.preStep()` applies steer/throttle/brake to the Rapier vehicle controller, performs **per-wheel surface lookup** (sample terrain texel under each wheel → modulate friction slip), then `controller.updateVehicle(dt)`.
 3. `world.step()` advances Rapier.
 4. `vehicle.postStep()` accumulates wheel spin for visuals.
-5. (Disabled) Each driven wheel's pass would be recorded into the **rut buffer** when `RUTS_ENABLED=true`. Currently off — the heightfield resolution is too coarse for tyre-width tracks, and the prediction client doesn't replay deltas, so deformation produced periodic reconcile snaps. Buffer + flush + collider-rebuild plumbing is intact in `room.ts` for when the underlying issues are fixed.
-6. Every other tick (30Hz), broadcast a `WorldSnapshot` to every player.
+5. (Disabled) Each driven wheel's pass would be recorded into the **rut buffer** when `RUTS_ENABLED=true`. Currently off — the heightfield resolution is too coarse for tyre-width tracks. Buffer + flush + collider-rebuild plumbing is intact in `room.ts` for when the underlying issues are fixed.
+6. Every other tick (30 Hz), broadcast a `WorldSnapshot` to every player.
 
-The client runs a parallel local Rapier world that simulates **only the local player's vehicle**, in lockstep with the server's fixed timestep. On every input sample:
+The client samples input at 60 Hz and ships each `PlayerInput` to the server — it does NOT simulate physics locally. `Scene.render()` interpolates every vehicle (the local truck included) from the snapshot pair surrounding `now - RENDER_DELAY_MS`. The chase camera reads its target from the local truck's interpolated pose each frame.
 
-1. Send the input to the server.
-2. Append it to the local prediction queue.
-3. Step the local sim once with that input.
+This was a deliberate trade after a long fight with prediction artifacts (rubberbanding, reconcile heartbeat, partial-replay drift while moving). The vehicle has 2.5 t of inertia and the gameplay is "intentions, not twitch reflexes", so ~100 ms of input lag is well-tolerated. Removing the prediction layer made every "the truck pops/drifts/stutters" bug architecturally impossible.
 
-When a snapshot arrives:
-
-1. Drop all queued inputs `<= snap.lastAckSeq` (server has consumed them).
-2. Snap the local body to the authoritative pose for our player.
-3. Replay remaining queued inputs to fast-forward to "now".
-
-Other players are still rendered by interpolating between buffered snapshots ~100ms in the past. The local car responds the same frame as a key press; the rest of the world is gracefully smoothed.
+If sub-100 ms input response ever becomes a hard requirement (twitch driving content, or a competitive mode), the way back is to re-introduce a local Rapier sim — the server-side physics package is unchanged, and the wire protocol (inputs in, snapshots out, `lastAckSeq` for reconcile) is already shaped for it.
 
 ### Key files
 
@@ -109,9 +101,8 @@ Other players are still rendered by interpolating between buffered snapshots ~10
 - `packages/shared/src/physics/util.ts` — small shared helpers (currently `rotateVecByQuat`).
 - `packages/server/src/room.ts` — owns `World`, 60Hz tick, 30Hz snapshots, player spawns on the road grid. World is 320×320 at heightfield resolution 96.
 - `packages/server/src/index.ts` — HTTP+WS bootstrap, route messages into `Room`, expose `/health`.
-- `packages/client/src/scene.ts` — Three.js scene, snapshot interpolation, terrain replication, mud splatter particles. Camera state is delegated to `ChaseCamera`.
+- `packages/client/src/scene.ts` — Three.js scene, snapshot interpolation (local + remote), terrain replication, mud splatter particles. Exposes `localPosition()` / `localSteer()` / `localAxles()` for HUD + debug + e2e to read the rendered local-truck state without a local sim. Camera state is delegated to `ChaseCamera`.
 - `packages/client/src/camera.ts` — `ChaseCamera`: chase-cam yaw spring with corner swing, pitch-aware lookAt for hill driving, hood cam, sky cam.
-- `packages/client/src/prediction.ts` — local Rapier sim, input queue, reconcile-on-snapshot.
 - `packages/client/src/carMesh.ts` — `buildCarMesh(kind, isLocal, idHash)` for `'patrol' | 'hilux'`. Shared materials + wheel builder, per-kind body builders. Wheels have visible spokes + tread lugs so rotation direction reads.
 - `packages/client/src/joinScreen.ts` — first-load name + car picker. Persists name + carKind to localStorage; subsequent visits pre-fill the picker. `?auto=1` URL bypass for e2e.
 - `packages/client/src/touchInput.ts` — on-screen analog steer pad + gas/brake/handbrake/aux buttons for mobile. State merges into `sampleInput()` alongside keyboard.
@@ -119,9 +110,9 @@ Other players are still rendered by interpolating between buffered snapshots ~10
 
 ### Determinism note
 
-Rapier in single-threaded mode is deterministic given identical inputs and step order. The shared physics package is structured so client and server run the exact same code path — that's the foundation of the prediction/reconciliation. Do not introduce non-deterministic state (`Date.now()` inside `step`, unseeded `Math.random()`, floating-point reductions across non-deterministic iteration order) inside `World.step()` or `Vehicle.preStep()/postStep()`.
+Rapier in single-threaded mode is deterministic given identical inputs and step order. The shared physics package is the only physics path now (server-only), but the determinism property still matters: it means the same inputs replayed against the same seed produce the same trajectory, which is what makes server-side recording / replay / regression tests viable. Do not introduce non-deterministic state (`Date.now()` inside `step`, unseeded `Math.random()`, floating-point reductions across non-deterministic iteration order) inside `World.step()` or `Vehicle.preStep()/postStep()`.
 
-`packages/server/src/__tests__/prediction.test.ts` enforces this with a "two worlds, same seed, same inputs → same state" assertion.
+`packages/server/src/__tests__/prediction.test.ts` enforces this with a "two worlds, same seed, same inputs → same state" assertion. (Name is a leftover from when the client also ran a sim; the test is still valid as a determinism guard.)
 
 ## Conventions
 
@@ -129,7 +120,7 @@ Rapier in single-threaded mode is deterministic given identical inputs and step 
 - **Shared types are the wire contract.** When you change `PlayerInput` or `VehicleState`, both client and server pick it up via TypeScript.
 - **No comments that restate code.** Comments explain *why*: a constraint, a tradeoff, a workaround.
 - **Tests use real components.** Server tests use real Rapier. Browser tests use real Playwright. There is no mocked physics or socket — bugs love mocks.
-- **Diagnostic hooks are dev-only.** `window.__scene` and `window.__prediction` are guarded by `import.meta.env.DEV`. Production bundles do not expose them.
+- **Diagnostic hooks are dev-only.** `window.__scene` is guarded by `import.meta.env.DEV`. Production bundles do not expose it.
 - **Branching:** development happens on `main`. After committing, mirror to `claude/add-claude-documentation-b6LkY` (fast-forward + push) so both branches stay at the same tip — the user runs deployments off both.
 - **No PRs unless asked.**
 - **Commit screenshots with each visual milestone** (`packages/e2e/screenshots/` is tracked) so the repo carries a visual changelog alongside the code one.
@@ -156,7 +147,7 @@ This file should be updated when the architecture changes. If you (future Claude
 
 ## Roadmap
 
-The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4 with AWD physics on procedural terrain → cross mud at low traction → climb the rocky hill route up the mountain → see other players move with smooth interpolation → respond instantly thanks to client-side prediction. Next priorities, roughly in order:
+The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4 with AWD physics on procedural terrain → cross mud at low traction → climb the rocky hill route up the mountain → see every truck (yours and remotes') interpolated smoothly from the same authoritative snapshot stream. Input runs ~100 ms ahead of what's on screen; the heavy chassis makes that the right trade. Next priorities, roughly in order:
 
 ### Shipped
 - Surface-name HUD.
@@ -190,14 +181,14 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - Destructible terrain features (trees, fences) on top of mud-deformation.
 - Physics-driven water bodies that the chassis floats in / bogs down in.
 - Day/night cycle + headlight illumination.
-- Re-enable ruts: needs higher heightfield resolution (or a sub-cell visual deformation overlay decoupled from the collider) and prediction-side rut replay.
+- Re-enable ruts: needs higher heightfield resolution (or a sub-cell visual deformation overlay decoupled from the collider). With prediction gone the client just needs to replay deltas into its terrain mesh — the collider rebuild is server-side only.
 
 ## How to add a feature, end to end
 
 1. **Touch types first.** Add fields to `PlayerInput` / `VehicleState` / `WorldSnapshot` in `packages/shared/src/types.ts`. TypeScript will tell you everywhere that needs to change.
 2. **Update the simulator.** Modify `Vehicle` / `World` / `RutBuffer` in `packages/shared/src/physics/`.
 3. **Tune in constants.** Don't hardcode in step code.
-4. **Update the renderer / prediction.** `Scene.render()` and `Prediction.state()` read from snapshots — make sure they interpolate / re-export new fields correctly.
+4. **Update the renderer.** `Scene.render()` reads from snapshots — make sure it interpolates new fields correctly. If the field needs to be exposed for HUD/debug/e2e, add a getter alongside `localPosition()` / `localSteer()` / `localAxles()`.
 5. **Write a test.** Server-side: `vitest` against the real `World`. Client-side: Playwright if it's user-visible.
 6. **Run the gauntlet:** `pnpm typecheck && pnpm test && pnpm test:e2e && pnpm build`.
 7. **Re-run the screenshot capture** if the change is visual: `pnpm --filter @mydrunner/e2e exec playwright test tests/screenshot.spec.ts`. Commit the new PNGs alongside the code.
@@ -210,7 +201,7 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - **Tick on `setInterval`.** Will drift under Node GC pauses. Acceptable for MVP; move to `setImmediate`-driven loop with sleep-to-deadline if drift becomes visible.
 - **Inputs are clamped server-side** (`Room.applyInput`) but otherwise trusted. No anti-cheat beyond range clamping.
 - **Rapier `compat` build bundles WASM as base64.** This is why `optimizeDeps.exclude` is set in `vite.config.ts`. Don't switch to `@dimforge/rapier3d` (non-compat) without revisiting Vite config.
-- **Prediction divergence is not visually smoothed.** A reconcile snaps the body. If divergence becomes large under packet loss, this will pop. Add a small-error LERP and a large-error snap when needed.
+- **Local input lag is structural.** With no client-side prediction, the local truck renders ~100 ms behind input. Acceptable for a heavy off-road sim, not for twitch driving. If gameplay ever demands tighter response, the prediction layer needs to be reintroduced (the wire protocol still carries `lastAckSeq` and inputs already include `seq` — the hooks are there).
 
 ## Operating notes
 

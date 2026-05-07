@@ -68,6 +68,16 @@ export class Scene {
     { rideY: 0, rollAngle: 0 },
     { rideY: 0, rollAngle: 0 },
   ];
+  // Last interpolated state for the local player. Kept around for the
+  // surface-name HUD lookup, the debug-panel axle readout, and e2e
+  // assertions - all of which used to read from prediction.state().
+  private _localPos = { x: 0, y: 0, z: 0 };
+  private _localSteer = 0;
+  private _localAxlesLast: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] = [
+    { rideY: 0, rollAngle: 0 },
+    { rideY: 0, rollAngle: 0 },
+  ];
+  private _localHasState = false;
   private _present = new Set<PlayerId>();
 
   constructor(canvasParent: HTMLElement) {
@@ -270,37 +280,18 @@ export class Scene {
     }
   }
 
-  /** Override the local vehicle visual transform - used by client-side
-   *  prediction so the local truck doesn't lag the snapshot buffer.
-   *  Axles pose the wheels (which are children of axle groups); steer
-   *  and spin are still applied per-wheel for steering animation and
-   *  rotation cues. */
-  setLocalVehiclePose(
-    pos: { x: number; y: number; z: number },
-    rot: { x: number; y: number; z: number; w: number },
-    wheels: { steer: number; spin: number; suspensionLength: number }[],
-    axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
-  ): void {
-    if (!this.localId) return;
-    const v = this.ensureVehicle(this.localId, true, this.localCarKind);
-    v.group.position.set(pos.x, pos.y, pos.z);
-    v.group.quaternion.set(rot.x, rot.y, rot.z, rot.w);
-    this.poseAxles(v, axles);
-    for (let i = 0; i < 4; i++) {
-      const w = v.wheels[i]!;
-      const ws = wheels[i];
-      // Wheels are children of axle groups at (+/- trackHalf, 0, 0); the
-      // axle's rideY+rollAngle moves them as a unit. Per-wheel rotation
-      // still encodes steer (front only) and accumulated spin.
-      // Negate steer for the mesh: snapshot.steer carries player-intent
-      // sign (positive = right). With Three.js's right-hand Y-up frame,
-      // positive rotation.y rotates +Z forward toward -X (left), so the
-      // mesh needs the opposite sign to visually match driver intent.
-      w.rotation.set(ws ? ws.spin : 0, ws ? -ws.steer : 0, 0);
-    }
-    // Hand the chase camera the latest chassis pose; it owns the yaw
-    // spring + pitch lerp internally.
-    this.cam.follow(v.group.position, rot);
+  /** Read-only accessors used by the HUD (surface-under-truck lookup),
+   *  the debug panel (axle DOF readout), and e2e tests. All sourced from
+   *  the most recent snapshot interpolation, so they are exactly the
+   *  visual-frame state. */
+  localPosition(): { x: number; y: number; z: number } | null {
+    return this._localHasState ? this._localPos : null;
+  }
+  localSteer(): number {
+    return this._localSteer;
+  }
+  localAxles(): [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] | null {
+    return this._localHasState ? this._localAxlesLast : null;
   }
 
   /** Pose the two axle groups from per-axle (rideY, rollAngle) state.
@@ -369,52 +360,60 @@ export class Scene {
         const vis = this.ensureVehicle(pa.id, isLocal, pa.carKind);
         this.setNameplate(vis, pa.name, isLocal);
 
-        // Local vehicle is overridden by setLocalVehiclePose() once prediction
-        // is active; only update remotes here.
-        if (!isLocal) {
-          vis.group.position.set(
-            pa.vehicle.position.x + (pb.vehicle.position.x - pa.vehicle.position.x) * t,
-            pa.vehicle.position.y + (pb.vehicle.position.y - pa.vehicle.position.y) * t,
-            pa.vehicle.position.z + (pb.vehicle.position.z - pa.vehicle.position.z) * t,
-          );
-          this._qa.set(pa.vehicle.rotation.x, pa.vehicle.rotation.y, pa.vehicle.rotation.z, pa.vehicle.rotation.w);
-          this._qb.set(pb.vehicle.rotation.x, pb.vehicle.rotation.y, pb.vehicle.rotation.z, pb.vehicle.rotation.w);
-          this._qa.slerp(this._qb, t);
-          vis.group.quaternion.copy(this._qa);
+        // Server-authoritative rendering: every vehicle (local included)
+        // is interpolated from the snapshot pair at the same RENDER_DELAY_MS
+        // offset. The local truck lags real input by that delay, but in
+        // exchange there is no client-side prediction loop, no reconcile
+        // stutter, and the local truck cannot ever disagree with the server.
+        vis.group.position.set(
+          pa.vehicle.position.x + (pb.vehicle.position.x - pa.vehicle.position.x) * t,
+          pa.vehicle.position.y + (pb.vehicle.position.y - pa.vehicle.position.y) * t,
+          pa.vehicle.position.z + (pb.vehicle.position.z - pa.vehicle.position.z) * t,
+        );
+        this._qa.set(pa.vehicle.rotation.x, pa.vehicle.rotation.y, pa.vehicle.rotation.z, pa.vehicle.rotation.w);
+        this._qb.set(pb.vehicle.rotation.x, pb.vehicle.rotation.y, pb.vehicle.rotation.z, pb.vehicle.rotation.w);
+        this._qa.slerp(this._qb, t);
+        vis.group.quaternion.copy(this._qa);
 
-          // Interpolate axle DOFs from the snapshot pair. Falls back to
-          // rest if the server omitted axles (legacy raycast vehicle).
-          const axA = pa.vehicle.axles ?? null;
-          const axB = pb.vehicle.axles ?? axA;
-          this._axleBuf[0]!.rideY = 0; this._axleBuf[0]!.rollAngle = 0;
-          this._axleBuf[1]!.rideY = 0; this._axleBuf[1]!.rollAngle = 0;
-          if (axA && axB) {
-            for (let i = 0; i < 2; i++) {
-              const a0 = axA[i]!, a1 = axB[i]!;
-              this._axleBuf[i]!.rideY = a0.rideY + (a1.rideY - a0.rideY) * t;
-              this._axleBuf[i]!.rollAngle = a0.rollAngle + (a1.rollAngle - a0.rollAngle) * t;
-            }
-          }
-          this.poseAxles(vis, this._axleBuf);
-
-          for (let i = 0; i < 4; i++) {
-            const wheel = vis.wheels[i]!;
-            const wa = pa.vehicle.wheels[i];
-            const wb = pb.vehicle.wheels[i];
-            const steer = wa ? wa.steer : 0;
-            const spin = wa && wb ? wa.spin + (wb.spin - wa.spin) * t : 0;
-            wheel.rotation.set(spin, -steer, 0);
+        // Interpolate axle DOFs from the snapshot pair. Falls back to
+        // rest if the server omitted axles (legacy raycast vehicle).
+        const axA = pa.vehicle.axles ?? null;
+        const axB = pb.vehicle.axles ?? axA;
+        this._axleBuf[0]!.rideY = 0; this._axleBuf[0]!.rollAngle = 0;
+        this._axleBuf[1]!.rideY = 0; this._axleBuf[1]!.rollAngle = 0;
+        if (axA && axB) {
+          for (let i = 0; i < 2; i++) {
+            const a0 = axA[i]!, a1 = axB[i]!;
+            this._axleBuf[i]!.rideY = a0.rideY + (a1.rideY - a0.rideY) * t;
+            this._axleBuf[i]!.rollAngle = a0.rollAngle + (a1.rollAngle - a0.rollAngle) * t;
           }
         }
+        this.poseAxles(vis, this._axleBuf);
 
-        if (isLocal && !this.localOverridden) {
-          // Fallback when client-side prediction is not active: snap the
-          // camera target to the interpolated snapshot position.
-          this.cam.snapTarget({
-            x: pa.vehicle.position.x + (pb.vehicle.position.x - pa.vehicle.position.x) * t,
-            y: pa.vehicle.position.y + (pb.vehicle.position.y - pa.vehicle.position.y) * t,
-            z: pa.vehicle.position.z + (pb.vehicle.position.z - pa.vehicle.position.z) * t,
-          });
+        for (let i = 0; i < 4; i++) {
+          const wheel = vis.wheels[i]!;
+          const wa = pa.vehicle.wheels[i];
+          const wb = pb.vehicle.wheels[i];
+          const steer = wa ? wa.steer : 0;
+          const spin = wa && wb ? wa.spin + (wb.spin - wa.spin) * t : 0;
+          wheel.rotation.set(spin, -steer, 0);
+        }
+
+        if (isLocal) {
+          // Hand the interpolated chassis pose to the chase camera. The
+          // _qa quaternion is post-slerp here, so it holds the rendered
+          // local rotation. Cache the axles so the debug panel can read
+          // them without re-doing the interp.
+          this.cam.follow(vis.group.position, { x: this._qa.x, y: this._qa.y, z: this._qa.z, w: this._qa.w });
+          this._localAxlesLast[0]!.rideY = this._axleBuf[0]!.rideY;
+          this._localAxlesLast[0]!.rollAngle = this._axleBuf[0]!.rollAngle;
+          this._localAxlesLast[1]!.rideY = this._axleBuf[1]!.rideY;
+          this._localAxlesLast[1]!.rollAngle = this._axleBuf[1]!.rollAngle;
+          this._localPos.x = vis.group.position.x;
+          this._localPos.y = vis.group.position.y;
+          this._localPos.z = vis.group.position.z;
+          this._localSteer = pa.vehicle.wheels[0]?.steer ?? 0;
+          this._localHasState = true;
         }
       }
     }
@@ -486,9 +485,6 @@ export class Scene {
       vis.lastSpinAtMs = recvAtMs;
     }
   }
-
-  private localOverridden = false;
-  markLocalOverridden(): void { this.localOverridden = true; }
 
   /** Compute how far below its physics-resolved position an axle visual
    *  should drop because the ground beneath it is soft (mud). Both

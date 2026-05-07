@@ -1,6 +1,7 @@
 // Camera modes for the local player. Owns its own THREE.PerspectiveCamera
 // plus the smoothing state for chase/hood/free. The Scene composes one
-// ChaseCamera and forwards target updates each prediction frame.
+// ChaseCamera and calls follow() each render frame with the local
+// truck's interpolated pose.
 //
 // Modes:
 //   chase  - third-person follow with under-damped yaw spring (corner
@@ -79,10 +80,10 @@ export class ChaseCamera {
   }
 
   /** Soft-track a chassis pose. Position snaps to the chassis (the
-   *  caller passes the prediction-lerped pose, which is already smooth);
-   *  yaw uses an under-damped spring (overshoots a touch through
-   *  corners); pitch is lerped (we don't want overshoot here, that
-   *  would be queasy). */
+   *  caller passes the snapshot-interpolated pose, which is already
+   *  smooth); yaw uses an under-damped spring (overshoots a touch
+   *  through corners); pitch is lerped (we don't want overshoot here,
+   *  that would be queasy). */
   follow(
     pos: { x: number; y: number; z: number },
     rot: { x: number; y: number; z: number; w: number },
@@ -90,17 +91,11 @@ export class ChaseCamera {
     const nowMs = performance.now();
     const dt = this.lastUpdateMs ? Math.min(0.05, (nowMs - this.lastUpdateMs) / 1000) : 1 / 60;
     this.lastUpdateMs = nowMs;
-    // Position: snap to the chassis pose. Earlier this was a 29 ms
-    // half-life lerp ("Tracks position with a light lerp so chassis
-    // wobble doesn't get into the camera") - but the prediction layer
-    // now already alpha-lerps between physics-tick body poses and adds
-    // a decaying reconcile offset, so the pose handed to follow() is
-    // already smooth. The extra lerp wasn't filtering noise; it was
-    // adding follow lag, which read as the truck stuttering in screen
-    // space at ride-spring frequencies while the world (locked to the
-    // smoothed camera) read as smooth. Snapping here makes the chassis
-    // stable in screen space; only the camera-induced world parallax
-    // captures the chassis bob, which is the right place for it.
+    // Snap target position to the chassis pose. Snapshot interpolation
+    // already runs ~100 ms behind the server clock and lerps between
+    // the two surrounding snapshots, so the pose handed to follow() is
+    // smooth at frame rate. An extra position lerp here added follow
+    // lag, which read as the chassis stuttering in screen space.
     this.target.set(pos.x, pos.y, pos.z);
     // Forward vector (local +Z) rotated by the chassis quaternion.
     const fX = 2 * (rot.x * rot.z + rot.w * rot.y);
@@ -122,12 +117,6 @@ export class ChaseCamera {
     if (this.yaw < -Math.PI) this.yaw += 2 * Math.PI;
   }
 
-  /** Snap the target without filtering yaw/pitch. Used as a fallback
-   *  when client-side prediction isn't driving the camera (interpolated
-   *  snapshots only). */
-  snapTarget(pos: { x: number; y: number; z: number }): void {
-    this.target.set(pos.x, pos.y, pos.z);
-  }
 
   /** Apply the chosen mode to the underlying THREE camera. Call once per
    *  render frame before THREE.WebGLRenderer.render. */

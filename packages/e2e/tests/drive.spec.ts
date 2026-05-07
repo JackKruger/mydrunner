@@ -13,25 +13,15 @@
 
 import { test, expect, type Page } from '@playwright/test';
 
-interface Diag {
-  position: { x: number; y: number; z: number };
-  rotation: { x: number; y: number; z: number; w: number };
-  wheels: { steer: number; spin: number; suspensionLength: number }[];
-  rpm?: number;
-  gear?: number;
-}
-
-async function readDiag(page: Page): Promise<Diag | null> {
-  return page.evaluate(() => {
-    const w = window as unknown as { __prediction?: { state: () => Diag } };
-    return w.__prediction ? w.__prediction.state() : null;
-  });
-}
-
 async function waitConnected(page: Page): Promise<void> {
   await expect(page.locator('#hud')).toContainText('connected', { timeout: 10_000 });
+  // Wait until the local truck has appeared in the scene's vehicle map.
+  // The server welcomes us with a localId, then sends snapshots; the
+  // mesh exists once the first snapshot has been interpolated.
   await expect.poll(() => page.evaluate(() => {
-    return Boolean((window as unknown as { __prediction?: unknown }).__prediction);
+    const w = window as unknown as { __scene?: { localId?: string | null; vehicles?: Map<string, unknown> } };
+    const s = w.__scene;
+    return Boolean(s?.localId && s?.vehicles?.has?.(s.localId));
   }), { timeout: 10_000 }).toBe(true);
 }
 
@@ -82,12 +72,17 @@ test.describe('driving', () => {
     await page.keyboard.down('KeyA');
     await page.waitForTimeout(800);
     // Run sampling loop inside the browser to avoid 20 cross-process evaluate
-    // roundtrips, which time out on slow CI runners.
+    // roundtrips, which time out on slow CI runners. We sample the rendered
+    // mesh's wheel y-rotation directly: in scene.ts that's set to -steer
+    // (mesh sign convention), so we negate to recover the player-intent
+    // sign that the original __prediction.state().wheels[0].steer reported.
     const samples: number[] = await page.evaluate(async () => {
-      const w = window as unknown as { __prediction?: { state: () => { wheels: { steer: number }[] } } };
+      const w = window as unknown as { __scene?: { localId: string; vehicles: Map<string, { wheels: { rotation: { y: number } }[] }> } };
+      const s = w.__scene!;
       const out: number[] = [];
       for (let i = 0; i < 20; i++) {
-        out.push(w.__prediction?.state().wheels[0]?.steer ?? 0);
+        const v = s.vehicles.get(s.localId);
+        out.push(-(v?.wheels[0]?.rotation.y ?? 0));
         await new Promise<void>((r) => setTimeout(r, 25));
       }
       return out;

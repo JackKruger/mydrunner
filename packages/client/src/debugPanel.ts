@@ -1,9 +1,9 @@
 // Live tuning panel. Activated only when the player's saved name matches
 // "jack" (case-insensitive). Renders a side panel of sliders bound to
-// the shared TUNING object so changes apply to the local prediction sim
-// on the next physics tick. The server keeps its compiled defaults, so
-// expect some reconcile drift while tuning - the point is to find the
-// numbers that feel right by hand, not to ship via this panel.
+// the shared TUNING object. The client no longer simulates physics, so
+// changes only take effect on the server side once the values are baked
+// into constants.ts and the server is rebuilt. The panel is kept as a
+// way to author and copy candidate values, not to live-tune in flight.
 //
 // "Copy settings" serialises TUNING as a TypeScript snippet so the
 // values can be pasted into constants.ts as new defaults.
@@ -238,7 +238,7 @@ export const SURFACE_FRICTION = {
 }
 
 /** Update the live axle readout in the debug panel. Call each render frame
- *  from the main loop with the current prediction axle state. */
+ *  with the most recent snapshot-interpolated axle state. */
 export function updateAxleDebug(
   front: { rideY: number; rollAngle: number },
   rear: { rideY: number; rollAngle: number },
