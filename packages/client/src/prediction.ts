@@ -40,6 +40,11 @@ export interface ReconcileStats {
   wheelAngVelErr: number;
   /** True if the predicted gear differed from the server's at this reconcile. */
   gearMismatch: boolean;
+  /** Distance (m) between the rendered pose and P_replay after replay.
+   *  This is the TRUE physics divergence: how far the prediction drifted
+   *  from what the server would produce for the same inputs. Near-zero
+   *  means the prediction is accurate; large values mean rubberbanding. */
+  replayDiv: number;
 }
 
 export class Prediction {
@@ -287,27 +292,44 @@ export class Prediction {
       this.vehicle.applyEngineSnap(v.rpm, v.gear);
     }
 
-    // 3. Capture the post-snap state into prev (single capture; the
-    //    replay loop below does NOT call capturePrev again). With prev
-    //    fixed at the post-snap pose, lerp(prev, body, a) covers the
-    //    entire replay span, which is what we want for a smooth visual
-    //    sweep into the new trajectory.
-    this.capturePrev();
-
-    // 4. Replay queued inputs to fast-forward body to "now".
-    for (const q of this.queue) {
-      this.vehicle.setInput(q.input);
+    // 3. Replay queued inputs. capturePrev() is called just before the
+    //    LAST replay step so that lerp(prev, body, alpha) spans exactly
+    //    one physics tick — identical to the invariant in pushAndStep.
+    //
+    //    Old approach: capturePrev() before ALL replay steps → prev=snap_pos.
+    //    computeLerpedPos(alpha) then = lerp(snap_pos, P_replay, alpha).
+    //    At alpha≈0.2 that lands near snap_pos (280ms behind prediction),
+    //    so visualOffset = rendered(now) - snap_pos ≈ v*280ms ≈ 2-3m,
+    //    hitting the cap on every snapshot and creating 30Hz rubberbanding.
+    //
+    //    New approach: prev = P_replay_minus_1 → lerp spans 1 step (~17cm
+    //    at 10 m/s). The visual offset is now pure replay divergence, not
+    //    "how far ahead is the prediction" distance.
+    const qLen = this.queue.length;
+    for (let qi = 0; qi < qLen; qi++) {
+      if (qi === qLen - 1) this.capturePrev(); // capture one step before end
+      this.vehicle.setInput(this.queue[qi]!.input);
       this.world.step();
     }
+    if (qLen === 0) this.capturePrev(); // nothing to replay; snap IS prev
+
+    // 4. Measure actual replay divergence: |rendered - P_replay|.
+    //    With correct prev, this is the true physics error, not v*RTT.
+    const replayBody = this.vehicle.body.translation();
+    const replayDiv = Math.hypot(
+      renderedPos.x - replayBody.x,
+      renderedPos.y - replayBody.y,
+      renderedPos.z - replayBody.z,
+    );
 
     // 5. Compute the new visual pose with NO offset and at the same
     //    alpha. The offset that makes new render == old render is
     //    exactly (oldRendered - newRenderedNoOffset).
     const newPosNoOffset = this.computeLerpedPos(a);
-    // 3m offset cap absorbs RTT-driven divergence on real connections
-    // (~25 m/s × 100ms RTT = 2.5m); the per-step decay still pulls the
-    // visual back toward truth within ~5 ticks.
-    const dxCap = 3.0;
+    // 0.5m cap: with the corrected prev the offset is only ~v*dt per
+    // step, so legitimate corrections are well under 0.5m. Larger values
+    // mean genuine divergence worth snapping.
+    const dxCap = 0.5;
     this.visualOffset.x = clampAbs(renderedPos.x - newPosNoOffset.x, dxCap);
     this.visualOffset.y = clampAbs(renderedPos.y - newPosNoOffset.y, dxCap);
     this.visualOffset.z = clampAbs(renderedPos.z - newPosNoOffset.z, dxCap);
@@ -323,10 +345,12 @@ export class Prediction {
       }
     }
 
-    const posCap = 3.0;
+    // capped: visual offset hit its cap, meaning genuine divergence > 0.5m.
     const capped =
-      Math.abs(dxRaw) > posCap || Math.abs(dyRaw) > posCap || Math.abs(dzRaw) > posCap;
-    return { posErr, capped, queueLen: this.queue.length, wheelAngVelErr, gearMismatch };
+      Math.abs(this.visualOffset.x) >= dxCap ||
+      Math.abs(this.visualOffset.y) >= dxCap ||
+      Math.abs(this.visualOffset.z) >= dxCap;
+    return { posErr, capped, queueLen: this.queue.length, wheelAngVelErr, gearMismatch, replayDiv };
   }
 
   /** Helpers below mirror the math in state(), so reconcile can compute

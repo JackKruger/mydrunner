@@ -67,8 +67,10 @@ const netDiag = {
   wheelAngVelErrSum: 0,
   wheelAngVelErrMax: 0,
   gearMismatches: 0,
+  replayDivSum: 0,
+  replayDivMax: 0,
 };
-function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: boolean; queueLen: number; wheelAngVelErr: number; gearMismatch: boolean } | null): void {
+function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: boolean; queueLen: number; wheelAngVelErr: number; gearMismatch: boolean; replayDiv: number } | null): void {
   if (netDiag.windowStart === 0) netDiag.windowStart = recvAtMs;
   if (netDiag.prevRecvMs > 0) {
     const gap = recvAtMs - netDiag.prevRecvMs;
@@ -89,6 +91,8 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
     netDiag.wheelAngVelErrSum += stats.wheelAngVelErr;
     if (stats.wheelAngVelErr > netDiag.wheelAngVelErrMax) netDiag.wheelAngVelErrMax = stats.wheelAngVelErr;
     if (stats.gearMismatch) netDiag.gearMismatches += 1;
+    netDiag.replayDivSum += stats.replayDiv;
+    if (stats.replayDiv > netDiag.replayDivMax) netDiag.replayDivMax = stats.replayDiv;
   }
   if (recvAtMs - netDiag.windowStart >= NET_DIAG_WINDOW_MS) {
     const n = netDiag.snaps || 1;
@@ -97,6 +101,7 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
     const meanQueue = netDiag.queueLenSum / n;
     const elapsedS = (recvAtMs - netDiag.windowStart) / 1000;
     const meanWheelErr = netDiag.wheelAngVelErrSum / n;
+    const meanReplayDiv = netDiag.replayDivSum / n;
     console.log(
       `[mydrunner-client] net ${elapsedS.toFixed(1)}s snaps=${netDiag.snaps} ` +
         `gap mean=${meanGap.toFixed(1)}ms max=${netDiag.gapMaxMs.toFixed(1)}ms ` +
@@ -105,7 +110,8 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
         `over1m=${netDiag.popOver1m} capped=${netDiag.capped} ` +
         `queueLen mean=${meanQueue.toFixed(1)} max=${netDiag.queueLenMax} ` +
         `wAVerr mean=${meanWheelErr.toFixed(2)}r/s max=${netDiag.wheelAngVelErrMax.toFixed(2)}r/s ` +
-        `gearMismatch=${netDiag.gearMismatches}`,
+        `gearMismatch=${netDiag.gearMismatches} ` +
+        `replayDiv mean=${meanReplayDiv.toFixed(3)}m max=${netDiag.replayDivMax.toFixed(3)}m`,
     );
     netDiag.windowStart = recvAtMs;
     netDiag.snaps = 0;
