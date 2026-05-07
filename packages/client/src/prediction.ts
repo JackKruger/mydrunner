@@ -34,6 +34,12 @@ export interface ReconcileStats {
   /** Inputs left to replay after dropping acked ones. Proxy for RTT in
    *  ticks (60Hz), so 6 ≈ 100ms RTT. */
   queueLen: number;
+  /** Average |prediction - server| wheel angVel (rad/s) before sync.
+   *  Non-zero means the tire integrator was starting each replay from the
+   *  wrong spin state, which is the primary cause of large posErr. */
+  wheelAngVelErr: number;
+  /** True if the predicted gear differed from the server's at this reconcile. */
+  gearMismatch: boolean;
 }
 
 export class Prediction {
@@ -241,6 +247,19 @@ export class Prediction {
     // 2. Snap to authoritative state. Includes the smoothed steering
     //    angle so replay doesn't double-step currentSteer.
     const v = me.vehicle;
+
+    // Measure wheel angVel drift BEFORE snapping so it shows up in diagnostics.
+    let wheelAngVelErr = 0;
+    let gearMismatch = false;
+    if (this.vehicle.applyWheelAngVels && v.wheels.length >= 4) {
+      const cur = this.vehicle.getState();
+      for (let i = 0; i < 4; i++) {
+        wheelAngVelErr += Math.abs((cur.wheels[i]?.angVel ?? 0) - (v.wheels[i]?.angVel ?? 0));
+      }
+      wheelAngVelErr /= 4;
+      gearMismatch = cur.gear !== v.gear;
+    }
+
     this.vehicle.body.setTranslation(v.position, true);
     this.vehicle.body.setRotation(v.rotation, true);
     this.vehicle.body.setLinvel(v.linVel, true);
@@ -251,6 +270,21 @@ export class Prediction {
         { rideY: v.axles[0].rideY, rollAngle: v.axles[0].rollAngle },
         { rideY: v.axles[1].rideY, rollAngle: v.axles[1].rollAngle },
       ]);
+    }
+    // Snap wheel angular velocities — the primary source of prediction
+    // divergence. Without this the tire force integrator replays from the
+    // wrong spin state and the truck drifts meters from the server position.
+    if (this.vehicle.applyWheelAngVels && v.wheels.length >= 4) {
+      this.vehicle.applyWheelAngVels([
+        v.wheels[0]?.angVel ?? 0,
+        v.wheels[1]?.angVel ?? 0,
+        v.wheels[2]?.angVel ?? 0,
+        v.wheels[3]?.angVel ?? 0,
+      ]);
+    }
+    // Snap engine state so replay uses the correct gear and RPM.
+    if (this.vehicle.applyEngineSnap) {
+      this.vehicle.applyEngineSnap(v.rpm, v.gear);
     }
 
     // 3. Capture the post-snap state into prev (single capture; the
@@ -292,7 +326,7 @@ export class Prediction {
     const posCap = 3.0;
     const capped =
       Math.abs(dxRaw) > posCap || Math.abs(dyRaw) > posCap || Math.abs(dzRaw) > posCap;
-    return { posErr, capped, queueLen: this.queue.length };
+    return { posErr, capped, queueLen: this.queue.length, wheelAngVelErr, gearMismatch };
   }
 
   /** Helpers below mirror the math in state(), so reconcile can compute

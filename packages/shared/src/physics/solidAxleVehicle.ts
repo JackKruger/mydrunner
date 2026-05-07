@@ -624,6 +624,7 @@ export class SolidAxleVehicle implements VehicleLike {
         spin: w.spin,
         contact: w.contact,
         suspensionLength: susp,
+        angVel: w.angVel,
       });
     }
     const aFront = this.axles[0]!;
@@ -651,6 +652,20 @@ export class SolidAxleVehicle implements VehicleLike {
   applyAxleSnaps(snaps: [AxleSnap, AxleSnap]): void {
     applyAxleSnap(this.axles[0]!, snaps[0]);
     applyAxleSnap(this.axles[1]!, snaps[1]);
+  }
+
+  applyWheelAngVels(angVels: number[]): void {
+    for (let i = 0; i < 4 && i < angVels.length; i++) {
+      this.wheels[i]!.angVel = angVels[i]!;
+    }
+  }
+
+  applyEngineSnap(rpm: number, signedGear: number): void {
+    this.engine.rpm = rpm;
+    // Convert signed gear (-1=reverse, 0=neutral, 1..5=forward) back to
+    // the internal gearIndex used by stepEngine.
+    this.engine.gearIndex = signedGear < 0 ? 0 : signedGear + 1;
+    this.engine.shiftCooldown = 0;
   }
 
   dispose(): void {

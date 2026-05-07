@@ -71,6 +71,7 @@ const SPIN_SCALE = 1000;     // millirad (mod 2pi to keep in int16)
 const SUSP_SCALE = 1000;     // mm
 const RIDEY_SCALE = 1000;    // mm
 const ROLL_SCALE = 1000;     // millirad
+const WHEEL_ANGVEL_SCALE = 100; // centirads/s; ±327 rad/s fits int16
 const TWO_PI = Math.PI * 2;
 
 const CAR_KIND_TO_IDX: Record<CarKind, number> = { patrol: 0, hilux: 1 };
@@ -111,6 +112,7 @@ function packPlayer(p: PlayerSnapshot): unknown[] {
       q(spinMod, SPIN_SCALE),
       w.contact ? 1 : 0,
       q(w.suspensionLength, SUSP_SCALE),
+      q(w.angVel, WHEEL_ANGVEL_SCALE),
     );
   }
   if (v.axles) {
@@ -152,6 +154,7 @@ function unpackPlayer(arr: unknown[]): PlayerSnapshot {
       spin: (arr[i++] as number) / SPIN_SCALE,
       contact: (arr[i++] as number) === 1,
       suspensionLength: (arr[i++] as number) / SUSP_SCALE,
+      angVel: (arr[i++] as number) / WHEEL_ANGVEL_SCALE,
     });
   }
   const axles: VehicleState['axles'] = [
@@ -175,7 +178,7 @@ function unpackPlayer(arr: unknown[]): PlayerSnapshot {
 function packSnapshot(snap: WorldSnapshot): unknown {
   return {
     t: 'snapshot',
-    s: 1, // schema version - bump if the per-player tuple changes
+    s: 2, // schema version - bump if the per-player tuple changes
     T: snap.tick | 0,
     M: snap.serverTimeMs | 0,
     P: snap.players.map(packPlayer),

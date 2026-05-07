@@ -81,6 +81,11 @@ export interface WheelState {
   spin: number; // accumulated wheel rotation (radians)
   contact: boolean;
   suspensionLength: number;
+  /** Angular velocity of the wheel in rad/s. Sent in snapshots so the
+   *  prediction can snap wheel spin rates during reconcile; without this
+   *  the tire-force integrator starts from the wrong angVel and diverges
+   *  over the replay window, producing the large reconcile pops. */
+  angVel: number;
 }
 
 export interface PlayerSnapshot {

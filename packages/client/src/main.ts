@@ -64,8 +64,11 @@ const netDiag = {
   capped: 0,
   queueLenSum: 0,
   queueLenMax: 0,
+  wheelAngVelErrSum: 0,
+  wheelAngVelErrMax: 0,
+  gearMismatches: 0,
 };
-function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: boolean; queueLen: number } | null): void {
+function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: boolean; queueLen: number; wheelAngVelErr: number; gearMismatch: boolean } | null): void {
   if (netDiag.windowStart === 0) netDiag.windowStart = recvAtMs;
   if (netDiag.prevRecvMs > 0) {
     const gap = recvAtMs - netDiag.prevRecvMs;
@@ -83,6 +86,9 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
     if (stats.capped) netDiag.capped += 1;
     netDiag.queueLenSum += stats.queueLen;
     if (stats.queueLen > netDiag.queueLenMax) netDiag.queueLenMax = stats.queueLen;
+    netDiag.wheelAngVelErrSum += stats.wheelAngVelErr;
+    if (stats.wheelAngVelErr > netDiag.wheelAngVelErrMax) netDiag.wheelAngVelErrMax = stats.wheelAngVelErr;
+    if (stats.gearMismatch) netDiag.gearMismatches += 1;
   }
   if (recvAtMs - netDiag.windowStart >= NET_DIAG_WINDOW_MS) {
     const n = netDiag.snaps || 1;
@@ -90,13 +96,16 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
     const meanPop = netDiag.popSum / n;
     const meanQueue = netDiag.queueLenSum / n;
     const elapsedS = (recvAtMs - netDiag.windowStart) / 1000;
+    const meanWheelErr = netDiag.wheelAngVelErrSum / n;
     console.log(
       `[mydrunner-client] net ${elapsedS.toFixed(1)}s snaps=${netDiag.snaps} ` +
         `gap mean=${meanGap.toFixed(1)}ms max=${netDiag.gapMaxMs.toFixed(1)}ms ` +
         `over100=${netDiag.gapOver100} over200=${netDiag.gapOver200} ` +
         `pop mean=${meanPop.toFixed(2)}m max=${netDiag.popMax.toFixed(2)}m ` +
         `over1m=${netDiag.popOver1m} capped=${netDiag.capped} ` +
-        `queueLen mean=${meanQueue.toFixed(1)} max=${netDiag.queueLenMax}`,
+        `queueLen mean=${meanQueue.toFixed(1)} max=${netDiag.queueLenMax} ` +
+        `wAVerr mean=${meanWheelErr.toFixed(2)}r/s max=${netDiag.wheelAngVelErrMax.toFixed(2)}r/s ` +
+        `gearMismatch=${netDiag.gearMismatches}`,
     );
     netDiag.windowStart = recvAtMs;
     netDiag.snaps = 0;
@@ -110,6 +119,9 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
     netDiag.capped = 0;
     netDiag.queueLenSum = 0;
     netDiag.queueLenMax = 0;
+    netDiag.wheelAngVelErrSum = 0;
+    netDiag.wheelAngVelErrMax = 0;
+    netDiag.gearMismatches = 0;
   }
 }
 // Chat module is created up-front; the onSubmit closure references the

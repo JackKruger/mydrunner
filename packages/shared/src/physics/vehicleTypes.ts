@@ -33,4 +33,10 @@ export interface VehicleLike {
    *  reconcile. */
   axleSnaps?(): [AxleSnap, AxleSnap];
   applyAxleSnaps?(snaps: [AxleSnap, AxleSnap]): void;
+  /** Snap the per-wheel angular velocities so reconcile replay starts
+   *  from the server's wheel spin state (not the prediction's diverged
+   *  value). Critical for tire force determinism during replay. */
+  applyWheelAngVels?(angVels: number[]): void;
+  /** Snap engine RPM and gear so replay torque output matches the server. */
+  applyEngineSnap?(rpm: number, signedGear: number): void;
 }
