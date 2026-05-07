@@ -328,6 +328,19 @@ export class Scene {
     this._localInputSteer = Math.max(-1, Math.min(1, steer)) * VEHICLE.maxSteer;
   }
 
+  /** Debug-only: lock the camera at fixed world coordinates looking at
+   *  a fixed target. Pass null to clear and resume normal chase/sky
+   *  cam behaviour. Used by the map-review screenshot script. */
+  private _reviewCamPos: { x: number; y: number; z: number } | null = null;
+  private _reviewCamLook: { x: number; y: number; z: number } | null = null;
+  setReviewView(
+    pos: { x: number; y: number; z: number } | null,
+    lookAt?: { x: number; y: number; z: number },
+  ): void {
+    this._reviewCamPos = pos;
+    this._reviewCamLook = pos ? (lookAt ?? { x: 0, y: 0, z: 0 }) : null;
+  }
+
   /** Override the local truck's visuals from the prediction sim. When
    *  set, render() skips snapshot interp/extrapolation for the local
    *  truck and uses these values directly. Reset on disconnect by
@@ -519,9 +532,16 @@ export class Scene {
       }
     }
 
-    // Camera follows local vehicle in the chosen mode.
+    // Camera follows local vehicle in the chosen mode, unless a debug
+    // review-view is set (used by the map-review screenshot script to
+    // position the camera at fixed world coordinates that are not tied
+    // to the local truck).
     if (this.localId) {
       this.cam.apply();
+    }
+    if (this._reviewCamPos) {
+      this.camera.position.set(this._reviewCamPos.x, this._reviewCamPos.y, this._reviewCamPos.z);
+      this.camera.lookAt(this._reviewCamLook!.x, this._reviewCamLook!.y, this._reviewCamLook!.z);
     }
 
     if (pair) this.removeMissing(present);

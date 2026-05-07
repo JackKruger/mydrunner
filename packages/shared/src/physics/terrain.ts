@@ -406,6 +406,12 @@ export const roadLayer: HeightLayer = (ctx, x, z, currentH) => {
         return currentH * ease;
       }
       if (dist < halfShoulder) {
+        // Shoulder eases from "road bench at 0" to "natural h" across
+        // the shoulder width. For gradeIntoTerrain roads in elevated
+        // terrain (mountain base) the core has already blended back
+        // to ~natural, so applying this blend would create a fresh
+        // cliff at the core edge - skip it and let natural flow.
+        if (road.gradeIntoTerrain && currentH > 8.0) continue;
         const t = (dist - halfCore) / (halfShoulder - halfCore);
         const ease = t * t * (3 - 2 * t);
         const blended = currentH * ease;
