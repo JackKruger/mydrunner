@@ -68,6 +68,7 @@ export class Scene {
     { rideY: 0, rollAngle: 0 },
     { rideY: 0, rollAngle: 0 },
   ];
+  private _present = new Set<PlayerId>();
 
   constructor(canvasParent: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -338,7 +339,8 @@ export class Scene {
   render(nowMs: number): void {
     const renderAtMs = nowMs - RENDER_DELAY_MS;
     const pair = this.pickPair(renderAtMs);
-    const present: Set<PlayerId> = new Set();
+    const present = this._present;
+    present.clear();
 
     if (pair) {
       const { a, b, t } = pair;
