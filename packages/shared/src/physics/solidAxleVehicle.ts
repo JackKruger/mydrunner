@@ -113,7 +113,16 @@ export class SolidAxleVehicle implements VehicleLike {
 
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(spawn.position.x, spawn.position.y, spawn.position.z)
-      .setLinearDamping(0.1)
+      // Linear damping in Rapier is velocity-proportional (not real
+      // aero drag) so anything above ~0.03 silently bleeds a fixed
+      // fraction of speed every second regardless of grip / surface
+      // / throttle. 0.1 was costing ~9.5%/s — at 20 m/s that's
+      // ~1.9 m/s² of phantom drag, eating ~18% of peak forward
+      // accel and making everything feel heavy. 0.02 keeps a tiny
+      // amount of velocity decay (helps the truck come to rest from
+      // a free coast in a finite time) without measurably hurting
+      // top speed or acceleration.
+      .setLinearDamping(0.02)
       .setAngularDamping(0.5)
       .setCanSleep(false);
     if (spawn.yaw) {

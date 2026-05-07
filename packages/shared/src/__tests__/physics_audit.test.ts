@@ -162,7 +162,16 @@ describe('physics audit: rolling resistance', () => {
 });
 
 describe('physics audit: engine braking', () => {
-    it('slows down significantly when throttle is released in gear', () => {
+    it('slows down meaningfully when throttle is released in gear', () => {
+        // Off-throttle coasting in gear should bleed speed via engine
+        // braking + tyre rolling resistance, not just sit at the
+        // accelerated speed forever. Threshold is intentionally loose:
+        // earlier this test required > 15% loss over 2 s, but that
+        // bound was only achievable when the chassis carried a
+        // phantom Rapier linearDamping of 0.1 (≈ 9.5 %/s velocity
+        // bleed unrelated to physical drag). With realistic damping
+        // (0.02) a heavy truck off-throttle in 2nd gear loses ~10%
+        // over 2 s — measurable, but not 15%.
         const { world, vehicle } = makeWorld();
         settle(world, 60);
 
@@ -180,7 +189,13 @@ describe('physics audit: engine braking', () => {
 
         const vEnd = Math.hypot(vehicle.body.linvel().x, vehicle.body.linvel().z);
 
-        expect(vEnd).toBeLessThan(vStart * 0.85);
+        // Want at least 5% bleed over 2s of in-gear coast — confirms
+        // engine braking is doing actual work, without baking in
+        // phantom-damping numbers.
+        expect(vEnd).toBeLessThan(vStart * 0.95);
+        // And ≥ 0.5 m/s absolute loss so the test isn't trivially
+        // satisfied by very-low-speed scenarios where 5% is tiny.
+        expect(vStart - vEnd).toBeGreaterThan(0.5);
         world.dispose();
     });
 });
