@@ -118,7 +118,9 @@ function defaultRoad(size: number): Road {
   };
 }
 
-/** Dirt connector from the main road up to the start of traverse 1. */
+/** Dirt connector from the main road up to the start of traverse 1.
+ *  gradeIntoTerrain=true keeps the trail surface following the natural
+ *  rise of the mountain base instead of cutting a slot canyon into it. */
 function mountainTrail(size: number): Road {
   const mtn = mountainFor(size);
   const baseX = mtn.x - 15; // aligns with traverse-1 start x
@@ -481,8 +483,17 @@ export const lookoutSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
   return currentSurf;
 };
 
-/** Mud surface rule - based on height. */
+/** Mud surface rule - based on height. Skips man-made surfaces so the
+ *  graded dirt trail (which sits ~1m below natural terrain by design)
+ *  doesn't suddenly turn to mud when natural h dips below the threshold. */
 export const mudSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  if (
+    currentSurf === Surface.Road ||
+    currentSurf === Surface.Dirt ||
+    currentSurf === Surface.Concrete
+  ) {
+    return currentSurf;
+  }
   if (h < -0.8) return Surface.DeepMud;
   if (h < -0.2) return Surface.Mud;
   return currentSurf;
@@ -490,6 +501,14 @@ export const mudSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
 
 /** Grass surface rule - rolling mid-elevations. */
 export const grassSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  // Don't repaint man-made surfaces (the graded trail in particular).
+  if (
+    currentSurf === Surface.Road ||
+    currentSurf === Surface.Dirt ||
+    currentSurf === Surface.Concrete
+  ) {
+    return currentSurf;
+  }
   if (h > 1.5 && h < 5) return Surface.Grass;
   return currentSurf;
 };
