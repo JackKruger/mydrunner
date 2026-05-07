@@ -80,10 +80,10 @@ export const ENGINE = {
   // grunt to overcome drag at the new taller top gear.
   peakTorqueNm: 560,
   finalDrive: 4.1,
-  // Reverse ratio softened to -2.2 (from -2.6) for a noticeably faster
-  // reverse top end; top-gear ratio dropped to 0.60 (from 0.72) so the
-  // engine has more headroom in 5th and the truck cruises faster on road.
-  gears: [-2.2, 0, 4.0, 2.3, 1.5, 1.05, 0.60],
+  // Reverse ratio softened to -1.8 (from -2.2) for a much faster reverse
+  // top end; top-gear ratio dropped to 0.60 (from 0.72) so the engine
+  // has more headroom in 5th and the truck cruises faster on road.
+  gears: [-1.8, 0, 4.0, 2.3, 1.5, 1.05, 0.60],
   reverseGear: 0,
   neutralGear: 1,
   firstGear: 2,
@@ -217,9 +217,10 @@ export const WHEEL = {
 // chassis "nose up" component (forward.y, =sin(pitch)). At flat ground
 // the multiplier is 1; at forward.y=0.5 (~30 degree climb) it's
 // (1 + INCLINE_ASSIST_MAX). Negative pitch (nose down, descending)
-// gets no boost - going downhill grip isn't the problem. Tuned to make
-// a properly-driven 4x4 climb the rocky-hill route to the summit.
-export const INCLINE_ASSIST_MAX = 1.5;
+// gets no boost - going downhill grip isn't the problem. Bumped from
+// 1.5 → 2.5 so the truck has clearly more bite when climbing the
+// rocky switchback path under throttle.
+export const INCLINE_ASSIST_MAX = 2.5;
 
 // Chase camera. Lives shared-side because the constants describe the
 // game's feel, not anything client-internal. The chase yaw uses an
