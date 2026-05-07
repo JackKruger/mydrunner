@@ -9,6 +9,7 @@
 // roughly x = -78..-50, z = -2..32, or in the road core z = -8..8.
 
 import RAPIER from '@dimforge/rapier3d-compat';
+import { TERRAIN } from '../constants.js';
 import {
   Surface, type TerrainData, worldToTerrainIndex, sampleHeightBilinear,
   getHillClimbSegments, pointToSegmentDist, HILL_CLIMB_PATH_HALF_WIDTH,
@@ -417,6 +418,26 @@ export function generateObstacles(terrain: TerrainData): Obstacle[] {
     height: 6.0,  // total pole height
     yaw: 0,
   });
+
+  // Trailhead markers — two flagpoles flanking the mountain-trail entrance
+  // so it's findable from the main road. The entrance sits at
+  // (mountain.x - 15, roadZ) where the dirt connector meets the road; we
+  // offset the poles ~5 m to either side of the 6 m-wide trail core.
+  const trailX = terrain.mountain.x - 15;
+  const trailZ = TERRAIN.roadZ;
+  for (const dx of [-5, 5]) {
+    const px = trailX + dx;
+    const pz = trailZ;
+    out.push({
+      kind: 'flagpole',
+      x: px,
+      y: sampleHeightBilinear(terrain, px, pz),
+      z: pz,
+      size: 0.07,
+      height: 5.5,
+      yaw: 0,
+    });
+  }
 
   return out;
 }
