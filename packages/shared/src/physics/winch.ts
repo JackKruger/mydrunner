@@ -4,10 +4,12 @@
 // so they accumulate with the per-tick wheel forces and are consumed by
 // the next world.step.
 //
-// Slice 1 (this file) covers the force model only: caller manages
-// spoolLength via reelIn/setSpoolLength and chooses an anchor point at
-// construction. Phase state, anchor types, motor force cap, and break
-// force land in later slices — see docs/winching-system.md §11.
+// Slice 1 covered the bare force model. Slice 2 (this revision) adds
+// the input-driven spool loop: setReelInput latches in/out booleans;
+// stepSpool advances the rest length each tick, gated on the motor
+// force cap so impossible loads stall the motor instead of letting the
+// rest length teleport the chassis. Phase state, anchor types, and
+// break force land in later slices — see docs/winching-system.md §11.
 
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { WINCH } from '../constants.js';
@@ -22,6 +24,9 @@ export class Winch {
    *  the cable is slack. Exposed for HUD / tests. */
   tension = 0;
 
+  private reelInActive = false;
+  private reelOutActive = false;
+
   constructor(
     private readonly body: RAPIER.RigidBody,
     private readonly mountLocal: Vec3,
@@ -32,17 +37,25 @@ export class Winch {
     this.spoolLength = clampSpool(initialSpoolLength);
   }
 
-  /** Shrink the rest length toward zero at the configured spool speed.
-   *  When the cable is taut, this is what does the recovery work: the
-   *  spring keeps the body pulled toward `anchor`, and reducing the
-   *  rest length advances the body along the cable. */
-  reelIn(dt: number): void {
-    this.spoolLength = Math.max(0, this.spoolLength - WINCH.spoolSpeed * dt);
+  /** Latch the player's reel-in / reel-out intent. Both true cancels
+   *  out (treated as no input). The actual spool motion happens in
+   *  stepSpool, which respects the motor force cap. */
+  setReelInput(input: { in: boolean; out: boolean }): void {
+    this.reelInActive = input.in && !input.out;
+    this.reelOutActive = input.out && !input.in;
   }
 
-  /** Pay cable out. */
-  reelOut(dt: number): void {
-    this.spoolLength = Math.min(WINCH.maxLength, this.spoolLength + WINCH.spoolSpeed * dt);
+  /** Advance the spool by one tick. Reel-in is gated on the motor force
+   *  cap: if last tick's tension exceeded it, the motor stalls and the
+   *  rest length is held. Reel-out is unconditional (paying cable out
+   *  doesn't fight the load). */
+  stepSpool(dt: number): void {
+    if (this.reelInActive && this.tension < WINCH.motorMaxForce) {
+      this.spoolLength = Math.max(0, this.spoolLength - WINCH.spoolSpeed * dt);
+    }
+    if (this.reelOutActive) {
+      this.spoolLength = Math.min(WINCH.maxLength, this.spoolLength + WINCH.spoolSpeed * dt);
+    }
   }
 
   /** Compute and apply the cable force on the vehicle body. Call once

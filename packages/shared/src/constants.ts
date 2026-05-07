@@ -220,15 +220,23 @@ export const WHEEL = {
 // pull, and damping near 0.3 critical so the cable doesn't ring against
 // the suspension.
 export const WINCH = {
-  maxLength:   25,         // m, total spool capacity
-  spoolSpeed:  0.8,        // m/s reel rate
-  stiffness:   200_000,    // N/m
-  damping:     8_000,      // N·s/m
+  maxLength:    25,         // m, total spool capacity
+  spoolSpeed:   0.8,        // m/s reel rate
+  stiffness:    200_000,    // N/m
+  damping:      8_000,      // N·s/m
+  // Motor force cap. The reel motor can advance the spool only when the
+  // cable's last-tick tension was below this threshold; above it the
+  // motor stalls and spoolLength is held. Sized at ~32 kN above the
+  // ~12 kN steady-state pull needed to drag a 2500 kg chassis at 0.5 G,
+  // so normal recoveries reel smoothly but impossible loads (rooted
+  // vehicle, anchor too steep) stop the motor instead of producing
+  // infinite chassis force via teleporting the rest length.
+  motorMaxForce: 80_000,    // N
   // Fairlead point in chassis-local frame. Low on the front bumper:
   // chassis half-extent z = 1.9, so z = 1.7 sits just inside the front
   // edge; y = -0.2 puts it below mid-height (chassis bottom is y = -0.45),
   // matching where a real winch sits on the bumper.
-  mountLocal:  { x: 0, y: -0.2, z: 1.7 },
+  mountLocal:   { x: 0, y: -0.2, z: 1.7 },
 } as const;
 
 // Hill-climb traction assist. Real 4x4s lose grip on slopes because
