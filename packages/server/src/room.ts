@@ -54,6 +54,13 @@ export class Room {
   private startedAtMs = Date.now();
   private snapAccumMs = 0;
   private loopHandle: NodeJS.Timeout | null = null;
+  /** Wall-clock deadline for the next tick. The loop catches up by running
+   *  multiple tickOnce() calls in a row when behind, instead of slipping
+   *  one full tick on every overrun like the older
+   *  `setTimeout(loop, max(0, target-work))` did. Without this the
+   *  snapshot rate slipped from 30 Hz to ~20 Hz under load, which the
+   *  client reported as `gap mean=50ms` and growing prediction queue. */
+  private nextTickAtMs = 0;
   private rutBuffer: Physics.RutBuffer;
   private rutVersion = 0;
   private ticksSinceRutFlush = 0;
@@ -67,21 +74,34 @@ export class Room {
 
   start(): void {
     if (this.loopHandle) return;
+    this.nextTickAtMs = performance.now();
     this.runLoop();
   }
 
   private runLoop(): void {
-    const startMs = performance.now();
-    this.tickOnce();
-    const endMs = performance.now();
-    const workMs = endMs - startMs;
-    const waitMs = Math.max(0, TARGET_TICK_MS - workMs);
-
-    // Using setTimeout(..., wait) is generally more stable than setInterval
-    // because it ensures at least 'wait' ms between the end of one tick
-    // and the start of the next, preventing ticks from "stacking" if
-    // one takes too long.
-    this.loopHandle = setTimeout(() => this.runLoop(), waitMs) as unknown as NodeJS.Timeout;
+    // Catch up any ticks whose deadlines have passed. Cap the catch-up at
+    // 4 ticks per loop iteration so a single Node GC pause or a long tick
+    // doesn't burn the event loop replaying half a second of physics in
+    // one go - we'd rather drop the difference and resync than freeze.
+    let caught = 0;
+    let now = performance.now();
+    while (now >= this.nextTickAtMs && caught < 4) {
+      this.tickOnce();
+      this.nextTickAtMs += TARGET_TICK_MS;
+      caught += 1;
+      now = performance.now();
+    }
+    // If we're more than 250 ms behind real time even after the catch-up
+    // budget, give up on the lost ticks and resync the deadline. Better
+    // to skip than to spiral.
+    if (now - this.nextTickAtMs > 250) {
+      this.nextTickAtMs = now;
+    }
+    const wait = Math.max(0, this.nextTickAtMs - now);
+    // setTimeout has ~1 ms minimum on Linux; that's fine because the
+    // deadline arithmetic above corrects for it. setImmediate would burn
+    // CPU when ahead of schedule.
+    this.loopHandle = setTimeout(() => this.runLoop(), wait) as unknown as NodeJS.Timeout;
   }
 
   stop(): void {
@@ -219,7 +239,11 @@ export class Room {
 
     this.snapAccumMs += FIXED_DT * 1000;
     if (this.snapAccumMs >= SNAPSHOT_INTERVAL_MS) {
-      this.snapAccumMs = 0;
+      // Subtract the interval rather than resetting to 0 so the fractional
+      // remainder carries forward; otherwise we lose ~0.5 ms per cycle
+      // and the broadcast cadence drifts off the intended 30 Hz over
+      // the course of a session.
+      this.snapAccumMs -= SNAPSHOT_INTERVAL_MS;
       this.broadcastSnapshot();
     }
 

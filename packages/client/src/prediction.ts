@@ -225,10 +225,11 @@ export class Prediction {
     // mid-replay and the queue grows faster than it drains - a death
     // spiral that locks the tab. Triggered in practice by GC pauses,
     // OS scheduler hiccups, or a sibling tab spiking CPU.
-    // Capping at 120 (~2s of input at 60Hz) bounds reconcile cost to a
-    // constant; during a spike the local truck briefly lags reality by
-    // the dropped span instead of freezing the whole tab.
-    const MAX_REPLAY = 120;
+    // 30 ticks ≈ 500 ms of input at 60 Hz. Past that the local truck is
+    // so far ahead of the server that the user perceives a snap regardless
+    // of how much we replay; spending more CPU on a longer replay just
+    // starves the render loop and grows the divergence further.
+    const MAX_REPLAY = 30;
     if (this.queue.length > MAX_REPLAY) {
       this.queue = this.queue.slice(-MAX_REPLAY);
     }
@@ -306,11 +307,17 @@ export class Prediction {
     //    at 10 m/s). The visual offset is now pure replay divergence, not
     //    "how far ahead is the prediction" distance.
     const qLen = this.queue.length;
+    // Suppress the engine's auto-shift state machine for the duration of
+    // the replay. Without this it can flip the gear within the first
+    // replayed tick, undoing applyEngineSnap and producing the
+    // gearMismatch / replayDiv we observe in netDiag logs.
+    this.vehicle.setReplaying?.(true);
     for (let qi = 0; qi < qLen; qi++) {
       if (qi === qLen - 1) this.capturePrev(); // capture one step before end
       this.vehicle.setInput(this.queue[qi]!.input);
       this.world.step();
     }
+    this.vehicle.setReplaying?.(false);
     if (qLen === 0) this.capturePrev(); // nothing to replay; snap IS prev
 
     // 4. Measure actual replay divergence: |rendered - P_replay|.

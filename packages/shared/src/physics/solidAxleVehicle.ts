@@ -548,43 +548,14 @@ export class SolidAxleVehicle implements VehicleLike {
       if (groundSpeed < STATIONARY && Math.abs(w.angVel) < 1.0) continue;
       w.spin += w.angVel * FIXED_DT;
     }
-
-    // Refresh axle state from POST-STEP body pose. preStep computes
-    // rideY/rollAngle from the body BEFORE world.step() integrates it
-    // forward, so without this refresh the axle pose returned by
-    // getState() lags the chassis by one physics tick. At 60 Hz that's
-    // a 4-5 mm wobble at typical ride-spring frequencies - visible as
-    // wheels not staying planted to the ground while the chassis bobs.
-    // Re-running the kinematic axle math here aligns visual axle state
-    // with the chassis pose at the same instant. Cost: 4 raycasts per
-    // vehicle per tick. Force calculations next tick still happen in
-    // preStep with the pre-integration body pose - this refresh only
-    // touches the kinematic axle DOFs.
-    const t = this.body.translation();
-    const r = this.body.rotation();
-    for (let aIdx = 0; aIdx < 2; aIdx++) {
-      const axle = this.axles[aIdx]!;
-      const ag = axle.geom;
-      const wL = this.wheels[aIdx * 2]!;
-      const wR = this.wheels[aIdx * 2 + 1]!;
-      const rayLift = 0.5;
-      const leftLocal = { x: -ag.trackHalf, y: ag.centerLocalY + rayLift, z: ag.centerLocalZ };
-      const rightLocal = { x: +ag.trackHalf, y: ag.centerLocalY + rayLift, z: ag.centerLocalZ };
-      const leftWorld = addVec(t, rotateVecByQuat(leftLocal, r));
-      const rightWorld = addVec(t, rotateVecByQuat(rightLocal, r));
-      const rayDir: Vec3 = { x: 0, y: -1, z: 0 };
-      const maxToi = rayLift + ag.suspensionRestLength + ag.droopMax + this.geom.wheelRadius;
-      castWheelRay(this.world, this.body, leftWorld, rayDir, maxToi, ag.suspensionRestLength + rayLift, this.geom.wheelRadius, wL);
-      castWheelRay(this.world, this.body, rightWorld, rayDir, maxToi, ag.suspensionRestLength + rayLift, this.geom.wheelRadius, wR);
-      stepAxle(axle, {
-        leftDepth: wL.contactDepth,
-        rightDepth: wR.contactDepth,
-        leftContact: wL.contact,
-        rightContact: wR.contact,
-        chassisVertVelAtAnchor: 0,
-        dt: FIXED_DT,
-      });
-    }
+    // Visual axle pose (rideY/rollAngle) is left at the value preStep
+    // computed from the pre-integration body pose. The previous
+    // implementation re-cast 4 rays per vehicle here so the axle visual
+    // matched the post-integration chassis pose; that cost ~480 raycasts
+    // per second per player and was the dominant server tick overrun
+    // when load was high. Trade-off: at 60 Hz the wheels visually trail
+    // the chassis by one tick (~4-5 mm at typical spring frequencies) -
+    // not noticeable on a moving chassis, dwarfed by camera motion.
   }
 
   wheelSamples(): WheelSample[] {
@@ -666,6 +637,10 @@ export class SolidAxleVehicle implements VehicleLike {
     // the internal gearIndex used by stepEngine.
     this.engine.gearIndex = signedGear < 0 ? 0 : signedGear + 1;
     this.engine.shiftCooldown = 0;
+  }
+
+  setReplaying(replaying: boolean): void {
+    this.engine.replaying = replaying;
   }
 
   dispose(): void {

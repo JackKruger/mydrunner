@@ -39,4 +39,9 @@ export interface VehicleLike {
   applyWheelAngVels?(angVels: number[]): void;
   /** Snap engine RPM and gear so replay torque output matches the server. */
   applyEngineSnap?(rpm: number, signedGear: number): void;
+  /** Suppress the auto-shift state machine while reconcile replay is in
+   *  flight. The auto-shift logic reads RPM + speed and would otherwise
+   *  overwrite the snapped gear within a tick. Caller flips this to true
+   *  before the replay loop, false after. */
+  setReplaying?(replaying: boolean): void;
 }

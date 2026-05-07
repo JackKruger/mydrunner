@@ -69,8 +69,10 @@ const netDiag = {
   gearMismatches: 0,
   replayDivSum: 0,
   replayDivMax: 0,
+  reconcileMsSum: 0,
+  reconcileMsMax: 0,
 };
-function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: boolean; queueLen: number; wheelAngVelErr: number; gearMismatch: boolean; replayDiv: number } | null): void {
+function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: boolean; queueLen: number; wheelAngVelErr: number; gearMismatch: boolean; replayDiv: number } | null, reconcileMs: number): void {
   if (netDiag.windowStart === 0) netDiag.windowStart = recvAtMs;
   if (netDiag.prevRecvMs > 0) {
     const gap = recvAtMs - netDiag.prevRecvMs;
@@ -94,6 +96,8 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
     netDiag.replayDivSum += stats.replayDiv;
     if (stats.replayDiv > netDiag.replayDivMax) netDiag.replayDivMax = stats.replayDiv;
   }
+  netDiag.reconcileMsSum += reconcileMs;
+  if (reconcileMs > netDiag.reconcileMsMax) netDiag.reconcileMsMax = reconcileMs;
   if (recvAtMs - netDiag.windowStart >= NET_DIAG_WINDOW_MS) {
     const n = netDiag.snaps || 1;
     const meanGap = netDiag.gapSumMs / Math.max(1, netDiag.snaps - 1);
@@ -102,6 +106,7 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
     const elapsedS = (recvAtMs - netDiag.windowStart) / 1000;
     const meanWheelErr = netDiag.wheelAngVelErrSum / n;
     const meanReplayDiv = netDiag.replayDivSum / n;
+    const meanReconcileMs = netDiag.reconcileMsSum / n;
     console.log(
       `[mydrunner-client] net ${elapsedS.toFixed(1)}s snaps=${netDiag.snaps} ` +
         `gap mean=${meanGap.toFixed(1)}ms max=${netDiag.gapMaxMs.toFixed(1)}ms ` +
@@ -111,7 +116,8 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
         `queueLen mean=${meanQueue.toFixed(1)} max=${netDiag.queueLenMax} ` +
         `wAVerr mean=${meanWheelErr.toFixed(2)}r/s max=${netDiag.wheelAngVelErrMax.toFixed(2)}r/s ` +
         `gearMismatch=${netDiag.gearMismatches} ` +
-        `replayDiv mean=${meanReplayDiv.toFixed(3)}m max=${netDiag.replayDivMax.toFixed(3)}m`,
+        `replayDiv mean=${meanReplayDiv.toFixed(3)}m max=${netDiag.replayDivMax.toFixed(3)}m ` +
+        `reconcile mean=${meanReconcileMs.toFixed(2)}ms max=${netDiag.reconcileMsMax.toFixed(2)}ms`,
     );
     netDiag.windowStart = recvAtMs;
     netDiag.snaps = 0;
@@ -128,6 +134,10 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
     netDiag.wheelAngVelErrSum = 0;
     netDiag.wheelAngVelErrMax = 0;
     netDiag.gearMismatches = 0;
+    netDiag.replayDivSum = 0;
+    netDiag.replayDivMax = 0;
+    netDiag.reconcileMsSum = 0;
+    netDiag.reconcileMsMax = 0;
   }
 }
 // Chat module is created up-front; the onSubmit closure references the
@@ -340,9 +350,16 @@ async function start(): Promise<void> {
   // (visible as stutter when driving). Now each render frame catches
   // up the prediction sim by however many fixed steps fit.
   let predictAcc = 0;
-  // Cap the steps run per frame so a single pause (tab switch / GC)
-  // doesn't trigger a spiral-of-death.
-  const MAX_STEPS_PER_FRAME = 5;
+  // Bound prediction work per frame by wall-clock instead of a hard step
+  // count. A hard cap (e.g. 5 steps/frame) combined with a slow frame
+  // forces predictAcc to 0 and leaves the local prediction one or two
+  // ticks behind the server, which makes the next reconcile larger,
+  // which makes that frame slower - a feedback loop that lands at
+  // 20-30 FPS. Stepping until 8 ms have been spent inside the loop
+  // keeps the prediction in lockstep with the server when we have
+  // time, and yields to the renderer when we don't.
+  const PREDICT_BUDGET_MS = 8;
+  const HARD_STEP_CAP = 12; // catastrophic-stall safety net
 
   let fps = 0;
   let frameCount = 0;
@@ -369,21 +386,28 @@ async function start(): Promise<void> {
     if (pendingSnap && prediction && localId) {
       const { snap, recvAtMs } = pendingSnap;
       pendingSnap = null;
+      const reconStart = performance.now();
       const stats = prediction.reconcile(snap, localId);
-      netDiagOnSnapshot(recvAtMs, stats);
+      const reconMs = performance.now() - reconStart;
+      netDiagOnSnapshot(recvAtMs, stats, reconMs);
     }
 
     if (connected && prediction) {
       predictAcc += frameDt;
       let steps = 0;
-      while (predictAcc >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
+      const stepStart = performance.now();
+      while (predictAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
         const input = sampleInput();
         net.sendInput(input);
         prediction.pushAndStep(input);
         predictAcc -= FIXED_DT;
         steps += 1;
+        if (performance.now() - stepStart >= PREDICT_BUDGET_MS) break;
       }
-      if (steps >= MAX_STEPS_PER_FRAME) predictAcc = 0;
+      // If we hit the hard cap (>200 ms of unstepped accumulator) we're
+      // never catching up, so drop the leftover. The wall-clock cap is
+      // not an over-budget signal - we just yielded to the renderer.
+      if (steps >= HARD_STEP_CAP) predictAcc = 0;
     }
     // Fractional time left over in the accumulator becomes the alpha
     // for state interpolation. This ensures smooth motion even when
