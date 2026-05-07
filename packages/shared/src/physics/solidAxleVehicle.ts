@@ -234,7 +234,17 @@ export class SolidAxleVehicle implements VehicleLike {
       const leftWorld = addVec(t, rotateVecByQuat(leftLocal, r));
       const rightWorld = addVec(t, rotateVecByQuat(rightLocal, r));
 
-      const rayDir: Vec3 = { x: 0, y: -1, z: 0 };
+      // Cast the ray along the chassis's local -Y axis (rotated to world)
+      // rather than world-down. Rationale: the wheel TRAVELS along
+      // chassis-Y - that's the suspension axis. Casting world-down works
+      // on level ground but on a rolled chassis (truck across a slope)
+      // the world-down ray from a chassis-local origin no longer passes
+      // through where the wheel actually is, so the ray finds the wrong
+      // ground point. Rolled-chassis bug observed: wheels on the
+      // higher side reading as buried in terrain because the world-down
+      // ray hits a slope crest closer than the wheel's real position.
+      const rayDirLocal: Vec3 = { x: 0, y: -1, z: 0 };
+      const rayDir = rotateVecByQuat(rayDirLocal, r);
       // Max range includes the lift, full rest length, droop, and wheel radius.
       const maxToi = rayLift + ag.suspensionRestLength + ag.droopMax + this.geom.wheelRadius;
 
@@ -334,12 +344,26 @@ export class SolidAxleVehicle implements VehicleLike {
         const F = 0.5 * ag.rideStiffness * comp
                 + 0.5 * ag.rideDamping * engagement * compRate;
         w.lastForce = F;
-        // Apply in world-up direction. Raycasts go world-down so compression
-        // is a world-Y quantity; pushing in chassis-up instead leaked a
-        // horizontal component at any non-zero pitch and caused the vehicle
-        // to creep forward continuously on flat ground.
+        // Apply spring force along the CONTACT NORMAL (the direction the
+        // ground actually pushes on the wheel), not chassis-up or world-up.
+        //   - Flat ground: normal = world-up, so no horizontal component
+        //     at any chassis pitch. Earlier chassis-up version creeped
+        //     ~0.9 m / 4 s under tan(pitch)*F at any settled pitch; this
+        //     formulation has zero creep because the normal IS world-up
+        //     when the ground is flat, regardless of how the chassis
+        //     itself is oriented.
+        //   - Cross-slope: contact normals on both sides point
+        //     up-and-uphill (slope perpendicular). The asymmetric
+        //     compression (downhill wheel compressed more, uphill less)
+        //     produces a chassis roll moment so the body tilts WITH the
+        //     slope - fixes the "stays flat" complaint.
+        //   - Going up a hill: forward tilt of the chassis is matched by
+        //     a slope-normal force that has a backward component
+        //     opposing gravity's downhill pull. Net force is
+        //     slope-perpendicular - same as a real wheel.
+        const n = w.contactNormal;
         const sf = this._scratchForce;
-        sf.x = 0; sf.y = F; sf.z = 0;
+        sf.x = n.x * F; sf.y = n.y * F; sf.z = n.z * F;
         this.body.addForceAtPoint(sf, side.world, true);
         w.prevContactDepth = comp;
       }
