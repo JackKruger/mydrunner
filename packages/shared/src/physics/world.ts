@@ -33,8 +33,6 @@ export class World {
   readonly terrain: TerrainData;
   readonly obstacles: Obstacle[];
   readonly landmarks: Landmarks;
-  private terrainBody: RAPIER.RigidBody;
-  private terrainCollider: RAPIER.Collider;
   private obstacleBodies: RAPIER.RigidBody[] = [];
   private landmarkBodies: RAPIER.RigidBody[] = [];
 
@@ -42,9 +40,7 @@ export class World {
     this.rapier = RAPIER;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y, z: 0 });
     this.terrain = opts.terrain ?? generateTerrain(opts.generate);
-    const built = this.buildTerrain(this.terrain);
-    this.terrainBody = built.body;
-    this.terrainCollider = built.collider;
+    this.buildTerrain(this.terrain);
     // Obstacles are deterministic from the same seed - both client and
     // server generate identical lists, no network sync needed.
     this.obstacles = generateObstacles(this.terrain);
@@ -53,7 +49,7 @@ export class World {
     this.landmarkBodies = spawnLandmarkColliders(this.world, this.landmarks);
   }
 
-  private buildTerrain(t: TerrainData): { body: RAPIER.RigidBody; collider: RAPIER.Collider } {
+  private buildTerrain(t: TerrainData): void {
     const n = t.resolution;
     const scale = { x: t.size, y: 1, z: t.size };
     // Rapier's heightfield expects a column-major (i.e. transposed) matrix:
@@ -73,18 +69,7 @@ export class World {
     ).setFriction(1.0);
     const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
     const body = this.world.createRigidBody(bodyDesc);
-    const collider = this.world.createCollider(colliderDesc, body);
-    return { body, collider };
-  }
-
-  /** Replace the heightfield in place (used by deformable ruts). Existing
-   *  vehicles stay attached to the world; only the static terrain swaps. */
-  rebuildTerrain(): void {
-    this.world.removeCollider(this.terrainCollider, true);
-    this.world.removeRigidBody(this.terrainBody);
-    const built = this.buildTerrain(this.terrain);
-    this.terrainBody = built.body;
-    this.terrainCollider = built.collider;
+    this.world.createCollider(colliderDesc, body);
   }
 
   spawnVehicle(id: string, spawn: VehicleSpawn, kind: CarKind = 'patrol'): VehicleLike {

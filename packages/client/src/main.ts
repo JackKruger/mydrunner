@@ -1,10 +1,15 @@
-// Client entry point. Owns the net client, the scene, and the input loop.
+// Client entry point. Owns the net client, the scene, the prediction sim,
+// and the input loop.
 //
-// The render path is purely server-authoritative: input is sampled at
-// 60 Hz and shipped to the server, the server simulates physics, snapshots
-// arrive at 30 Hz, and Scene.render() interpolates everything (local
-// truck included) ~100 ms behind the server clock. There is no local
-// physics sim, no prediction, and no reconcile.
+// Input is sampled at 60 Hz, shipped to the server, AND fed to the local
+// prediction sim (`prediction.ts`) which integrates the same shared
+// physics in lockstep. Each server snapshot soft-corrects the local body
+// toward the server's extrapolated pose. Remote vehicles render from
+// interpolated snapshots ~100 ms behind the server clock; the local
+// truck's rendered pose comes from the prediction sim each frame so it
+// responds to input within one tick (~16 ms). See prediction.ts for the
+// soft-correction model and why it replaced the older replay-based
+// prediction.
 
 import { Physics, FIXED_DT, type PlayerId } from '@mydrunner/shared';
 
@@ -50,11 +55,10 @@ const scene = new Scene(app);
 const engineAudio = new EngineAudio();
 
 // Network + frame diagnostics: snapshot arrival jitter and per-frame
-// CPU/GPU breakdown. Cheap counters, flushed every 5 s. Now that there
-// is no client-side prediction, the relevant signals are jitter (gaps
-// over the interpolation buffer) and frame time. The reconcile/replay/
-// wheel-angVel-error fields the previous version tracked are gone with
-// the prediction layer they were diagnosing.
+// CPU/GPU breakdown. Cheap counters, flushed every 5 s. The
+// soft-correction prediction (no replay, no input queue) means the only
+// netcode-side signals worth tracking are jitter (gaps over the
+// interpolation buffer) and frame time.
 const NET_DIAG_WINDOW_MS = 5000;
 const netDiag = {
   windowStart: 0,
@@ -235,9 +239,6 @@ async function start(): Promise<void> {
           engineAudio.set(me.vehicle.rpm, me.vehicle.throttle);
         }
       }
-    },
-    onRut(_version, cells) {
-      scene.applyRuts(cells);
     },
     onChat(from, fromName, text) {
       chat.push(fromName, text, from === localId);

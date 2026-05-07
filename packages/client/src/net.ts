@@ -6,7 +6,6 @@ import type { TerrainHandshake, SpawnHandshake } from '@mydrunner/shared/net';
 export interface NetEvents {
   onWelcome(id: PlayerId, serverTimeMs: number, terrain: TerrainHandshake, spawn: SpawnHandshake): void;
   onSnapshot(snap: WorldSnapshot, recvAtMs: number): void;
-  onRut(version: number, cells: { i: number; dy: number }[]): void;
   onChat(from: PlayerId, fromName: string, text: string, serverTimeMs: number): void;
   onClose(reason: string): void;
   onOpen(): void;
@@ -49,9 +48,6 @@ export class NetClient {
           break;
         case 'snapshot':
           this.events.onSnapshot(msg.snap, performance.now());
-          break;
-        case 'rut':
-          this.events.onRut(msg.version, msg.cells);
           break;
         case 'chat':
           this.events.onChat(msg.from, msg.fromName, msg.text, msg.serverTimeMs);

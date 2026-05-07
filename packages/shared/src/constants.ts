@@ -360,18 +360,3 @@ export const TRAIL_FEATURES = {
   },
 } as const;
 
-// Rut formation. Each driven wheel in mud carves the heightmap each tick:
-//   delta_y = RUT_RATE * (1 - grip) * |throttle| * wheelInContact
-// Capped to RUT_MAX_DEPTH per cell. Heightfield collider is rebuilt every
-// RUT_REBUILD_INTERVAL_TICKS to keep physics in sync with visuals.
-export const RUT_RATE = 0.3035;        // m per tick at full slip  0.0035;
-export const RUT_MAX_DEPTH = 0.9;      // m below original height 0.6;    
-export const RUT_REBUILD_INTERVAL_TICKS = 30;
-// Disabled for now: at the current world size (200m) / heightfield
-// resolution (64), each rut cell is ~3.17m across - much wider than a
-// tire - so wheel passes sink large patches instead of carving tracks.
-// Also causes prediction divergence (the client's prediction world
-// never receives rut deltas), producing periodic rubberbanding on mud.
-// Re-enable once terrain resolution bumps or a sub-cell rut overlay
-// (visuals decoupled from the collider) lands.
-export const RUTS_ENABLED = false;

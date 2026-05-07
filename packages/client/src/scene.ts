@@ -14,7 +14,7 @@ import {
 } from '@mydrunner/shared';
 import { RENDER_DELAY_MS } from './net.js';
 import { TerrainMesh } from './terrain.js';
-import { buildCarMesh, colorHash } from './carMesh.js';
+import { buildCarMesh, colorHash } from './carMesh/index.js';
 import { createNameplate, disposeNameplate } from './nameplate.js';
 import { ParticleSystem } from './particles.js';
 import { Obstacles } from './obstacles.js';
@@ -68,9 +68,10 @@ export class Scene {
     { rideY: 0, rollAngle: 0 },
     { rideY: 0, rollAngle: 0 },
   ];
-  // Last interpolated state for the local player. Kept around for the
-  // surface-name HUD lookup, the debug-panel axle readout, and e2e
-  // assertions - all of which used to read from prediction.state().
+  // Last rendered state for the local player. Read by the surface-name
+  // HUD lookup, the debug-panel axle readout, and e2e assertions.
+  // Populated by setLocalVehiclePose() each frame from prediction.state()
+  // after a server snapshot has primed the sim.
   private _localPos = { x: 0, y: 0, z: 0 };
   private _localSteer = 0;
   private _localAxlesLast: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] = [
@@ -187,12 +188,6 @@ export class Scene {
     const t = Physics.generateTerrain({ seed, size, resolution });
     this.landmarks = new LandmarkMeshes(Physics.landmarksFor(t));
     this.scene.add(this.landmarks.group);
-  }
-
-  applyRuts(cells: { i: number; dy: number }[]): void {
-    if (!this.terrain) return;
-    for (const c of cells) this.terrain.applyRut(c.i, c.dy);
-    this.terrain.flush();
   }
 
   cycleCameraMode(): void {
@@ -426,11 +421,11 @@ export class Scene {
         const vis = this.ensureVehicle(pa.id, isLocal, pa.carKind);
         this.setNameplate(vis, pa.name, isLocal);
 
-        // Server-authoritative rendering: every vehicle (local included)
-        // is interpolated from the snapshot pair at the same RENDER_DELAY_MS
-        // offset. The local truck lags real input by that delay, but in
-        // exchange there is no client-side prediction loop, no reconcile
-        // stutter, and the local truck cannot ever disagree with the server.
+        // Snapshot interpolation. Remote vehicles render at this lagged
+        // pose continuously; the local vehicle is interpolated here too
+        // as the fallback before the prediction sim has produced its
+        // first override (see setLocalVehiclePose / the override loop in
+        // render() further down).
         vis.group.position.set(
           pa.vehicle.position.x + (pb.vehicle.position.x - pa.vehicle.position.x) * t,
           pa.vehicle.position.y + (pb.vehicle.position.y - pa.vehicle.position.y) * t,
@@ -442,7 +437,7 @@ export class Scene {
         vis.group.quaternion.copy(this._qa);
 
         // Interpolate axle DOFs from the snapshot pair. Falls back to
-        // rest if the server omitted axles (legacy raycast vehicle).
+        // rest if a snapshot lacks axle state.
         const axA = pa.vehicle.axles ?? null;
         const axB = pb.vehicle.axles ?? axA;
         this._axleBuf[0]!.rideY = 0; this._axleBuf[0]!.rollAngle = 0;

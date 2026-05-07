@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
-import { buildCarMesh, colorHash } from './carMesh.js';
+import { buildCarMesh, colorHash } from './carMesh/index.js';
 
 export class LandmarkMeshes {
   readonly group = new THREE.Group();

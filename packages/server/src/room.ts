@@ -5,8 +5,6 @@ import {
   FIXED_DT,
   TICK_RATE,
   SNAPSHOT_INTERVAL_MS,
-  RUT_REBUILD_INTERVAL_TICKS,
-  RUTS_ENABLED,
   EMPTY_INPUT,
   VEHICLE,
   AXLE,
@@ -78,15 +76,11 @@ export class Room {
    *  snapshot rate slipped from 30 Hz to ~20 Hz under load, which the
    *  client reported as `gap mean=50ms` and growing prediction queue. */
   private nextTickAtMs = 0;
-  private rutBuffer: Physics.RutBuffer;
-  private rutVersion = 0;
-  private ticksSinceRutFlush = 0;
   private perf: PerfBucket = newPerfBucket();
   private lastTickStartMs = 0;
 
   constructor(seed = 1337) {
     this.world = new Physics.World({ generate: { size: 320, resolution: 128, seed } });
-    this.rutBuffer = new Physics.RutBuffer(this.world.terrain);
   }
 
   start(): void {
@@ -175,7 +169,6 @@ export class Room {
           seed: this.world.terrain.seed,
           size: this.world.terrain.size,
           resolution: this.world.terrain.resolution,
-          rutVersion: this.rutVersion,
         },
         spawn: { position: spawn.position, yaw: spawn.yaw },
       }),
@@ -277,34 +270,6 @@ export class Room {
     }
 
     this.ejectOffMapPlayers();
-
-    // Rut accumulation + flush. Gated on RUTS_ENABLED - currently off
-    // because per-cell footprint is much wider than a tire and the
-    // client prediction world doesn't receive deltas, causing periodic
-    // reconcile snaps. Buffer machinery is left wired so it can flip
-    // back on without touching this loop.
-    if (RUTS_ENABLED) {
-      for (const p of this.players.values()) {
-        for (const w of p.vehicle.wheelSamples()) {
-          this.rutBuffer.recordWheel(w.x, w.z, w.slip, w.contact);
-        }
-      }
-      this.ticksSinceRutFlush += 1;
-      if (this.ticksSinceRutFlush >= RUT_REBUILD_INTERVAL_TICKS) {
-        this.ticksSinceRutFlush = 0;
-        const deltas = this.rutBuffer.flush();
-        if (deltas.length > 0) {
-          this.world.rebuildTerrain();
-          this.rutVersion += 1;
-          const msg = Net.encode({
-            t: 'rut',
-            version: this.rutVersion,
-            cells: deltas,
-          });
-          for (const p of this.players.values()) p.handle.send(msg);
-        }
-      }
-    }
 
     this.snapAccumMs += FIXED_DT * 1000;
     if (this.snapAccumMs >= SNAPSHOT_INTERVAL_MS) {

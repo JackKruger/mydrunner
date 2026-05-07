@@ -12,8 +12,6 @@ export interface TerrainHandshake {
   seed: number;
   size: number;
   resolution: number;
-  /** Optional rut deltas applied since terrain was generated (for late-joiners). */
-  rutVersion?: number;
 }
 
 export interface SpawnHandshake {
@@ -33,8 +31,6 @@ export type ServerMessage =
     }
   | { t: 'snapshot'; snap: WorldSnapshot }
   | { t: 'pong'; clientTimeMs: number; serverTimeMs: number }
-  /** Broadcast when the heightmap mutates (ruts deepen). Coalesced by version. */
-  | { t: 'rut'; version: number; cells: { i: number; dy: number }[] }
   /** Chat relay - includes the sender's id and display name plus the
    *  server's monotonic time so clients can show "X seconds ago". */
   | { t: 'chat'; from: PlayerId; fromName: string; text: string; serverTimeMs: number }

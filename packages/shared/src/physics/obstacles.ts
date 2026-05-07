@@ -14,18 +14,7 @@ import {
   Surface, type TerrainData, worldToTerrainIndex, sampleHeightBilinear,
   getHillClimbSegments, pointToSegmentDist, HILL_CLIMB_PATH_HALF_WIDTH,
 } from './terrain.js';
-
-// Simple seeded RNG for deterministic obstacle placement
-function mulberry32(seed: number) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) | 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+import { mulberry32 } from './util.js';
 
 export type ObstacleKind = 'rock' | 'tree' | 'pine' | 'ramp' | 'flagpole';
 

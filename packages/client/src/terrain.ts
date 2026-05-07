@@ -15,48 +15,25 @@ import { Physics } from '@mydrunner/shared';
 export class TerrainMesh {
   readonly mesh: THREE.Mesh;
   readonly terrain: Physics.TerrainData;
-  private positions: Float32Array;
-  private geometry: THREE.PlaneGeometry;
-  private material: THREE.ShaderMaterial;
 
   constructor(seed: number, size: number, resolution: number) {
     this.terrain = Physics.generateTerrain({ seed, size, resolution });
     const n = resolution;
     const geo = new THREE.PlaneGeometry(size, size, n - 1, n - 1);
     geo.rotateX(-Math.PI / 2);
-    this.geometry = geo;
 
     const pos = geo.attributes.position as THREE.BufferAttribute;
-    this.positions = pos.array as Float32Array;
+    const positions = pos.array as Float32Array;
     for (let i = 0; i < n * n; i++) {
-      this.positions[i * 3 + 1] = this.terrain.heights[i] ?? 0;
+      positions[i * 3 + 1] = this.terrain.heights[i] ?? 0;
     }
     pos.needsUpdate = true;
     geo.computeVertexNormals();
 
-    this.material = makeTerrainMaterial(this.terrain);
-    this.mesh = new THREE.Mesh(geo, this.material);
+    const material = makeTerrainMaterial(this.terrain);
+    this.mesh = new THREE.Mesh(geo, material);
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = false;
-  }
-
-  /** Apply a rut delta: lower the height at cell index `i` by `dy`. Visual
-   *  only; surface remains the same. Currently unused (ruts disabled). */
-  applyRut(i: number, dy: number): void {
-    const n = this.terrain.resolution;
-    const r = Math.floor(i / n);
-    const c = i % n;
-    if (r < 0 || r >= n || c < 0 || c >= n) return;
-    const cur = this.terrain.heights[i] ?? 0;
-    const next = cur - dy;
-    this.terrain.heights[i] = next;
-    this.positions[i * 3 + 1] = next;
-    (this.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
-  }
-
-  /** Call after a batch of applyRut() calls to recompute lighting. */
-  flush(): void {
-    this.geometry.computeVertexNormals();
   }
 }
 
