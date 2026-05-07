@@ -99,6 +99,13 @@ export class SolidAxleVehicle implements VehicleLike {
   private lastRpm = 0;
   private lastGear = 0;
 
+  // Reused scratch vectors so the per-tick force/torque loop doesn't
+  // allocate. Contents are valid only for the duration of the call site
+  // that wrote them; never store references to these.
+  private readonly _scratchFwd: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly _scratchRight: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly _scratchForce: Vec3 = { x: 0, y: 0, z: 0 };
+
   constructor(world: World, id: string, spawn: VehicleSpawn, kind: CarKind = 'patrol') {
     this.world = world;
     this.id = id;
@@ -331,11 +338,9 @@ export class SolidAxleVehicle implements VehicleLike {
         // is a world-Y quantity; pushing in chassis-up instead leaked a
         // horizontal component at any non-zero pitch and caused the vehicle
         // to creep forward continuously on flat ground.
-        this.body.addForceAtPoint(
-          { x: 0, y: F, z: 0 },
-          side.world,
-          true,
-        );
+        const sf = this._scratchForce;
+        sf.x = 0; sf.y = F; sf.z = 0;
+        this.body.addForceAtPoint(sf, side.world, true);
         w.prevContactDepth = comp;
       }
 
@@ -347,10 +352,9 @@ export class SolidAxleVehicle implements VehicleLike {
       // over-a-rock behaviour.
       if (Math.abs(result.chassisRollTorque) > 1e-6) {
         const tq = result.chassisRollTorque;
-        this.body.addTorque(
-          { x: fwd.x * tq, y: fwd.y * tq, z: fwd.z * tq },
-          true,
-        );
+        const sf = this._scratchForce;
+        sf.x = fwd.x * tq; sf.y = fwd.y * tq; sf.z = fwd.z * tq;
+        this.body.addTorque(sf, true);
       }
     }
 
@@ -377,10 +381,9 @@ export class SolidAxleVehicle implements VehicleLike {
       const rollSin = right.y;
       const rollVel = av.x * fwd.x + av.y * fwd.y + av.z * fwd.z;
       const tq = -ANTI_ROLL_STIFFNESS * rollSin - ANTI_ROLL_DAMPING * rollVel;
-      this.body.addTorque(
-        { x: fwd.x * tq, y: fwd.y * tq, z: fwd.z * tq },
-        true,
-      );
+      const sf = this._scratchForce;
+      sf.x = fwd.x * tq; sf.y = fwd.y * tq; sf.z = fwd.z * tq;
+      this.body.addTorque(sf, true);
     }
 
     // 4. Engine + gearbox.
@@ -428,28 +431,26 @@ export class SolidAxleVehicle implements VehicleLike {
       // Rapier's vehicle controller does internally given the (-1,0,0)
       // axle convention - positive player intent (D / right arrow) yaws
       // the chassis right via a force pointing into chassis-right.
-      let wheelFwd = fwd;
-      let wheelRight = right;
+      let wheelFwd: Vec3 = fwd;
+      let wheelRight: Vec3 = right;
       if (ag.hasSteering && Math.abs(this.currentSteer) > 1e-6) {
         const ang = -this.currentSteer;
         const c = Math.cos(ang);
         const s = Math.sin(ang);
         const upDotFwd = up.x * fwd.x + up.y * fwd.y + up.z * fwd.z;
-        const cross = {
-          x: up.y * fwd.z - up.z * fwd.y,
-          y: up.z * fwd.x - up.x * fwd.z,
-          z: up.x * fwd.y - up.y * fwd.x,
-        };
-        wheelFwd = {
-          x: fwd.x * c + cross.x * s + up.x * upDotFwd * (1 - c),
-          y: fwd.y * c + cross.y * s + up.y * upDotFwd * (1 - c),
-          z: fwd.z * c + cross.z * s + up.z * upDotFwd * (1 - c),
-        };
-        wheelRight = {
-          x: up.y * wheelFwd.z - up.z * wheelFwd.y,
-          y: up.z * wheelFwd.x - up.x * wheelFwd.z,
-          z: up.x * wheelFwd.y - up.y * wheelFwd.x,
-        };
+        const crossX = up.y * fwd.z - up.z * fwd.y;
+        const crossY = up.z * fwd.x - up.x * fwd.z;
+        const crossZ = up.x * fwd.y - up.y * fwd.x;
+        const wf = this._scratchFwd;
+        wf.x = fwd.x * c + crossX * s + up.x * upDotFwd * (1 - c);
+        wf.y = fwd.y * c + crossY * s + up.y * upDotFwd * (1 - c);
+        wf.z = fwd.z * c + crossZ * s + up.z * upDotFwd * (1 - c);
+        wheelFwd = wf;
+        const wr = this._scratchRight;
+        wr.x = up.y * wf.z - up.z * wf.y;
+        wr.y = up.z * wf.x - up.x * wf.z;
+        wr.z = up.x * wf.y - up.y * wf.x;
+        wheelRight = wr;
       }
 
       const driveShare = (isFront ? frontShare : rearShare) * 0.5; // per wheel
@@ -530,15 +531,11 @@ export class SolidAxleVehicle implements VehicleLike {
       integrateWheelSpin(w, driveTq, brakeTq, finalGroundTq, dt, rollingResistance);
 
       // Apply combined tire force to chassis at contact point.
-      this.body.addForceAtPoint(
-        {
-          x: wheelFwd.x * finalLongForce + wheelRight.x * finalLatForce,
-          y: wheelFwd.y * finalLongForce + wheelRight.y * finalLatForce,
-          z: wheelFwd.z * finalLongForce + wheelRight.z * finalLatForce,
-        },
-        cp,
-        true,
-      );
+      const f = this._scratchForce;
+      f.x = wheelFwd.x * finalLongForce + wheelRight.x * finalLatForce;
+      f.y = wheelFwd.y * finalLongForce + wheelRight.y * finalLatForce;
+      f.z = wheelFwd.z * finalLongForce + wheelRight.z * finalLatForce;
+      this.body.addForceAtPoint(f, cp, true);
     }
   }
 
