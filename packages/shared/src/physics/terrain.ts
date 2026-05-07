@@ -94,6 +94,13 @@ export interface Road {
   surface: Surface;
   /** Shoulder width on each side where terrain eases in. */
   shoulderWidth: number;
+  /** When true, the road core does NOT flatten to h=0 — instead it sits
+   *  as a worn track ~1 m below natural terrain. Use this for dirt
+   *  trails that climb elevated ground (e.g. up the mountain base) so
+   *  the trail follows the slope rather than cutting a flat plane and
+   *  leaving slot-canyon walls on either side. Defaults to false: the
+   *  main asphalt road still carves perfectly flat. */
+  gradeIntoTerrain?: boolean;
 }
 
 /** Default straight road along z = TERRAIN.roadZ (horizontal strip).
@@ -111,7 +118,9 @@ function defaultRoad(size: number): Road {
   };
 }
 
-/** Dirt connector from the main road up to the start of traverse 1. */
+/** Dirt connector from the main road up to the start of traverse 1.
+ *  gradeIntoTerrain=true keeps the trail surface following the natural
+ *  rise of the mountain base instead of cutting a slot canyon into it. */
 function mountainTrail(size: number): Road {
   const mtn = mountainFor(size);
   const baseX = mtn.x - 15; // aligns with traverse-1 start x
@@ -121,6 +130,7 @@ function mountainTrail(size: number): Road {
     width: 6,
     surface: Surface.Dirt,
     shoulderWidth: 2,
+    gradeIntoTerrain: true,
   };
 }
 
@@ -271,8 +281,30 @@ export function pointToSegmentDist(px: number, pz: number, ax: number, az: numbe
  *  closer. Without this, the mountain trail's narrow shoulder can shadow
  *  the main road's wider core for points near the trail but well inside
  *  the main road's flat zone (e.g. spawn corridor at |z| < roadCore). */
+// How deep below natural terrain a graded dirt trail's worn track sits.
+const GRADED_TRAIL_INDENT = 1.0;
+
 export const roadLayer: HeightLayer = (ctx, x, z, currentH) => {
-  let bestShoulderH = currentH;
+  // First pass: any flat-carving road (gradeIntoTerrain=false) wins outright
+  // when the point is in its core, regardless of whether a graded trail is
+  // geometrically closer. Without this, the dirt connector's narrow core
+  // can shadow the asphalt road's wider core for points just inside the
+  // trail's flat zone — but our flat zone is no longer flat for graded
+  // roads, so the asphalt road must take precedence in any overlap.
+  for (const road of ctx.roads) {
+    if (road.gradeIntoTerrain) continue;
+    const halfCore = road.width / 2;
+    for (let i = 0; i < road.points.length - 1; i++) {
+      const a = road.points[i]!;
+      const b = road.points[i + 1]!;
+      const dist = pointToSegmentDist(x, z, a.x, a.z, b.x, b.z);
+      if (dist <= halfCore) return 0;
+    }
+  }
+
+  // Second pass: shoulders + graded trails. Track the lowest blended height
+  // across all roads; graded-trail "core" sits at currentH - indent.
+  let best = currentH;
   for (const road of ctx.roads) {
     const halfCore = road.width / 2;
     const halfShoulder = halfCore + road.shoulderWidth;
@@ -280,16 +312,30 @@ export const roadLayer: HeightLayer = (ctx, x, z, currentH) => {
       const a = road.points[i]!;
       const b = road.points[i + 1]!;
       const dist = pointToSegmentDist(x, z, a.x, a.z, b.x, b.z);
-      if (dist <= halfCore) return 0; // In this road's core — flat
-      if (dist < halfShoulder) {
-        const t = (dist - halfCore) / (halfShoulder - halfCore);
-        const ease = t * t * (3 - 2 * t);
-        const blended = currentH * ease;
-        if (blended < bestShoulderH) bestShoulderH = blended;
+      if (road.gradeIntoTerrain) {
+        if (dist <= halfCore) {
+          const h = currentH - GRADED_TRAIL_INDENT;
+          if (h < best) best = h;
+        } else if (dist < halfShoulder) {
+          // Smoothly fade indent back to 0 across the shoulder.
+          const t = (dist - halfCore) / (halfShoulder - halfCore);
+          const fade = 1 - t * t * (3 - 2 * t);
+          const h = currentH - GRADED_TRAIL_INDENT * fade;
+          if (h < best) best = h;
+        }
+      } else {
+        // Asphalt-style: shoulder eases natural terrain down toward 0.
+        // (Core handled in the first pass.)
+        if (dist > halfCore && dist < halfShoulder) {
+          const t = (dist - halfCore) / (halfShoulder - halfCore);
+          const ease = t * t * (3 - 2 * t);
+          const blended = currentH * ease;
+          if (blended < best) best = blended;
+        }
       }
     }
   }
-  return bestShoulderH;
+  return best;
 };
 
 /** Petrol station pad layer - flattens pad and adjacent fade zone to y=0. */
@@ -368,8 +414,17 @@ export const lookoutSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
   return currentSurf;
 };
 
-/** Mud surface rule - based on height. */
+/** Mud surface rule - based on height. Skips man-made surfaces so the
+ *  graded dirt trail (which sits ~1m below natural terrain by design)
+ *  doesn't suddenly turn to mud when natural h dips below the threshold. */
 export const mudSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  if (
+    currentSurf === Surface.Road ||
+    currentSurf === Surface.Dirt ||
+    currentSurf === Surface.Concrete
+  ) {
+    return currentSurf;
+  }
   if (h < -0.8) return Surface.DeepMud;
   if (h < -0.2) return Surface.Mud;
   return currentSurf;
@@ -377,6 +432,14 @@ export const mudSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
 
 /** Grass surface rule - rolling mid-elevations. */
 export const grassSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  // Don't repaint man-made surfaces (the graded trail in particular).
+  if (
+    currentSurf === Surface.Road ||
+    currentSurf === Surface.Dirt ||
+    currentSurf === Surface.Concrete
+  ) {
+    return currentSurf;
+  }
   if (h > 1.5 && h < 5) return Surface.Grass;
   return currentSurf;
 };
