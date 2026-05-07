@@ -4,7 +4,6 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import * as THREE from 'three';
 
 test.describe('@trail-shots', () => {
   test('trail entrance + climb visualisation', async ({ page }) => {
