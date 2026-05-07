@@ -39,6 +39,13 @@ export interface VehicleGeom {
   wheelWidth: number;
   front: AxleGeom;
   rear: AxleGeom;
+  /** Multiplier on VEHICLE.mass for this kind. 1.0 = unchanged. Lower
+   *  values give a lighter chassis (faster accel for the same torque,
+   *  more pushable in collisions). */
+  massMult: number;
+  /** Multiplier on the engine's torque-at-wheels output for this kind.
+   *  1.0 = unchanged. Higher values give snappier acceleration. */
+  powerMult: number;
 }
 
 const patrolGeom: VehicleGeom = {
@@ -47,6 +54,8 @@ const patrolGeom: VehicleGeom = {
   wheelWidth: VEHICLE.wheelWidth,
   front: { ...AXLE.front },
   rear: { ...AXLE.rear },
+  massMult: 1.0,
+  powerMult: 1.0,
 };
 
 // Hilux: ute proportions = longer wheelbase (rear axle pushed back to
@@ -65,6 +74,8 @@ const hiluxGeom: VehicleGeom = {
     rideStiffness: 75_000,        // softer than Patrol's 90k for cargo
     maxArticulation: 0.55,        // a little more rear flex
   },
+  massMult: 1.0,
+  powerMult: 1.0,
 };
 
 // Ute (Falcon-style flat-tray): same wheelbase as Patrol but slightly
@@ -76,18 +87,25 @@ const uteGeom: VehicleGeom = {
   wheelWidth: VEHICLE.wheelWidth,
   front: { ...AXLE.front },
   rear: { ...AXLE.rear },
+  massMult: 1.0,
+  powerMult: 1.0,
 };
 
-// Motorbike: physics-identical to Patrol (chassis extents, trackHalf,
-// wheel radius are shared so the simulation stays fair). The visual
-// layer in carMesh.ts overrides wheel placement to draw a 2-wheeled
-// silhouette - the underlying 4-wheel solid-axle solver is unchanged.
+// Motorbike: chassis extents + trackHalf are shared with Patrol so the
+// 4-wheel solid-axle solver keeps working unchanged. We DO scale mass
+// and engine torque per-kind so the bike feels lighter and quicker:
+//   massMult 0.5  → ~1250 kg vs Patrol's 2500 kg
+//   powerMult 1.4 → 40 % more torque at the wheels
+// The visual layer in carMesh.ts overlaps the per-axle wheel pair at
+// x=0 so the silhouette reads as 1 front + 1 rear wheel.
 const motorbikeGeom: VehicleGeom = {
   chassisHalfExtents: { ...VEHICLE.chassisHalfExtents },
   wheelRadius: VEHICLE.wheelRadius,
   wheelWidth: VEHICLE.wheelWidth,
   front: { ...AXLE.front },
   rear: { ...AXLE.rear },
+  massMult: 0.5,
+  powerMult: 1.4,
 };
 
 export const VEHICLE_GEOM: Record<CarKind, VehicleGeom> = {

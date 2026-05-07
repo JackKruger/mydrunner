@@ -128,9 +128,10 @@ export class SolidAxleVehicle implements VehicleLike {
     // doesn't clip through the ground when the car is upside-down.
     const colHalfH = (VEHICLE.cabinRoofY + ext.y) / 2;
     const colOffsetY = -ext.y + colHalfH; // center between chassis-bottom and roof
+    const kindMass = VEHICLE.mass * this.geom.massMult;
     const colDesc = RAPIER.ColliderDesc.roundCuboid(ext.x - r, colHalfH - r, ext.z - r, r)
       .setTranslation(0, colOffsetY, 0)
-      .setDensity(VEHICLE.mass / (8 * ext.x * ext.y * ext.z))
+      .setDensity(kindMass / (8 * ext.x * ext.y * ext.z))
       .setFriction(0.1);
     this.chassis = world.world.createCollider(colDesc, this.body);
     // Same low CoM trick the legacy Vehicle uses: pull principal moments
@@ -139,7 +140,7 @@ export class SolidAxleVehicle implements VehicleLike {
     this.body.setAdditionalMassProperties(
       0,
       { x: 0, y: -ext.y * 0.6, z: 0 },
-      { x: VEHICLE.mass * 0.6, y: VEHICLE.mass * 0.5, z: VEHICLE.mass * 0.6 },
+      { x: kindMass * 0.6, y: kindMass * 0.5, z: kindMass * 0.6 },
       { x: 0, y: 0, z: 0, w: 1 },
       true,
     );
@@ -421,7 +422,7 @@ export class SolidAxleVehicle implements VehicleLike {
     const engineOut = stepEngine(this.engine, signedAvg, vehicleAngVel, this.input.throttle, dt);
     this.lastRpm = engineOut.rpm;
     this.lastGear = engineOut.gear;
-    const drivePerWheelTorque = engineOut.wheelForce; // engine.ts returns torque-shaped values
+    const drivePerWheelTorque = engineOut.wheelForce * this.geom.powerMult; // engine.ts returns torque-shaped values
 
     // Incline assist (matches legacy semantics).
     const climb = Math.min(0.5, Math.max(0, fwd.y));
