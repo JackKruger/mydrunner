@@ -211,6 +211,26 @@ export const WHEEL = {
   rollingResistance: 0.010,
 } as const;
 
+// Recovery winch. Mounted on the front bumper; cable to a static anchor
+// or another vehicle. v1 (slice 1) uses only stiffness/damping/spoolSpeed/
+// maxLength/mountLocal — motor force cap, break force, and snap cooldown
+// land with later slices (see docs/winching-system.md §11).
+//
+// Tuning is sized for the 2500 kg chassis: ~7 cm cable stretch under 1 G of
+// pull, and damping near 0.3 critical so the cable doesn't ring against
+// the suspension.
+export const WINCH = {
+  maxLength:   25,         // m, total spool capacity
+  spoolSpeed:  0.8,        // m/s reel rate
+  stiffness:   200_000,    // N/m
+  damping:     8_000,      // N·s/m
+  // Fairlead point in chassis-local frame. Low on the front bumper:
+  // chassis half-extent z = 1.9, so z = 1.7 sits just inside the front
+  // edge; y = -0.2 puts it below mid-height (chassis bottom is y = -0.45),
+  // matching where a real winch sits on the bumper.
+  mountLocal:  { x: 0, y: -0.2, z: 1.7 },
+} as const;
+
 // Hill-climb traction assist. Real 4x4s lose grip on slopes because
 // gravity peels the tyre's contact away; in our model it manifests as
 // chronic spin-out partway up. Boost per-wheel grip linearly with the
