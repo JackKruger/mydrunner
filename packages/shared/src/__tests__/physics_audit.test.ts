@@ -101,7 +101,8 @@ describe('physics audit: suspension droop', () => {
     const { world, vehicle } = makeWorld();
     settle(world, 120);
 
-    const restRideY = vehicle.getState().axles[0].rideY;
+    const state0 = vehicle.getState();
+    const restRideY = state0.axles![0].rideY;
 
     // Lift the car into the air
     const pos = vehicle.body.translation();
@@ -110,7 +111,8 @@ describe('physics audit: suspension droop', () => {
     // Step once to update raycasts and axle state
     world.step();
 
-    const airRideY = vehicle.getState().axles[0].rideY;
+    const state1 = vehicle.getState();
+    const airRideY = state1.axles![0].rideY;
     // rideY should be negative (droop) in the air
     expect(airRideY).toBeLessThan(0);
     expect(airRideY).toBeLessThan(restRideY);
