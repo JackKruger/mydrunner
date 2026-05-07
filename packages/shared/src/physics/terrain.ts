@@ -378,12 +378,18 @@ export const roadLayer: HeightLayer = (ctx, x, z, currentH) => {
         // Road core. By default forces flat at h=0. Roads marked
         // gradeIntoTerrain (the dirt approaches that meet the mountain
         // base) blend BACK toward natural terrain when h has climbed
-        // significantly above sea level, so the road grades up smoothly
-        // instead of cutting a vertical cliff into the mountain. The
-        // main asphalt road keeps the strict-flat behaviour because it
-        // never approaches elevated terrain.
+        // above sea level, so the road grades up smoothly instead of
+        // cutting a vertical cliff into the mountain. The main asphalt
+        // road keeps the strict-flat behaviour because it never
+        // approaches elevated terrain.
+        //
+        // Threshold lowered from 8 → 4 (with range 8) so the trail
+        // starts blending toward natural early enough to avoid a
+        // visible step where it meets the rising mountain base. The
+        // trail is now flat from h=0..4, blends across h=4..12, and
+        // tracks natural terrain above 12.
         if (!road.gradeIntoTerrain) return 0;
-        const coreCap = 8.0;
+        const coreCap = 4.0;
         const coreRamp = 8.0;
         if (currentH <= coreCap) return 0;
         const t = Math.min(1, (currentH - coreCap) / coreRamp);
@@ -392,11 +398,11 @@ export const roadLayer: HeightLayer = (ctx, x, z, currentH) => {
       }
       if (dist < halfShoulder) {
         // Shoulder eases from "road bench at 0" to "natural h" across
-        // the shoulder width. For gradeIntoTerrain roads in elevated
-        // terrain (mountain base) the core has already blended back
-        // to ~natural, so applying this blend would create a fresh
-        // cliff at the core edge - skip it and let natural flow.
-        if (road.gradeIntoTerrain && currentH > 8.0) continue;
+        // the shoulder width. For gradeIntoTerrain roads where the
+        // core has already blended back to ~natural, applying this
+        // blend would create a fresh cliff at the core edge - skip it
+        // and let natural flow. Threshold matches coreCap above.
+        if (road.gradeIntoTerrain && currentH > 4.0) continue;
         const t = (dist - halfCore) / (halfShoulder - halfCore);
         const ease = t * t * (3 - 2 * t);
         const blended = currentH * ease;
