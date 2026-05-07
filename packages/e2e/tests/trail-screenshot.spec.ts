@@ -70,5 +70,18 @@ test.describe('@trail-shots', () => {
     await page.evaluate(() => (window as any).__setCam(58.6, 8, -10, 58.6, 14, 18));
     await page.waitForTimeout(300);
     await page.screenshot({ path: join(outDir, '24-trail-mid-up.png') });
+
+    // Frame 6: trailhead close-up — elevated view looking down at where
+    // the dirt track meets the rising mountain face, to inspect for any
+    // step / indent at the transition.
+    await page.evaluate(() => (window as any).__setCam(40, 35, -10, 65, 16, 22));
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: join(outDir, '25-trailhead-closeup.png') });
+
+    // Frame 7: profile view of the trail-to-mountain-base transition,
+    // looking east along z so any vertical step is silhouetted.
+    await page.evaluate(() => (window as any).__setCam(20, 12, 12, 80, 12, 18));
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: join(outDir, '26-trailhead-profile.png') });
   });
 });
