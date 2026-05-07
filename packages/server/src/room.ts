@@ -7,6 +7,7 @@ import {
   SNAPSHOT_INTERVAL_MS,
   RUT_REBUILD_INTERVAL_TICKS,
   RUTS_ENABLED,
+  BUTTONS,
   EMPTY_INPUT,
   VEHICLE,
   AXLE,
@@ -43,6 +44,10 @@ interface InternalPlayer {
   vehicle: Physics.VehicleLike;
   pendingInput: PlayerInput;
   lastAckSeq: number;
+  /** Last tick's PlayerInput.buttons. Edge-triggered actions (RESET,
+   *  WINCH_DEPLOY_TOGGLE, WINCH_ATTACH) fire only on the rising edge
+   *  computed from `pendingInput.buttons & ~prevButtons`. */
+  prevButtons: number;
   spawn: { position: { x: number; y: number; z: number }; yaw: number };
   /** Last chat broadcast time (server clock ms). Used for rate-limiting. */
   lastChatAtMs: number;
@@ -161,6 +166,7 @@ export class Room {
       vehicle,
       pendingInput: { ...EMPTY_INPUT },
       lastAckSeq: 0,
+      prevButtons: 0,
       trace: null,
       spawn,
       lastChatAtMs: 0,
@@ -236,9 +242,20 @@ export class Room {
     this.lastTickStartMs = tickStart;
 
     for (const p of this.players.values()) {
-      if ((p.pendingInput.buttons & 1) !== 0) {
-        p.vehicle.resetTo(p.spawn);
-      }
+      const buttons = p.pendingInput.buttons | 0;
+      // Rising-edge mask: bits set this tick but not last tick. The
+      // unsigned shift coerces back to a non-negative 32-bit int.
+      const pressed = (buttons & ~p.prevButtons) >>> 0;
+
+      if (pressed & BUTTONS.RESET) p.vehicle.resetTo(p.spawn);
+      if (pressed & BUTTONS.WINCH_DEPLOY_TOGGLE) p.vehicle.winch.toggleDeploy();
+      if (pressed & BUTTONS.WINCH_ATTACH) p.vehicle.winch.tryAttach(this.world);
+      p.vehicle.winch.setReelInput({
+        in:  (buttons & BUTTONS.WINCH_REEL_IN)  !== 0,
+        out: (buttons & BUTTONS.WINCH_REEL_OUT) !== 0,
+      });
+
+      p.prevButtons = buttons;
       p.vehicle.setInput(p.pendingInput);
     }
     this.world.step();

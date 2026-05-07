@@ -211,6 +211,19 @@ export const WHEEL = {
   rollingResistance: 0.010,
 } as const;
 
+// Discrete-action bits in PlayerInput.buttons. Bits are independent so
+// a player can hold reel-in while pressing attach. Edge-triggered
+// actions (RESET, WINCH_DEPLOY_TOGGLE, WINCH_ATTACH) fire only on the
+// rising edge inside Room.tickOnce; held actions (WINCH_REEL_IN/OUT)
+// are sampled every tick.
+export const BUTTONS = {
+  RESET:               1 << 0, // existing — KeyR
+  WINCH_DEPLOY_TOGGLE: 1 << 1, // KeyF
+  WINCH_REEL_IN:       1 << 2, // KeyV held
+  WINCH_REEL_OUT:      1 << 3, // KeyB held
+  WINCH_ATTACH:        1 << 4, // KeyG
+} as const;
+
 // Recovery winch. Mounted on the front bumper; cable to a static anchor
 // or another vehicle. v1 (slice 1) uses only stiffness/damping/spoolSpeed/
 // maxLength/mountLocal — motor force cap, break force, and snap cooldown

@@ -1,6 +1,6 @@
 // Keyboard + touch -> PlayerInput. Polled each frame from main loop.
 
-import type { PlayerInput } from '@mydrunner/shared';
+import { BUTTONS, type PlayerInput } from '@mydrunner/shared';
 
 import { getTouchState } from './touchInput.js';
 
@@ -18,7 +18,8 @@ export function initInput(): void {
     if (
       e.code === 'Space' ||
       e.code.startsWith('Arrow') ||
-      ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR'].includes(e.code)
+      ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR',
+       'KeyF', 'KeyG', 'KeyV', 'KeyB'].includes(e.code)
     ) {
       e.preventDefault();
     }
@@ -59,13 +60,18 @@ export function sampleInput(): PlayerInput {
   const steer = Math.abs(t.steer) > Math.abs(turn) ? t.steer : turn;
   const kbBrake = KEYS.has('ShiftLeft') || KEYS.has('ShiftRight') ? 1 : 0;
   const kbHandbrake = handbrakeOn ? 1 : 0;
-  const kbReset = KEYS.has('KeyR') ? 1 : 0;
+  let buttons = t.reset ? BUTTONS.RESET : 0;
+  if (KEYS.has('KeyR')) buttons |= BUTTONS.RESET;
+  if (KEYS.has('KeyF')) buttons |= BUTTONS.WINCH_DEPLOY_TOGGLE;
+  if (KEYS.has('KeyV')) buttons |= BUTTONS.WINCH_REEL_IN;
+  if (KEYS.has('KeyB')) buttons |= BUTTONS.WINCH_REEL_OUT;
+  if (KEYS.has('KeyG')) buttons |= BUTTONS.WINCH_ATTACH;
   return {
     seq,
     throttle,
     steer,
     brake: Math.max(kbBrake, t.brake),
     handbrake: Math.max(kbHandbrake, t.handbrake),
-    buttons: Math.max(kbReset, t.reset),
+    buttons,
   };
 }

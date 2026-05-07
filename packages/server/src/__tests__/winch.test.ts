@@ -1,10 +1,18 @@
-// Slice 1 of the recovery winch (docs/winching-system.md §11): the
-// force model itself, decoupled from input/state-machine/networking.
-// Confirms a stationary vehicle is dragged toward a fixed anchor when
-// the cable is reeled in, and that a slack cable applies zero force.
+// Slices 1–3 of the recovery winch (docs/winching-system.md §11).
+//
+// Slice 1 (force model): an attached, taut cable pulls the chassis
+//   toward the anchor; a slack cable applies zero force; a hanging-load
+//   tuning sanity check.
+// Slice 2 (motor cap): reel-in stalls when last-tick tension exceeds
+//   WINCH.motorMaxForce; reels normally otherwise; reel-out is
+//   unconditional.
+// Slice 3 (state machine + vehicle integration): every vehicle owns a
+//   Winch field; phase transitions via toggleDeploy / setStaticAnchor /
+//   release; world.step runs winch forces and spool advance inline
+//   with vehicle physics.
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { FIXED_DT, Physics, WINCH } from '@mydrunner/shared';
+import { Physics, WINCH } from '@mydrunner/shared';
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -41,27 +49,13 @@ function makeWorld() {
   return { world, vehicle };
 }
 
-/** Single fixed step that interleaves a winch force in the slot the
- *  later slices will use inside SolidAxleVehicle.preStep — between the
- *  vehicle's per-tick force reset/wheel forces and the Rapier step. */
-function stepWithWinch(world: Physics.World, vehicle: Physics.SolidAxleVehicle, winch: Physics.Winch) {
-  vehicle.preStep();
-  winch.applyForces();
-  world.world.step();
-  vehicle.postStep();
-}
-
 describe('Winch — force model (slice 1)', () => {
   it('drags a stationary vehicle toward a forward anchor when reeled in', () => {
     const { world, vehicle } = makeWorld();
     const start = vehicle.body.translation();
-    // Anchor 12 m forward of spawn (+z, since the chassis-forward axis is
-    // +z in chassis frame and the vehicle spawned with identity rotation).
-    const anchor = { x: start.x, y: start.y, z: start.z + 12 };
-    const winch = new Physics.Winch(
-      vehicle.body,
-      WINCH.mountLocal,
-      anchor,
+    // Anchor 12 m forward of spawn (+z is chassis-forward at identity).
+    vehicle.winch.setStaticAnchor(
+      { x: start.x, y: start.y, z: start.z + 12 },
       12, // initial spool == distance: starts at zero stretch
     );
 
@@ -70,19 +64,17 @@ describe('Winch — force model (slice 1)', () => {
     // Track peak tension: on frictionless ground the chassis can briefly
     // outrun the cable (stretch goes negative → slack → zero tension),
     // so end-of-run tension isn't a meaningful signal — peak is.
-    winch.setReelInput({ in: true, out: false });
+    vehicle.winch.setReelInput({ in: true, out: false });
     let peakTension = 0;
     for (let i = 0; i < 300; i++) {
-      stepWithWinch(world, vehicle, winch);
-      if (winch.tension > peakTension) peakTension = winch.tension;
-      winch.stepSpool(FIXED_DT);
+      world.step();
+      if (vehicle.winch.tension > peakTension) peakTension = vehicle.winch.tension;
     }
 
     const end = vehicle.body.translation();
     const delta = end.z - start.z;
-    expect(delta).toBeGreaterThan(1.5); // moved noticeably forward
+    expect(delta).toBeGreaterThan(1.5);
     expect(peakTension).toBeGreaterThan(0);
-    // Vehicle should not have flown off the ground or backwards.
     expect(end.y).toBeLessThan(start.y + 0.5);
     expect(end.y).toBeGreaterThan(start.y - 0.5);
     world.dispose();
@@ -92,22 +84,17 @@ describe('Winch — force model (slice 1)', () => {
     const { world, vehicle } = makeWorld();
     const start = vehicle.body.translation();
     // Anchor 5 m ahead but spool out 20 m of cable: cable hangs slack.
-    const anchor = { x: start.x, y: start.y, z: start.z + 5 };
-    const winch = new Physics.Winch(
-      vehicle.body,
-      WINCH.mountLocal,
-      anchor,
+    vehicle.winch.setStaticAnchor(
+      { x: start.x, y: start.y, z: start.z + 5 },
       20,
     );
 
     for (let i = 0; i < 120; i++) {
-      stepWithWinch(world, vehicle, winch);
-      // No reel-in: spoolLength stays > distance, cable stays slack.
-      expect(winch.tension).toBe(0);
+      world.step();
+      expect(vehicle.winch.tension).toBe(0);
     }
 
     const end = vehicle.body.translation();
-    // Chassis should still be settled where it started (within mm).
     expect(Math.abs(end.x - start.x)).toBeLessThan(0.05);
     expect(Math.abs(end.z - start.z)).toBeLessThan(0.05);
     world.dispose();
@@ -122,19 +109,14 @@ describe('Winch — force model (slice 1)', () => {
     // *something* in the right ballpark and doesn't blow up.
     const { world, vehicle } = makeWorld();
     const t = vehicle.body.translation();
-    // Anchor 6 m directly above the fairlead.
-    const anchor = { x: t.x, y: t.y + 6, z: t.z + WINCH.mountLocal.z };
-    const winch = new Physics.Winch(
-      vehicle.body,
-      WINCH.mountLocal,
-      anchor,
-      0.001, // taut from the start
+    vehicle.winch.setStaticAnchor(
+      { x: t.x, y: t.y + 6, z: t.z + WINCH.mountLocal.z },
+      0.001,
     );
-    for (let i = 0; i < 600; i++) stepWithWinch(world, vehicle, winch);
-    // Cable should be carrying load and not have NaN'd or blown up.
-    expect(Number.isFinite(winch.tension)).toBe(true);
-    expect(winch.tension).toBeGreaterThan(0);
-    expect(winch.tension).toBeLessThan(1_000_000); // far below break / numerical blow-up
+    for (let i = 0; i < 600; i++) world.step();
+    expect(Number.isFinite(vehicle.winch.tension)).toBe(true);
+    expect(vehicle.winch.tension).toBeGreaterThan(0);
+    expect(vehicle.winch.tension).toBeLessThan(1_000_000);
     world.dispose();
   });
 });
@@ -156,64 +138,111 @@ describe('Winch — motor force cap (slice 2)', () => {
     vehicle.body.lockRotations(true, true);
 
     const start = vehicle.body.translation();
-    const anchor = { x: start.x, y: start.y, z: start.z + 12 };
-    const winch = new Physics.Winch(vehicle.body, WINCH.mountLocal, anchor, 1.0);
+    vehicle.winch.setStaticAnchor(
+      { x: start.x, y: start.y, z: start.z + 12 },
+      1.0,
+    );
 
-    // First step seeds winch.tension with the actual loaded value.
-    stepWithWinch(world, vehicle, winch);
-    expect(winch.tension).toBeGreaterThan(WINCH.motorMaxForce);
+    // First step seeds tension with the actual loaded value.
+    world.step();
+    expect(vehicle.winch.tension).toBeGreaterThan(WINCH.motorMaxForce);
 
-    winch.setReelInput({ in: true, out: false });
-    const spoolBefore = winch.spoolLength;
-    for (let i = 0; i < 60; i++) {
-      stepWithWinch(world, vehicle, winch);
-      winch.stepSpool(FIXED_DT);
-    }
-    expect(winch.spoolLength).toBe(spoolBefore);
+    vehicle.winch.setReelInput({ in: true, out: false });
+    const spoolBefore = vehicle.winch.spoolLength;
+    for (let i = 0; i < 60; i++) world.step();
+    expect(vehicle.winch.spoolLength).toBe(spoolBefore);
     world.dispose();
   });
 
   it('motor reels normally when tension is below the force cap', () => {
-    // Sanity contrast: low-load cable lets the motor advance the spool
-    // at the configured rate. Same fixture as the slice-1 drag test
-    // but here we assert against spool change rather than chassis
-    // motion, isolating the motor-cap gate.
     const { world, vehicle } = makeWorld();
     const start = vehicle.body.translation();
-    const anchor = { x: start.x, y: start.y, z: start.z + 10 };
     // 0.05 m of stretch → ~10 kN, well under the 80 kN motor cap.
-    const winch = new Physics.Winch(vehicle.body, WINCH.mountLocal, anchor, 9.95);
-    winch.setReelInput({ in: true, out: false });
-    const spoolBefore = winch.spoolLength;
-    for (let i = 0; i < 60; i++) {
-      stepWithWinch(world, vehicle, winch);
-      winch.stepSpool(FIXED_DT);
-    }
+    vehicle.winch.setStaticAnchor(
+      { x: start.x, y: start.y, z: start.z + 10 },
+      9.95,
+    );
+    vehicle.winch.setReelInput({ in: true, out: false });
+    const spoolBefore = vehicle.winch.spoolLength;
+    for (let i = 0; i < 60; i++) world.step();
     // 1 s × 0.8 m/s = 0.8 m of cable consumed, modulo any tick where
     // tension momentarily spiked above the cap (which won't happen at
     // this stretch level).
-    const spoolDelta = spoolBefore - winch.spoolLength;
+    const spoolDelta = spoolBefore - vehicle.winch.spoolLength;
     expect(spoolDelta).toBeCloseTo(WINCH.spoolSpeed * 1.0, 2);
     world.dispose();
   });
 
   it('reel-out pays cable regardless of tension', () => {
-    // Reel-out is unconditional — paying cable out doesn't fight the
-    // load, so the motor cap doesn't apply to it. Stress test with a
-    // cable initially over-tensioned, then reel out and confirm the
-    // spool grows.
     const { world, vehicle } = makeWorld();
     const start = vehicle.body.translation();
-    const anchor = { x: start.x, y: start.y, z: start.z + 12 };
-    const winch = new Physics.Winch(vehicle.body, WINCH.mountLocal, anchor, 1.0);
-    winch.setReelInput({ in: false, out: true });
-    const spoolBefore = winch.spoolLength;
-    for (let i = 0; i < 60; i++) {
-      stepWithWinch(world, vehicle, winch);
-      winch.stepSpool(FIXED_DT);
-    }
-    expect(winch.spoolLength).toBeGreaterThan(spoolBefore + 0.5);
-    expect(winch.spoolLength).toBeLessThanOrEqual(WINCH.maxLength);
+    vehicle.winch.setStaticAnchor(
+      { x: start.x, y: start.y, z: start.z + 12 },
+      1.0,
+    );
+    vehicle.winch.setReelInput({ in: false, out: true });
+    const spoolBefore = vehicle.winch.spoolLength;
+    for (let i = 0; i < 60; i++) world.step();
+    expect(vehicle.winch.spoolLength).toBeGreaterThan(spoolBefore + 0.5);
+    expect(vehicle.winch.spoolLength).toBeLessThanOrEqual(WINCH.maxLength);
+    world.dispose();
+  });
+});
+
+describe('Winch — state machine (slice 3)', () => {
+  it('default phase is stowed and applyForces is a no-op', () => {
+    const { world, vehicle } = makeWorld();
+    expect(vehicle.winch.phase).toBe('stowed');
+    const start = vehicle.body.translation();
+    for (let i = 0; i < 60; i++) world.step();
+    const end = vehicle.body.translation();
+    expect(Math.abs(end.x - start.x)).toBeLessThan(0.05);
+    expect(Math.abs(end.z - start.z)).toBeLessThan(0.05);
+    expect(vehicle.winch.tension).toBe(0);
+    world.dispose();
+  });
+
+  it('toggleDeploy moves stowed ↔ deployed and is a no-op while attached', () => {
+    const { world, vehicle } = makeWorld();
+    expect(vehicle.winch.phase).toBe('stowed');
+    vehicle.winch.toggleDeploy();
+    expect(vehicle.winch.phase).toBe('deployed');
+    vehicle.winch.toggleDeploy();
+    expect(vehicle.winch.phase).toBe('stowed');
+
+    const t = vehicle.body.translation();
+    vehicle.winch.setStaticAnchor({ x: t.x, y: t.y, z: t.z + 8 }, 8);
+    expect(vehicle.winch.phase).toBe('attached');
+    vehicle.winch.toggleDeploy();
+    expect(vehicle.winch.phase).toBe('attached'); // no-op while attached
+    world.dispose();
+  });
+
+  it('release returns to stowed and zeroes the spool', () => {
+    const { world, vehicle } = makeWorld();
+    const t = vehicle.body.translation();
+    vehicle.winch.setStaticAnchor({ x: t.x, y: t.y, z: t.z + 8 }, 8);
+    expect(vehicle.winch.phase).toBe('attached');
+    vehicle.winch.release();
+    expect(vehicle.winch.phase).toBe('stowed');
+    expect(vehicle.winch.spoolLength).toBe(0);
+    expect(vehicle.winch.tension).toBe(0);
+    world.dispose();
+  });
+
+  it('resetTo (KeyR) releases the cable so a teleport doesn’t leave it pulling', () => {
+    const { world, vehicle } = makeWorld();
+    const t = vehicle.body.translation();
+    // Anchor 10 m forward, spool only 4 m. The fairlead sits 1.7 m
+    // forward of body centre (mountLocal.z), so true cable length is
+    // ~8.3 m — comfortably above the 4 m spool, ensuring obvious
+    // tension on the first step.
+    vehicle.winch.setStaticAnchor({ x: t.x, y: t.y, z: t.z + 10 }, 4);
+    world.step();
+    expect(vehicle.winch.tension).toBeGreaterThan(0);
+    vehicle.resetTo({ position: { x: 0, y: 1.5, z: 0 } });
+    expect(vehicle.winch.phase).toBe('stowed');
+    expect(vehicle.winch.tension).toBe(0);
     world.dispose();
   });
 });

@@ -5,6 +5,7 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { PlayerInput, VehicleState } from '../types.js';
 import type { AxleSnap } from './axle.js';
+import type { Winch } from './winch.js';
 
 export interface VehicleSpawn {
   position: { x: number; y: number; z: number };
@@ -21,6 +22,10 @@ export interface WheelSample {
 export interface VehicleLike {
   readonly id: string;
   readonly body: RAPIER.RigidBody;
+  /** Recovery winch. Always present so Room.tickOnce can dispatch
+   *  button input without null-checking; the winch is a no-op while
+   *  its phase is 'stowed'. */
+  readonly winch: Winch;
   setInput(input: PlayerInput): void;
   setSteerAngle(angle: number): void;
   resetTo(spawn: VehicleSpawn): void;

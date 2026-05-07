@@ -29,6 +29,7 @@ import {
   TIRE_LONG_FRICTION,
   VEHICLE,
   WHEEL,
+  WINCH,
 } from '../constants.js';
 import { TUNING } from '../tuning.js';
 import {
@@ -64,6 +65,7 @@ import type {
   VehicleSpawn,
   WheelSample,
 } from './vehicleTypes.js';
+import { Winch } from './winch.js';
 import type { World } from './world.js';
 
 // Anti-roll bar: chassis-frame torque proportional to world-roll about
@@ -88,6 +90,7 @@ export class SolidAxleVehicle implements VehicleLike {
   readonly body: RAPIER.RigidBody;
   readonly chassis: RAPIER.Collider;
   readonly geom: VehicleGeom;
+  readonly winch: Winch;
 
   private input: PlayerInput = { ...EMPTY_INPUT };
   private currentSteer = 0;
@@ -154,6 +157,7 @@ export class SolidAxleVehicle implements VehicleLike {
       createWheelKinematic(),
       createWheelKinematic(),
     ];
+    this.winch = new Winch(this.body, WINCH.mountLocal);
   }
 
   setInput(input: PlayerInput): void {
@@ -184,6 +188,10 @@ export class SolidAxleVehicle implements VehicleLike {
     this.engine = createEngineState();
     this.lastRpm = 0;
     this.lastGear = 0;
+    // Resetting the truck implies abandoning whatever recovery was in
+    // flight; otherwise the cable still pulls toward an anchor the
+    // chassis just teleported away from.
+    this.winch.release();
   }
 
   preStep(): void {
@@ -561,6 +569,11 @@ export class SolidAxleVehicle implements VehicleLike {
       f.z = wheelFwd.z * finalLongForce + wheelRight.z * finalLatForce;
       this.body.addForceAtPoint(f, cp, true);
     }
+
+    // Recovery winch. Accumulates with the wheel forces above; no-op
+    // unless the winch is in 'attached' phase (set via tryAttach or
+    // setStaticAnchor).
+    this.winch.applyForces();
   }
 
   postStep(): void {
@@ -580,6 +593,10 @@ export class SolidAxleVehicle implements VehicleLike {
     // when load was high. Trade-off: at 60 Hz the wheels visually trail
     // the chassis by one tick (~4-5 mm at typical spring frequencies) -
     // not noticeable on a moving chassis, dwarfed by camera motion.
+
+    // Advance the spool. Reads the tension that preStep just computed,
+    // so the motor force cap gates correctly. No-op unless attached.
+    this.winch.stepSpool(FIXED_DT);
   }
 
   wheelSamples(): WheelSample[] {
