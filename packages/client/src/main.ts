@@ -156,6 +156,7 @@ if (import.meta.env.DEV) {
 
 let localId: PlayerId | null = null;
 let connected = false;
+let isDebug = false;
 let lastSnapTick = 0;
 let lastSpeed = 0;
 let lastRpm = 0;
@@ -194,7 +195,8 @@ async function start(): Promise<void> {
   // Debug panel: only for the player named "jack" (case-insensitive).
   // Lets them twist physics tunables in flight and copy the result to
   // clipboard so the values can be baked as new defaults.
-  if (isDebugUser(choice.name)) initDebugPanel();
+  isDebug = isDebugUser(choice.name);
+  if (isDebug) initDebugPanel();
 
   const net = new NetClient(getServerUrl(), choice.name, choice.carKind, {
     onOpen() {
@@ -324,11 +326,22 @@ async function start(): Promise<void> {
   // doesn't trigger a spiral-of-death.
   const MAX_STEPS_PER_FRAME = 5;
 
+  let fps = 0;
+  let frameCount = 0;
+  let lastFpsUpdate = performance.now();
+
   // Render loop.
   function frame(): void {
     const now = performance.now();
     const frameDt = Math.min(0.25, (now - lastFrameTimeMs) / 1000);
     lastFrameTimeMs = now;
+
+    frameCount++;
+    if (now - lastFpsUpdate >= 1000) {
+      fps = frameCount;
+      frameCount = 0;
+      lastFpsUpdate = now;
+    }
 
     // Process deferred reconcile before stepping inputs. Doing this at the
     // top of the frame (inside rAF) keeps the heavy replay work inside our
@@ -344,7 +357,6 @@ async function start(): Promise<void> {
 
     if (connected && prediction) {
       predictAcc += frameDt;
-      prediction.beginFrame();
       let steps = 0;
       while (predictAcc >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
         const input = sampleInput();
@@ -356,12 +368,9 @@ async function start(): Promise<void> {
       if (steps >= MAX_STEPS_PER_FRAME) predictAcc = 0;
     }
     // Fractional time left over in the accumulator becomes the alpha
-    // for state interpolation. But since beginFrame() captures prev
-    // every frame, alpha should always be 1.0 — we want to
-    // render at the current body position. The old alpha oscillation
-    // (0.41, 0.83, 0.24, 0.65...) was causing stutter
-    // on high-refresh-rate displays (144Hz+).
-    const alpha = 1.0;
+    // for state interpolation. This ensures smooth motion even when
+    // the render frame rate doesn't match the physics tick rate (60Hz).
+    const alpha = predictAcc / FIXED_DT;
 
     // Override the local vehicle pose with the predicted state so the local
     // car is responsive instead of 100ms behind. alpha lerps between
@@ -384,9 +393,10 @@ async function start(): Promise<void> {
         surfaceLabel = ` · ${SURFACE_LABELS[s] ?? '?'}`;
       }
       const gearLabel = lastGear === -1 ? 'R' : lastGear === 0 ? 'N' : String(lastGear);
+      const fpsLabel = ` · ${fps} FPS`;
       hud.textContent =
         `connected · tick=${lastSnapTick} · ${kmh} km/h · ` +
-        `${lastRpm.toFixed(0)} RPM · gear ${gearLabel}${surfaceLabel}`;
+        `${lastRpm.toFixed(0)} RPM · gear ${gearLabel}${surfaceLabel}${fpsLabel}`;
     }
     requestAnimationFrame(frame);
   }
