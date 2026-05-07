@@ -420,10 +420,44 @@ export class Scene {
         }
 
         if (isLocal) {
-          // Hand the interpolated chassis pose to the chase camera. The
-          // _qa quaternion is post-slerp here, so it holds the rendered
-          // local rotation. Cache the axles so the debug panel can read
-          // them without re-doing the interp.
+          // Override the interpolated pose with linear extrapolation from
+          // the LATEST snapshot. The interp pair we just used is ~100 ms
+          // behind real time; for the local truck that delay reads as
+          // "controls are unresponsive" because the user can see the
+          // chassis lag their input. Extrapolating by linVel/angVel from
+          // the freshest snapshot puts the chassis at "now" instead. The
+          // dt cap (100 ms) prevents runaway when snapshots stall.
+          //
+          // Wheel spin and axles are left on the interp pair: the spin
+          // delay is invisible at typical wheel speeds, and axle flex
+          // smoothness reads better than freshness.
+          const latest = this.buffer[this.buffer.length - 1]!;
+          const me = latest.snap.players.find((p) => p.id === this.localId) ?? null;
+          if (me) {
+            const dt = Math.min(0.1, Math.max(0, (nowMs - latest.recvAtMs) / 1000));
+            const lv = me.vehicle.linVel;
+            vis.group.position.set(
+              me.vehicle.position.x + lv.x * dt,
+              me.vehicle.position.y + lv.y * dt,
+              me.vehicle.position.z + lv.z * dt,
+            );
+            // Quaternion integration: dq/dt = 0.5 * (omega ⊗ q), where
+            // omega is the angular velocity as a pure quaternion (0,wx,wy,wz).
+            const q = me.vehicle.rotation;
+            const w = me.vehicle.angVel;
+            let nx = q.x + 0.5 * dt * ( w.x * q.w + w.y * q.z - w.z * q.y);
+            let ny = q.y + 0.5 * dt * (-w.x * q.z + w.y * q.w + w.z * q.x);
+            let nz = q.z + 0.5 * dt * ( w.x * q.y - w.y * q.x + w.z * q.w);
+            let nw = q.w + 0.5 * dt * (-w.x * q.x - w.y * q.y - w.z * q.z);
+            const len = Math.hypot(nx, ny, nz, nw) || 1;
+            nx /= len; ny /= len; nz /= len; nw /= len;
+            vis.group.quaternion.set(nx, ny, nz, nw);
+            // Push the extrapolated quaternion into _qa so the camera
+            // follow below sees the new pose, not the pre-extrapolation
+            // slerp result.
+            this._qa.set(nx, ny, nz, nw);
+          }
+          // Hand the (now extrapolated) chassis pose to the chase camera.
           this.cam.follow(vis.group.position, { x: this._qa.x, y: this._qa.y, z: this._qa.z, w: this._qa.w });
           this._localAxlesLast[0]!.rideY = this._axleBuf[0]!.rideY;
           this._localAxlesLast[0]!.rollAngle = this._axleBuf[0]!.rollAngle;
