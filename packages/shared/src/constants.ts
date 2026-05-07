@@ -44,7 +44,7 @@ export const VEHICLE = {
   driveSplit: { front: 0.5, rear: 0.5 },
   brakeForce: 2500,
   maxSteer: 0.72,
-  steerSpeed: 2.2,
+  steerSpeed: 4.5,
   // Wheel friction multipliers - front slightly less grippy than rear so
   // the car understeers (slides front-end-out) instead of pivoting hard
   // enough to flip on most turns. Rollover is still possible if you take
