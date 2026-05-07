@@ -72,9 +72,18 @@ export class Scene {
 
   constructor(canvasParent: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    // Cap pixel ratio. Uncapped on a 2x or 3x display the GPU pays 4-9x
+    // the fragment cost - the difference between 60 FPS and 20 FPS on
+    // mid-tier mobile + integrated GPUs. 1.5 is a good compromise: still
+    // crisper than CSS pixels, well under the cliff. Higher-end devices
+    // can override at runtime if needed.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
+    // PCFSoft is the default and is several samples per fragment on the
+    // shadow-casting pass. PCF (basic) halves that with barely visible
+    // quality loss at our shadow map resolution.
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     canvasParent.appendChild(this.renderer.domElement);
 
     // Procedural sky dome replaces the flat background colour. Fog still
@@ -89,11 +98,18 @@ export class Scene {
     const sun = new THREE.DirectionalLight(0xfff4dd, 1.4);
     sun.position.set(50, 80, 30);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    // 1024² instead of 2048². Shadows still readable on a 200 m × 200 m
+    // shadow camera frustum (~20 cm per shadow texel) and the GPU pays
+    // a quarter of the depth-pass fragment cost. The map-size drop is
+    // pure win on integrated and mobile GPUs.
+    sun.shadow.mapSize.set(1024, 1024);
     sun.shadow.camera.left = -100;
     sun.shadow.camera.right = 100;
     sun.shadow.camera.top = 100;
     sun.shadow.camera.bottom = -100;
+    // Bigger shadow bias - PCFShadowMap can produce light "acne" near
+    // edges with the larger texel pitch.
+    sun.shadow.bias = -0.0008;
     this.scene.add(sun);
     this.scene.add(new THREE.HemisphereLight(0xb8d0e2, 0x66553c, 0.6));
 

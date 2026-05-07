@@ -76,21 +76,31 @@ export function geomFor(kind: CarKind): VehicleGeom {
   return VEHICLE_GEOM[kind];
 }
 
-/** Rest-pose wheel positions in chassis-local space, derived from the
- *  per-kind axle geometry. Order: [FL, FR, RL, RR] - matches the legacy
- *  VEHICLE.wheelPositions index convention so existing renderers can
- *  still reference indices the same way. */
-export function restWheelPositions(kind: CarKind): [
-  { x: number; y: number; z: number },
-  { x: number; y: number; z: number },
-  { x: number; y: number; z: number },
-  { x: number; y: number; z: number },
-] {
-  const g = VEHICLE_GEOM[kind];
-  return [
+type WheelRest = readonly [
+  { readonly x: number; readonly y: number; readonly z: number },
+  { readonly x: number; readonly y: number; readonly z: number },
+  { readonly x: number; readonly y: number; readonly z: number },
+  { readonly x: number; readonly y: number; readonly z: number },
+];
+
+const buildRest = (g: VehicleGeom): WheelRest =>
+  [
     { x: -g.front.trackHalf, y: g.front.centerLocalY, z: g.front.centerLocalZ },
     { x: +g.front.trackHalf, y: g.front.centerLocalY, z: g.front.centerLocalZ },
     { x: -g.rear.trackHalf, y: g.rear.centerLocalY, z: g.rear.centerLocalZ },
     { x: +g.rear.trackHalf, y: g.rear.centerLocalY, z: g.rear.centerLocalZ },
-  ];
+  ] as const;
+
+const REST_WHEEL_POSITIONS: Record<CarKind, WheelRest> = {
+  patrol: buildRest(patrolGeom),
+  hilux: buildRest(hiluxGeom),
+};
+
+/** Rest-pose wheel positions in chassis-local space, derived from the
+ *  per-kind axle geometry. Order: [FL, FR, RL, RR] - matches the legacy
+ *  VEHICLE.wheelPositions index convention so existing renderers can
+ *  still reference indices the same way.
+ *  Returns a shared frozen-shape array; callers must NOT mutate it. */
+export function restWheelPositions(kind: CarKind): WheelRest {
+  return REST_WHEEL_POSITIONS[kind];
 }

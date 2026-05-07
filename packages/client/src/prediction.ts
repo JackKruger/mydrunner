@@ -216,8 +216,15 @@ export class Prediction {
     const me = snap.players.find((p) => p.id === myId);
     if (!me) return null;
 
-    // Drop acked inputs.
-    this.queue = this.queue.filter((q) => q.input.seq > me.lastAckSeq);
+    // Drop acked inputs in place. queue.filter() and queue.slice() both
+    // allocate a fresh array on every snapshot (30/s); doing this in place
+    // with splice() reuses the existing one and removes a steady GC
+    // source. The array's already in cache.
+    let drop = 0;
+    while (drop < this.queue.length && this.queue[drop]!.input.seq <= me.lastAckSeq) {
+      drop += 1;
+    }
+    if (drop > 0) this.queue.splice(0, drop);
 
     // Cap replay length. Each queued input costs one world.step() in the
     // loop below; once the queue is large enough that replay takes longer
@@ -231,7 +238,7 @@ export class Prediction {
     // starves the render loop and grows the divergence further.
     const MAX_REPLAY = 30;
     if (this.queue.length > MAX_REPLAY) {
-      this.queue = this.queue.slice(-MAX_REPLAY);
+      this.queue.splice(0, this.queue.length - MAX_REPLAY);
     }
 
     const a = this.lastAlpha;

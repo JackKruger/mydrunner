@@ -72,6 +72,19 @@ const netDiag = {
   reconcileMsSum: 0,
   reconcileMsMax: 0,
 };
+// Per-frame phase telemetry, flushed on the same 5 s cadence by piggy-
+// backing on netDiag's window. Tells us whether a slow frame is render
+// (GPU-bound), prediction (CPU-bound physics), or "other" (DOM, GC).
+const frameDiag = {
+  frames: 0,
+  totalMsSum: 0,
+  totalMsMax: 0,
+  predictMsSum: 0,
+  predictMsMax: 0,
+  renderMsSum: 0,
+  renderMsMax: 0,
+  steps: 0,
+};
 function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: boolean; queueLen: number; wheelAngVelErr: number; gearMismatch: boolean; replayDiv: number } | null, reconcileMs: number): void {
   if (netDiag.windowStart === 0) netDiag.windowStart = recvAtMs;
   if (netDiag.prevRecvMs > 0) {
@@ -107,6 +120,12 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
     const meanWheelErr = netDiag.wheelAngVelErrSum / n;
     const meanReplayDiv = netDiag.replayDivSum / n;
     const meanReconcileMs = netDiag.reconcileMsSum / n;
+    const frames = frameDiag.frames || 1;
+    const meanFrameMs = frameDiag.totalMsSum / frames;
+    const meanPredictMs = frameDiag.predictMsSum / frames;
+    const meanRenderMs = frameDiag.renderMsSum / frames;
+    const stepsPerFrame = frameDiag.steps / frames;
+    const fps = frameDiag.frames / Math.max(0.001, elapsedS);
     console.log(
       `[mydrunner-client] net ${elapsedS.toFixed(1)}s snaps=${netDiag.snaps} ` +
         `gap mean=${meanGap.toFixed(1)}ms max=${netDiag.gapMaxMs.toFixed(1)}ms ` +
@@ -117,8 +136,21 @@ function netDiagOnSnapshot(recvAtMs: number, stats: { posErr: number; capped: bo
         `wAVerr mean=${meanWheelErr.toFixed(2)}r/s max=${netDiag.wheelAngVelErrMax.toFixed(2)}r/s ` +
         `gearMismatch=${netDiag.gearMismatches} ` +
         `replayDiv mean=${meanReplayDiv.toFixed(3)}m max=${netDiag.replayDivMax.toFixed(3)}m ` +
-        `reconcile mean=${meanReconcileMs.toFixed(2)}ms max=${netDiag.reconcileMsMax.toFixed(2)}ms`,
+        `reconcile mean=${meanReconcileMs.toFixed(2)}ms max=${netDiag.reconcileMsMax.toFixed(2)}ms ` +
+        `| fps=${fps.toFixed(0)} ` +
+        `frame mean=${meanFrameMs.toFixed(1)}ms max=${frameDiag.totalMsMax.toFixed(1)}ms ` +
+        `predict mean=${meanPredictMs.toFixed(2)}ms max=${frameDiag.predictMsMax.toFixed(2)}ms ` +
+        `render mean=${meanRenderMs.toFixed(2)}ms max=${frameDiag.renderMsMax.toFixed(2)}ms ` +
+        `steps/frame=${stepsPerFrame.toFixed(2)}`,
     );
+    frameDiag.frames = 0;
+    frameDiag.totalMsSum = 0;
+    frameDiag.totalMsMax = 0;
+    frameDiag.predictMsSum = 0;
+    frameDiag.predictMsMax = 0;
+    frameDiag.renderMsSum = 0;
+    frameDiag.renderMsMax = 0;
+    frameDiag.steps = 0;
     netDiag.windowStart = recvAtMs;
     netDiag.snaps = 0;
     netDiag.gapSumMs = 0;
@@ -392,6 +424,8 @@ async function start(): Promise<void> {
       netDiagOnSnapshot(recvAtMs, stats, reconMs);
     }
 
+    let predictMs = 0;
+    let stepsThisFrame = 0;
     if (connected && prediction) {
       predictAcc += frameDt;
       let steps = 0;
@@ -404,6 +438,8 @@ async function start(): Promise<void> {
         steps += 1;
         if (performance.now() - stepStart >= PREDICT_BUDGET_MS) break;
       }
+      predictMs = performance.now() - stepStart;
+      stepsThisFrame = steps;
       // If we hit the hard cap (>200 ms of unstepped accumulator) we're
       // never catching up, so drop the leftover. The wall-clock cap is
       // not an over-budget signal - we just yielded to the renderer.
@@ -425,7 +461,20 @@ async function start(): Promise<void> {
       updateAxleDebug(predState.axles[0], predState.axles[1]);
     }
 
+    const renderStart = performance.now();
     scene.render(now);
+    const renderMs = performance.now() - renderStart;
+
+    const frameTotalMs = performance.now() - now;
+    frameDiag.frames += 1;
+    frameDiag.totalMsSum += frameTotalMs;
+    if (frameTotalMs > frameDiag.totalMsMax) frameDiag.totalMsMax = frameTotalMs;
+    frameDiag.predictMsSum += predictMs;
+    if (predictMs > frameDiag.predictMsMax) frameDiag.predictMsMax = predictMs;
+    frameDiag.renderMsSum += renderMs;
+    if (renderMs > frameDiag.renderMsMax) frameDiag.renderMsMax = renderMs;
+    frameDiag.steps += stepsThisFrame;
+
     if (connected) {
       const kmh = (lastSpeed * 3.6).toFixed(0);
       let surfaceLabel = '';
