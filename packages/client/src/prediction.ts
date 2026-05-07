@@ -160,23 +160,59 @@ export class Prediction {
       this.posOffset.z -= dz * blend;
     }
 
-    // Rotation: NO correction here. The server's snapshot at lastAckSeq
-    // reflects the world before our latest inputs were processed; the
-    // local sim is correctly ahead. Pulling local rotation toward the
-    // (stale) server rotation each snapshot is what made the chassis
-    // feel sluggish — the prediction integrates a yaw, then the
-    // correction halves it back out, repeatedly. Trust local rotation;
-    // a hard snap on big position divergence (above) covers true
-    // desync. Velocities also untouched for the same reason.
+    // Rotation: light, deadband-gated correction. The local sim and the
+    // server run identical physics on identical inputs, so they should
+    // converge - but tiny floating-point differences accumulate, and
+    // without ANY correction the local rotation slowly drifts off from
+    // the server (visible as the truck "driving sideways" after a few
+    // minutes). Pulling local toward the server-extrapolated rotation
+    // by 4 % per snapshot is small enough not to fight the predicted
+    // yaw on a fresh input (the local sim's rotation lead is preserved
+    // because we extrapolate the server's rotation forward by dtAhead),
+    // but cumulative enough to bound long-term drift to <1°.
+    const wAng = v.angVel;
+    const q = v.rotation;
+    let serverNowQx = q.x + 0.5 * dtAhead * ( wAng.x * q.w + wAng.y * q.z - wAng.z * q.y);
+    let serverNowQy = q.y + 0.5 * dtAhead * (-wAng.x * q.z + wAng.y * q.w + wAng.z * q.x);
+    let serverNowQz = q.z + 0.5 * dtAhead * ( wAng.x * q.y - wAng.y * q.x + wAng.z * q.w);
+    let serverNowQw = q.w + 0.5 * dtAhead * (-wAng.x * q.x - wAng.y * q.y - wAng.z * q.z);
+    const sqLen = Math.hypot(serverNowQx, serverNowQy, serverNowQz, serverNowQw) || 1;
+    serverNowQx /= sqLen; serverNowQy /= sqLen; serverNowQz /= sqLen; serverNowQw /= sqLen;
+    const lr = this.vehicle.body.rotation();
+    let dot = lr.x * serverNowQx + lr.y * serverNowQy + lr.z * serverNowQz + lr.w * serverNowQw;
+    let bx = serverNowQx, by = serverNowQy, bz = serverNowQz, bw = serverNowQw;
+    if (dot < 0) { bx = -bx; by = -by; bz = -bz; bw = -bw; dot = -dot; }
+    // dot ≈ cos(angle/2). Skip correction for very small angles (<1°)
+    // so the smooth steady-state isn't constantly nudged.
+    if (dot < 0.99996) {
+      const tRot = 0.04;
+      let nx = lr.x + (bx - lr.x) * tRot;
+      let ny = lr.y + (by - lr.y) * tRot;
+      let nz = lr.z + (bz - lr.z) * tRot;
+      let nw = lr.w + (bw - lr.w) * tRot;
+      const rLen = Math.hypot(nx, ny, nz, nw) || 1;
+      this.vehicle.body.setRotation({ x: nx / rLen, y: ny / rLen, z: nz / rLen, w: nw / rLen }, true);
+    }
+    // Velocity: light blend toward server (8 %) so divergent linVel/
+    // angVel doesn't compound into a position drift faster than the
+    // 12 % position correction can absorb.
+    const llv = this.vehicle.body.linvel();
+    const lav = this.vehicle.body.angvel();
+    const tVel = 0.08;
+    this.vehicle.body.setLinvel(
+      { x: llv.x + (v.linVel.x - llv.x) * tVel, y: llv.y + (v.linVel.y - llv.y) * tVel, z: llv.z + (v.linVel.z - llv.z) * tVel },
+      true,
+    );
+    this.vehicle.body.setAngvel(
+      { x: lav.x + (v.angVel.x - lav.x) * tVel, y: lav.y + (v.angVel.y - lav.y) * tVel, z: lav.z + (v.angVel.z - lav.z) * tVel },
+      true,
+    );
 
-    // Internal state snap: ALSO disabled on the steer/wheelAngVel/RPM/
-    // gear path. Each of these is being integrated locally in lockstep
-    // with the input that's also driving the server; snapping to an
-    // older server value undoes the local progress. They re-converge
-    // naturally because both sims run identical physics. Axle DOFs
-    // (rideY/rollAngle) ARE snapped because they're tiny visual flex
-    // values driven by terrain contact, not input — quick to drift,
-    // cheap to re-snap, invisible when corrected.
+    // Internal state: input-driven values (currentSteer, wheel angVels,
+    // engine RPM, gear) are NOT snapped - the local sim integrates them
+    // identically to the server given the same inputs. Axle flex IS
+    // snapped because it's terrain-contact-driven (small, drifty, and
+    // invisible when corrected each snapshot).
     if (this.vehicle.applyAxleSnaps && v.axles) {
       this.vehicle.applyAxleSnaps([
         { rideY: v.axles[0].rideY, rollAngle: v.axles[0].rollAngle },
