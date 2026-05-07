@@ -80,10 +80,10 @@ export const ENGINE = {
   // grunt to overcome drag at the new taller top gear.
   peakTorqueNm: 560,
   finalDrive: 4.1,
-  // Reverse ratio softened to -2.2 (from -2.6) for a noticeably faster
-  // reverse top end; top-gear ratio dropped to 0.60 (from 0.72) so the
-  // engine has more headroom in 5th and the truck cruises faster on road.
-  gears: [-2.2, 0, 4.0, 2.3, 1.5, 1.05, 0.60],
+  // Reverse ratio softened to -1.8 (from -2.2) for a much faster reverse
+  // top end; top-gear ratio dropped to 0.60 (from 0.72) so the engine
+  // has more headroom in 5th and the truck cruises faster on road.
+  gears: [-1.8, 0, 4.0, 2.3, 1.5, 1.05, 0.60],
   reverseGear: 0,
   neutralGear: 1,
   firstGear: 2,
