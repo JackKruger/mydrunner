@@ -2,7 +2,7 @@
 // seed (or the raw arrays) and reconstructs the same terrain bit-for-bit.
 
 import { createNoise2D } from 'simplex-noise';
-import { TERRAIN } from '../constants.js';
+import { TERRAIN, TRAIL_FEATURES } from '../constants.js';
 
 export const Surface = {
   Road: 0,
@@ -224,7 +224,9 @@ export function getHillClimbSegments(mtn: MountainSpec): Array<{ ax: number; az:
 }
 
 /** Hill climb path: switchback carved into the mountain side.
- *  The path is indented below natural terrain. */
+ *  The path is indented below natural terrain to leave a visible bench
+ *  cut. Indent magnitude lives in TRAIL_FEATURES.pathIndent so it can
+ *  be tuned without editing this layer. */
 export const hillClimbLayer: HeightLayer = (ctx, x, z, currentH) => {
   const segments = getHillClimbSegments(ctx.mountain);
   let minDist = Infinity;
@@ -233,8 +235,90 @@ export const hillClimbLayer: HeightLayer = (ctx, x, z, currentH) => {
     minDist = Math.min(minDist, dist);
   }
   if (minDist > HILL_CLIMB_PATH_HALF_WIDTH + 5) return currentH;
-  const indent = 2.0 * Math.exp(-(minDist ** 2) / (2 * HILL_CLIMB_PATH_HALF_WIDTH ** 2));
+  const indent = TRAIL_FEATURES.pathIndent * Math.exp(-(minDist ** 2) / (2 * HILL_CLIMB_PATH_HALF_WIDTH ** 2));
   return currentH - indent;
+};
+
+/** Distance + parametric position to nearest hill-climb segment. Returns
+ *  -1 traverseIdx if no segment is within `withinDist`. Reused by the
+ *  trail-features layer and the trail-surface rule so they don't both
+ *  re-walk the segments list. */
+function nearestHillClimbSegment(
+  ctx: TerrainGenContext,
+  x: number,
+  z: number,
+  withinDist: number,
+): { idx: number; dist: number; t: number } {
+  const segments = getHillClimbSegments(ctx.mountain);
+  let bestIdx = -1;
+  let bestDist = Infinity;
+  let bestT = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]!;
+    const dx = seg.bx - seg.ax;
+    const dz = seg.bz - seg.az;
+    const len2 = dx * dx + dz * dz;
+    if (len2 < 1e-6) continue;
+    let t = ((x - seg.ax) * dx + (z - seg.az) * dz) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const cx = seg.ax + t * dx;
+    const cz = seg.az + t * dz;
+    const dist = Math.hypot(x - cx, z - cz);
+    if (dist < bestDist) { bestDist = dist; bestIdx = i; bestT = t; }
+  }
+  if (bestDist > withinDist) return { idx: -1, dist: Infinity, t: 0 };
+  return { idx: bestIdx, dist: bestDist, t: bestT };
+}
+
+/** Per-traverse trail features: whoops (bump sequence), rocky step
+ *  (single mound), and a mud-puddle dip. Each feature is bound to a
+ *  specific traverse index in TRAIL_FEATURES. */
+export const trailFeaturesLayer: HeightLayer = (ctx, x, z, currentH) => {
+  const near = nearestHillClimbSegment(ctx, x, z, HILL_CLIMB_PATH_HALF_WIDTH + 1);
+  if (near.idx < 0) return currentH;
+  const segments = getHillClimbSegments(ctx.mountain);
+  const seg = segments[near.idx]!;
+  const segLen = Math.hypot(seg.bx - seg.ax, seg.bz - seg.az);
+  let dh = 0;
+
+  const W = TRAIL_FEATURES.whoops;
+  if (near.idx === W.traverseIdx && near.t >= W.rangeStart && near.t <= W.rangeEnd) {
+    // Position relative to first whoop's centre. Whoops are spaced
+    // along the segment; the bump field is the sum of Gaussians but in
+    // practice we only need the nearest one (others are far enough
+    // away that their contribution is < 1 cm).
+    const rangeLen = (W.rangeEnd - W.rangeStart) * segLen;
+    const numWhoops = Math.max(1, Math.floor(rangeLen / W.spacing));
+    const distFromRangeStart = (near.t - W.rangeStart) * segLen;
+    let nearestWhoopOffset = Infinity;
+    for (let w = 0; w < numWhoops; w++) {
+      const whoopCentre = (w + 0.5) * (rangeLen / numWhoops);
+      const d = Math.abs(distFromRangeStart - whoopCentre);
+      if (d < nearestWhoopOffset) nearestWhoopOffset = d;
+    }
+    const along = Math.exp(-(nearestWhoopOffset * nearestWhoopOffset) / (2 * W.sigmaAlong * W.sigmaAlong));
+    const across = Math.exp(-(near.dist * near.dist) / (2 * W.sigmaAcross * W.sigmaAcross));
+    dh += W.height * along * across;
+  }
+
+  const S = TRAIL_FEATURES.rockyStep;
+  if (near.idx === S.traverseIdx) {
+    const offsetMetres = (near.t - S.t) * segLen;
+    const along = Math.exp(-(offsetMetres * offsetMetres) / (2 * S.sigmaAlong * S.sigmaAlong));
+    const across = Math.exp(-(near.dist * near.dist) / (2 * S.sigmaAcross * S.sigmaAcross));
+    dh += S.height * along * across;
+  }
+
+  const M = TRAIL_FEATURES.mudPuddle;
+  if (near.idx === M.traverseIdx && near.t >= M.rangeStart && near.t <= M.rangeEnd) {
+    const tCentre = 0.5 * (M.rangeStart + M.rangeEnd);
+    const offsetMetres = (near.t - tCentre) * segLen;
+    const along = Math.exp(-(offsetMetres * offsetMetres) / (2 * M.sigmaAlong * M.sigmaAlong));
+    const across = Math.exp(-(near.dist * near.dist) / (2 * M.sigmaAcross * M.sigmaAcross));
+    dh -= M.depth * along * across;
+  }
+
+  return currentH + dh;
 };
 
 /** Summit lookout plateau: flattens a small disc at the peak so there is
@@ -458,12 +542,42 @@ const DEFAULT_HEIGHT_LAYERS: HeightLayer[] = [
   valleyLayer,
   mountainLayer,
   hillClimbLayer,
+  trailFeaturesLayer,  // whoops + rocky step + mud-puddle dip on top of the trail bench
   lookoutLayer,
   bogLayer,
   edgeLayer,
   roadLayer,
   padLayer,
 ];
+
+/** Hill-climb trail surface rule.
+ *  - Lower 3 traverses (idx 0..2) are Dirt, the upper 2 (idx 3, 4)
+ *    are Gravel - visually distinct from off-trail terrain so the
+ *    intended path reads at a distance.
+ *  - The mud-puddle on traverse 1 overrides Dirt with Mud inside its
+ *    radial range, so the player sees and feels the puddle distinctly.
+ *  Runs AFTER mountainSurfaceRule so it overrides Grass/Rock there. */
+export const trailSurfaceRule: SurfaceRule = (ctx, x, z, h, currentSurf) => {
+  const near = nearestHillClimbSegment(ctx, x, z, HILL_CLIMB_PATH_HALF_WIDTH);
+  if (near.idx < 0) return currentSurf;
+  const M = TRAIL_FEATURES.mudPuddle;
+  if (
+    near.idx === M.traverseIdx &&
+    near.t >= M.rangeStart &&
+    near.t <= M.rangeEnd
+  ) {
+    // Inside the mud puddle's radial reach -> Mud surface.
+    const tCentre = 0.5 * (M.rangeStart + M.rangeEnd);
+    const segments = getHillClimbSegments(ctx.mountain);
+    const seg = segments[near.idx]!;
+    const segLen = Math.hypot(seg.bx - seg.ax, seg.bz - seg.az);
+    const offsetMetres = Math.abs(near.t - tCentre) * segLen;
+    if (offsetMetres < M.sigmaAlong * 1.5 && near.dist < M.sigmaAcross * 1.2) {
+      return Surface.Mud;
+    }
+  }
+  return near.idx <= 2 ? Surface.Dirt : Surface.Gravel;
+};
 
 const DEFAULT_SURFACE_RULES: SurfaceRule[] = [
   roadSurfaceRule,
@@ -472,6 +586,7 @@ const DEFAULT_SURFACE_RULES: SurfaceRule[] = [
   mountainSurfaceRule,
   lookoutSurfaceRule,
   grassSurfaceRule,
+  trailSurfaceRule,
 ];
 
 /** Returns 1 inside [0, halfExtent], smoothly falling to 0 over the

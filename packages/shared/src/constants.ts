@@ -293,6 +293,52 @@ export const TERRAIN = {
   ] as ReadonlyArray<{ x: number; z: number; depth: number; sigma: number }>,
 } as const;
 
+// Hill-climb trail features.
+// The trail itself is just a polyline indented into the mountain side
+// (see hillClimbLayer). These features sit ON specific traverses to
+// give each one a personality:
+//   T1 (lower east):  shallow mud puddle - commit through or pick around
+//   T2 (mid west):    whoops sequence - sustained suspension articulation
+//   T3 (mid east):    plain (recovery / momentum-building stretch)
+//   T4 (upper west):  rocky-step mound - articulate at full steer / steep grade
+//   T5 (final):       plain (summit approach)
+// Tunables collected here so the feature placement / scale can move
+// without touching the height-layer code.
+export const TRAIL_FEATURES = {
+  // Hill climb path indent (m below natural). Reduced from 2.0:
+  // a 2 m ditch made the path read as a trench rather than a graded
+  // bench cut. 0.8 m is enough to see the trail from a distance without
+  // walling the truck into it.
+  pathIndent: 0.8,
+
+  whoops: {
+    traverseIdx: 1,           // zero-indexed -> traverse 2 (mid west)
+    rangeStart: 0.30,         // parametric range along segment
+    rangeEnd: 0.70,
+    spacing: 3.5,             // metres between bump centres
+    height: 0.3,              // peak height of each bump
+    sigmaAlong: 0.7,          // along-segment falloff
+    sigmaAcross: 1.5,         // across-segment falloff
+  },
+
+  rockyStep: {
+    traverseIdx: 3,           // traverse 4 (upper west, steep)
+    t: 0.5,                   // parametric position along segment
+    height: 0.4,              // peak rise
+    sigmaAlong: 1.5,
+    sigmaAcross: 2.0,
+  },
+
+  mudPuddle: {
+    traverseIdx: 0,           // traverse 1 (lower east)
+    rangeStart: 0.55,
+    rangeEnd: 0.70,
+    depth: 0.45,              // dip depth
+    sigmaAlong: 1.5,
+    sigmaAcross: 1.5,
+  },
+} as const;
+
 // Rut formation. Each driven wheel in mud carves the heightmap each tick:
 //   delta_y = RUT_RATE * (1 - grip) * |throttle| * wheelInContact
 // Capped to RUT_MAX_DEPTH per cell. Heightfield collider is rebuilt every
