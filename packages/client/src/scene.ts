@@ -302,6 +302,25 @@ export class Scene {
   localAxles(): [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] | null {
     return this._localHasState ? this._localAxlesLast : null;
   }
+  /** Read the LATEST raw snapshot's server-side state for the local
+   *  player. Unlike localPosition()/localSteer() (which return
+   *  interp/extrapolation outputs) this exposes the unfiltered wire
+   *  values - used by the latency test to time when server-side state
+   *  transitions (currentSteer, angVel.y) actually arrive on the client. */
+  localServerState(): { steer: number; angVelY: number; yaw: number; recvAtMs: number } | null {
+    if (!this.localId || this.buffer.length === 0) return null;
+    const latest = this.buffer[this.buffer.length - 1]!;
+    const me = latest.snap.players.find((p) => p.id === this.localId);
+    if (!me) return null;
+    const q = me.vehicle.rotation;
+    const yaw = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y));
+    return {
+      steer: me.vehicle.wheels[0]?.steer ?? 0,
+      angVelY: me.vehicle.angVel.y,
+      yaw,
+      recvAtMs: latest.recvAtMs,
+    };
+  }
   /** Push the latest sampled input steer (range -1..1) so the local
    *  truck's front wheels can snap to the player's intent visually
    *  even though the chassis pose still comes from snapshots. */

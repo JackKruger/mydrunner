@@ -35,6 +35,10 @@ export default defineConfig({
       url: 'http://127.0.0.1:2567/health',
       reuseExistingServer: true,
       timeout: 30_000,
+      // Forward server stdout/stderr to the test runner so latency
+      // traces ([mydrunner-server] [trace] ...) appear in test output.
+      stdout: 'pipe',
+      stderr: 'pipe',
     },
     {
       command: 'pnpm --filter @mydrunner/client run dev',

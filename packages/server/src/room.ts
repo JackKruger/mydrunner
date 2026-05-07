@@ -45,6 +45,22 @@ interface InternalPlayer {
   spawn: { position: { x: number; y: number; z: number }; yaw: number };
   /** Last chat broadcast time (server clock ms). Used for rate-limiting. */
   lastChatAtMs: number;
+  /** Latency trace state. Populated when input.steer transitions from
+   *  ~0 to a clear deflection; tickOnce() then records when the
+   *  vehicle's currentSteer and yaw rate cross diagnostic thresholds
+   *  and emits a one-shot stdout line. Used by tests/latency.spec.ts to
+   *  see the server-side budget unaffected by Playwright's CDP gap. */
+  trace: SteerTrace | null;
+}
+
+interface SteerTrace {
+  startMs: number;
+  startSteer: number;
+  startAngVelY: number;
+  t25Ms: number;
+  t50Ms: number;
+  tAngVelMs: number;
+  done: boolean;
 }
 
 export class Room {
@@ -144,6 +160,7 @@ export class Room {
       vehicle,
       pendingInput: { ...EMPTY_INPUT },
       lastAckSeq: 0,
+      trace: null,
       spawn,
       lastChatAtMs: 0,
     });
@@ -175,6 +192,25 @@ export class Room {
     const p = this.players.get(id);
     if (!p) return;
     if (input.seq <= p.lastAckSeq) return;
+    // Latency trace: detect a clear 0 -> deflection transition. Only
+    // arms when no trace is in flight, so a held input doesn't keep
+    // re-firing.
+    if (
+      p.trace === null &&
+      Math.abs(p.pendingInput.steer) < 0.05 &&
+      Math.abs(input.steer) >= 0.5
+    ) {
+      const st = p.vehicle.getState();
+      p.trace = {
+        startMs: performance.now(),
+        startSteer: st.wheels[0]?.steer ?? 0,
+        startAngVelY: st.angVel.y,
+        t25Ms: 0,
+        t50Ms: 0,
+        tAngVelMs: 0,
+        done: false,
+      };
+    }
     p.pendingInput = {
       seq: input.seq,
       throttle: clamp(input.throttle, -1, 1),
@@ -206,6 +242,38 @@ export class Room {
     }
     this.world.step();
     this.tick += 1;
+
+    // Latency trace: for any player whose trace is armed, record when
+    // server-side currentSteer crosses 25%/50% of maxSteer and when
+    // |angVel.y| crosses 0.1 rad/s, then emit a one-line summary.
+    for (const p of this.players.values()) {
+      const tr = p.trace;
+      if (!tr || tr.done) continue;
+      const elapsed = performance.now() - tr.startMs;
+      const st = p.vehicle.getState();
+      // Measure deltas from the trace's baseline so existing yaw drift
+      // (suspension oscillation while driving straight) doesn't trip the
+      // angVel threshold immediately.
+      const dSteer = Math.abs((st.wheels[0]?.steer ?? 0) - tr.startSteer);
+      const dAngVelY = Math.abs(st.angVel.y - tr.startAngVelY);
+      if (tr.t25Ms === 0 && dSteer > 0.25 * VEHICLE.maxSteer) tr.t25Ms = elapsed;
+      if (tr.t50Ms === 0 && dSteer > 0.5 * VEHICLE.maxSteer) tr.t50Ms = elapsed;
+      if (tr.tAngVelMs === 0 && dAngVelY > 0.3) tr.tAngVelMs = elapsed;
+      if (tr.t25Ms > 0 && tr.t50Ms > 0 && tr.tAngVelMs > 0) {
+        console.log(
+          `[mydrunner-server] [trace] steer25=${tr.t25Ms.toFixed(0)}ms ` +
+            `steer50=${tr.t50Ms.toFixed(0)}ms ` +
+            `dAngVelY>0.3=${tr.tAngVelMs.toFixed(0)}ms`,
+        );
+        tr.done = true;
+      } else if (elapsed > 1500) {
+        console.log(
+          `[mydrunner-server] [trace] player=${p.handle.id} INCOMPLETE ` +
+            `t25=${tr.t25Ms.toFixed(0)} t50=${tr.t50Ms.toFixed(0)} angVel=${tr.tAngVelMs.toFixed(0)}`,
+        );
+        tr.done = true;
+      }
+    }
 
     this.ejectOffMapPlayers();
 
