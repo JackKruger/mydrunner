@@ -25,6 +25,7 @@
 import {
   FIXED_DT,
   Physics,
+  type CarKind,
   type PlayerInput,
   type WorldSnapshot,
 } from '@mydrunner/shared';
@@ -78,11 +79,15 @@ export class Prediction {
     size: number,
     resolution: number,
     spawn: { position: { x: number; y: number; z: number }; yaw?: number },
+    carKind: CarKind = 'patrol',
   ) {
     const terrain = Physics.generateTerrain({ seed, size, resolution });
     this.world = new Physics.World({ terrain });
     this.spawn = { position: spawn.position, yaw: spawn.yaw ?? 0 };
-    this.vehicle = this.world.spawnVehicle('local', this.spawn);
+    // Must match the kind the server spawned for us (Room.addPlayer uses
+    // handle.carKind) - a kind mismatch means different mass/power/geometry
+    // and the local sim would permanently fight the soft corrections.
+    this.vehicle = this.world.spawnVehicle('local', this.spawn, carKind);
   }
 
   dispose(): void {

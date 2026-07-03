@@ -1,10 +1,12 @@
-// Client entry point. Owns the net client, the scene, and the input loop.
+// Client entry point. Owns the net client, the scene, the local
+// prediction sim, and the input loop.
 //
-// The render path is purely server-authoritative: input is sampled at
-// 60 Hz and shipped to the server, the server simulates physics, snapshots
-// arrive at 30 Hz, and Scene.render() interpolates everything (local
-// truck included) ~100 ms behind the server clock. There is no local
-// physics sim, no prediction, and no reconcile.
+// Remote vehicles are server-authoritative: snapshots arrive at 30 Hz
+// and Scene.render() interpolates them ~100 ms behind the server clock.
+// The LOCAL truck runs a full Rapier sim (Prediction, soft-correction
+// model - see prediction.ts) stepped lockstep with input at 60 Hz, so it
+// responds within one tick; each snapshot nudges it toward the server
+// pose instead of snap-and-replay reconciliation.
 
 import { Physics, FIXED_DT, type PlayerId } from '@mydrunner/shared';
 
@@ -22,8 +24,8 @@ const SURFACE_LABELS: Record<number, string> = {
   [Physics.Surface.Gravel]: 'gravel',
   [Physics.Surface.Concrete]: 'concrete',
 };
-import { initInput, sampleInput, clearKeys } from './input.js';
-import { initTouchInput, onTouchEdge } from './touchInput.js';
+import { initInput, sampleInput, clearKeys, isHandbrakeOn } from './input.js';
+import { getTouchState, initTouchInput, onTouchEdge } from './touchInput.js';
 import { NetClient } from './net.js';
 import { Scene } from './scene.js';
 import { Prediction } from './prediction.js';
@@ -193,9 +195,17 @@ async function start(): Promise<void> {
   isDebug = isDebugUser(choice.name);
   if (isDebug) initDebugPanel();
 
+  // Auto-reconnect with exponential backoff. The welcome handshake
+  // rebuilds everything session-scoped (id, terrain, prediction world),
+  // so reconnecting is just "connect again": the server treats us as a
+  // fresh player. Backoff resets once a connection sticks.
+  let reconnectDelayMs = 1000;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
   const net = new NetClient(getServerUrl(), choice.name, choice.carKind, {
     onOpen() {
       connected = true;
+      reconnectDelayMs = 1000;
       chat.pushSystem('connected — press T to chat');
     },
     onWelcome(id, _serverTimeMs, terrain, spawn) {
@@ -213,7 +223,7 @@ async function start(): Promise<void> {
       // so the local Rapier sim is integrating against an identical
       // heightmap and starts at the same pose.
       prediction?.dispose();
-      prediction = new Prediction(terrain.seed, terrain.size, terrain.resolution, spawn);
+      prediction = new Prediction(terrain.seed, terrain.size, terrain.resolution, spawn, choice.carKind);
       if (import.meta.env.DEV) {
         (window as unknown as { __prediction: unknown }).__prediction = prediction;
       }
@@ -244,7 +254,15 @@ async function start(): Promise<void> {
     },
     onClose(reason) {
       connected = false;
-      hud.textContent = `disconnected: ${reason}`;
+      if (reconnectTimer !== null) return; // attempt already queued
+      const delayS = (reconnectDelayMs / 1000).toFixed(0);
+      hud.textContent = `disconnected: ${reason} — reconnecting in ${delayS}s`;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        hud.textContent = 'reconnecting…';
+        net.connect();
+      }, reconnectDelayMs);
+      reconnectDelayMs = Math.min(15_000, reconnectDelayMs * 2);
     },
   });
   currentNet = net;
@@ -388,9 +406,10 @@ async function start(): Promise<void> {
       }
       const gearLabel = lastGear === -1 ? 'R' : lastGear === 0 ? 'N' : String(lastGear);
       const fpsLabel = ` · ${fps} FPS`;
+      const hbLabel = isHandbrakeOn() || getTouchState().handbrake ? ' · HANDBRAKE' : '';
       hud.textContent =
         `connected · tick=${lastSnapTick} · ${kmh} km/h · ` +
-        `${lastRpm.toFixed(0)} RPM · gear ${gearLabel}${surfaceLabel}${fpsLabel}`;
+        `${lastRpm.toFixed(0)} RPM · gear ${gearLabel}${surfaceLabel}${hbLabel}${fpsLabel}`;
     }
     requestAnimationFrame(frame);
   }

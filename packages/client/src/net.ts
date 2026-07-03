@@ -33,10 +33,12 @@ export class NetClient {
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     ws.addEventListener('open', () => {
+      if (this.ws !== ws) return;
       ws.send(Net.encode({ t: 'hello', name: this.name, carKind: this.carKind }));
       this.events.onOpen();
     });
     ws.addEventListener('message', (ev) => {
+      if (this.ws !== ws) return;
       let msg;
       try {
         msg = Net.decodeServer(ev.data as ArrayBuffer);
@@ -61,7 +63,12 @@ export class NetClient {
           break;
       }
     });
-    ws.addEventListener('close', () => this.events.onClose('socket closed'));
+    // Ignore events from superseded sockets: connect() may be called again
+    // (auto-reconnect) while an old socket is still winding down, and its
+    // late 'close' must not report the NEW connection as dead.
+    ws.addEventListener('close', () => {
+      if (this.ws === ws) this.events.onClose('socket closed');
+    });
     ws.addEventListener('error', () => {/* surfaced via close */});
   }
 

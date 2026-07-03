@@ -6,19 +6,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mydrunner is a browser-based, multiplayer, physics-driven off-road 4x4 game inspired by MudRunner. The fun comes from the physics: suspension, slip, mud, deformable terrain, and getting unstuck. Treat the physics as the product — gameplay, content, and polish all live downstream of it feeling good.
 
-Vehicles are procedural Three.js silhouettes; physics is shared, only the mesh varies. Two kinds today (more is just adding a body builder + palette + picker entry):
+Vehicles are procedural Three.js silhouettes with per-kind physics geometry (`vehicleGeom.ts`: axle placement, mass and power multipliers). Four kinds today (more is just adding a geom entry + body builder + palette + picker entry):
 - **Patrol** — Nissan-Patrol-GQ-style boxy SUV (AWD, roof rack, bullbar, snorkel, rear spare).
-- **Hilux** — Toyota-Hilux-style ute with a hardtop canopy on the bed.
+- **Hilux** — Toyota-Hilux-style ute with a hardtop canopy; rear axle 0.1 m further back, softer rear springs.
+- **Ute** — Falcon-style flat-tray ute (Patrol physics, different silhouette).
+- **Motorbike** — dual-sport bike silhouette; half the mass, 1.4× power (still simulated as a 4-wheel chassis).
+
+The player's chosen kind is spawned on the server (`Room.addPlayer` passes `handle.carKind`) **and** in the client's local prediction world — the two must stay in sync or the soft corrections fight the local sim.
 
 Rollover is intentionally a real risk on slopes and at-speed turns into ruts — it's tuned to be controllable on the road but punishing off it. There is also an incline-traction assist (`INCLINE_ASSIST_MAX`) so the truck can actually climb the rocky path up the mountain.
 
 ## Stack
 
 - **TypeScript everywhere**, ESM, Node 22+, pnpm workspaces.
-- **Physics:** Rapier (`@dimforge/rapier3d-compat`, WASM). Server-only — the client does not run a physics simulation. Lives in `packages/shared/src/physics/` (the package is still loaded on the client for terrain generation and `sampleSurface()` lookups).
-- **Client:** Vite + Three.js. No React. Render loop is `requestAnimationFrame` driving `Scene.render()` in `packages/client/src/scene.ts`. Render is purely server-authoritative: snapshots arrive at 30 Hz and `Scene.render()` interpolates everything (local truck included) ~100 ms behind the server clock.
-- **Server:** Node + `ws` + `http`. Single authoritative `Room` running a fixed 60Hz physics loop, broadcasting 30Hz JSON snapshots. Lives in `packages/server/src/`.
-- **Wire format:** JSON for now. Encode/decode is centralised in `packages/shared/src/net/messages.ts` so swapping to msgpack/binary is a one-file change.
+- **Physics:** Rapier (`@dimforge/rapier3d-compat`, WASM). Lives in `packages/shared/src/physics/`. The server is authoritative; the client ALSO runs a local Rapier world for the local truck's prediction (see below).
+- **Client:** Vite + Three.js. No React. Render loop is `requestAnimationFrame` driving `Scene.render()` in `packages/client/src/scene.ts`. Remote vehicles interpolate from snapshots ~100 ms behind the server clock; the local truck renders from the prediction sim so it responds within one tick.
+- **Server:** Node + `ws` + `http`. Single authoritative `Room` running a fixed 60Hz physics loop, broadcasting 30Hz snapshots. Lives in `packages/server/src/`.
+- **Wire format:** MessagePack binary with quantized snapshots (cm positions, int16 quats, millirad angles — see the scale constants in `packages/shared/src/net/messages.ts`). All encode/decode is centralised there; bump the `s` schema version if the per-player tuple changes. Wheel `spin` crosses the wire wrapped mod 2π — consumers must lerp along the shortest wrapped arc.
 - **Tests:** Vitest for unit + Rapier integration; Playwright for browser smoke + multiplayer.
 
 ## Common commands
@@ -71,22 +75,20 @@ packages/
 
 `shared` is consumed via TypeScript source (`"main": "./src/index.ts"`) — no build step needed for inter-package use during dev.
 
-### Server-authoritative, no client prediction
+### Server-authoritative + soft-correction local prediction
 
-The server is the only source of truth for physics. Each tick (60 Hz):
+The server is the source of truth for physics. Each tick (60 Hz):
 
 1. Read pending input for each player.
-2. `vehicle.preStep()` applies steer/throttle/brake to the Rapier vehicle controller, performs **per-wheel surface lookup** (sample terrain texel under each wheel → modulate friction slip), then `controller.updateVehicle(dt)`.
+2. `vehicle.preStep()` applies steer/throttle/brake, performs **per-wheel surface lookup** (sample terrain texel under each wheel → modulate friction slip), applies spring/tire forces to the chassis.
 3. `world.step()` advances Rapier.
 4. `vehicle.postStep()` accumulates wheel spin for visuals.
 5. (Disabled) Each driven wheel's pass would be recorded into the **rut buffer** when `RUTS_ENABLED=true`. Currently off — the heightfield resolution is too coarse for tyre-width tracks. Buffer + flush + collider-rebuild plumbing is intact in `room.ts` for when the underlying issues are fixed.
 6. Every other tick (30 Hz), broadcast a `WorldSnapshot` to every player.
 
-The client samples input at 60 Hz and ships each `PlayerInput` to the server — it does NOT simulate physics locally. `Scene.render()` interpolates every vehicle (the local truck included) from the snapshot pair surrounding `now - RENDER_DELAY_MS`. The chase camera reads its target from the local truck's interpolated pose each frame.
+The client samples input at 60 Hz, ships each `PlayerInput` to the server, AND steps a local Rapier sim (`packages/client/src/prediction.ts`) with the same input so the local truck responds within one tick. Snapshots are treated as **soft corrections**: each one nudges the local body 12 % toward the (velocity-extrapolated) server pose, with the delta absorbed by a decaying visual offset — there is no input queue, no snap-and-replay reconcile, no replay death spiral. Divergences > 5 m hard-snap. Remote vehicles have no local sim; `Scene.render()` interpolates them from the snapshot pair surrounding `now - RENDER_DELAY_MS`.
 
-This was a deliberate trade after a long fight with prediction artifacts (rubberbanding, reconcile heartbeat, partial-replay drift while moving). The vehicle has 2.5 t of inertia and the gameplay is "intentions, not twitch reflexes", so ~100 ms of input lag is well-tolerated. Removing the prediction layer made every "the truck pops/drifts/stutters" bug architecturally impossible.
-
-If sub-100 ms input response ever becomes a hard requirement (twitch driving content, or a competitive mode), the way back is to re-introduce a local Rapier sim — the server-side physics package is unchanged, and the wire protocol (inputs in, snapshots out, `lastAckSeq` for reconcile) is already shaped for it.
+History: v1 prediction was snap-and-replay and caused every netcode bug we hit (reconcile heartbeat, partial-replay drift, replay spiral); it was removed entirely for a while (pure interpolation, ~100 ms input lag), then re-introduced as the current soft-correction model. If prediction misbehaves, the pure-interpolation fallback is: don't construct `Prediction` in `main.ts` — the scene falls back to snapshot extrapolation for the local truck automatically.
 
 ### Key files
 
@@ -101,9 +103,10 @@ If sub-100 ms input response ever becomes a hard requirement (twitch driving con
 - `packages/shared/src/physics/util.ts` — small shared helpers (currently `rotateVecByQuat`).
 - `packages/server/src/room.ts` — owns `World`, 60Hz tick, 30Hz snapshots, player spawns on the road grid. World is 320×320 at heightfield resolution 96.
 - `packages/server/src/index.ts` — HTTP+WS bootstrap, route messages into `Room`, expose `/health`.
-- `packages/client/src/scene.ts` — Three.js scene, snapshot interpolation (local + remote), terrain replication, mud splatter particles. Exposes `localPosition()` / `localSteer()` / `localAxles()` for HUD + debug + e2e to read the rendered local-truck state without a local sim. Camera state is delegated to `ChaseCamera`.
+- `packages/client/src/scene.ts` — Three.js scene, snapshot interpolation (remote) + prediction override (local), terrain replication, mud splatter particles. Exposes `localPosition()` / `localSteer()` / `localAxles()` for HUD + debug + e2e to read the rendered local-truck state. Camera state is delegated to `ChaseCamera`.
+- `packages/client/src/prediction.ts` — local Rapier sim for the local truck; soft-correction model (see architecture section above).
 - `packages/client/src/camera.ts` — `ChaseCamera`: chase-cam yaw spring with corner swing, pitch-aware lookAt for hill driving, hood cam, sky cam.
-- `packages/client/src/carMesh.ts` — `buildCarMesh(kind, isLocal, idHash)` for `'patrol' | 'hilux'`. Shared materials + wheel builder, per-kind body builders. Wheels have visible spokes + tread lugs so rotation direction reads.
+- `packages/client/src/carMesh.ts` — `buildCarMesh(kind, isLocal, idHash)` for all four `CarKind`s. Shared materials + wheel builder, per-kind body builders. Wheels have visible spokes + tread lugs so rotation direction reads.
 - `packages/client/src/joinScreen.ts` — first-load name + car picker. Persists name + carKind to localStorage; subsequent visits pre-fill the picker. `?auto=1` URL bypass for e2e.
 - `packages/client/src/touchInput.ts` — on-screen analog steer pad + gas/brake/handbrake/aux buttons for mobile. State merges into `sampleInput()` alongside keyboard.
 - `packages/client/src/terrain.ts` — Three.js terrain mesh built from the same generator the server uses; `applyRut(i, dy)` deforms it (currently unused since ruts are off).
@@ -173,8 +176,8 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - Text chat (voice was scoped and shelved — WebRTC P2P + WS signaling is the chosen approach).
 
 ### Wire-format optimisation
-- Move snapshots to msgpack or binary deltas — only changed players, only changed fields.
-- Quantize positions/quaternions for snapshots (1cm position, ~0.001 rad rotation are plenty).
+- ~~Move snapshots to msgpack~~ / ~~quantize positions/quaternions~~ — shipped (see `messages.ts`).
+- Binary deltas — only changed players, only changed fields.
 
 ### Stretch
 - Winch (rope constraint between vehicles, physics-driven recovery).

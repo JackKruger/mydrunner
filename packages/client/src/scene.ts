@@ -21,6 +21,22 @@ import { Obstacles } from './obstacles.js';
 import { LandmarkMeshes } from './landmarks.js';
 import { ChaseCamera } from './camera.js';
 import { Sky } from './sky.js';
+import { Minimap, type MinimapPlayer } from './minimap.js';
+
+const TWO_PI = Math.PI * 2;
+
+/** Recursively free the GPU resources under an Object3D. Three.js never
+ *  disposes geometries/materials on scene.remove() - without this every
+ *  departed player leaked their car mesh's buffers for the tab's life. */
+function disposeObject3D(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.geometry) mesh.geometry.dispose();
+    const mat = (mesh as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    if (Array.isArray(mat)) for (const m of mat) m.dispose();
+    else if (mat) mat.dispose();
+  });
+}
 
 interface SnapshotEntry {
   recvAtMs: number;
@@ -38,10 +54,6 @@ interface VehicleVisual {
   nameplate: THREE.Sprite | null;
   nameplateText: string;
   carKind: CarKind;
-  /** Last known wheel spin per wheel - used to derive spin rate. */
-  lastSpin: number[];
-  /** Tracking time of the previous snapshot used to compute spin rate. */
-  lastSpinAtMs: number;
 }
 
 export class Scene {
@@ -59,7 +71,10 @@ export class Scene {
   private landmarks: LandmarkMeshes | null = null;
   private particles: ParticleSystem;
   private sky: Sky;
+  private minimap = new Minimap();
   private lastFrameTimeMs = 0;
+  private _lastParticleSnapMs = 0;
+  private _minimapBuf: MinimapPlayer[] = [];
   // Pre-allocated render-loop scratch buffers — avoids per-frame GC pressure.
   private _bMap = new Map<PlayerId, PlayerSnapshot>();
   private _qa = new THREE.Quaternion();
@@ -177,11 +192,18 @@ export class Scene {
     }
     this.terrain = new TerrainMesh(seed, size, resolution);
     this.scene.add(this.terrain.mesh);
+    this.minimap.setTerrain(this.terrain.terrain);
     this.cam.setTerrain({ heightAt: (x, z) => this.terrainHeightAt(x, z) });
-    if (this.obstacles) this.scene.remove(this.obstacles.group);
+    if (this.obstacles) {
+      this.scene.remove(this.obstacles.group);
+      disposeObject3D(this.obstacles.group);
+    }
     this.obstacles = new Obstacles(seed, size, resolution);
     this.scene.add(this.obstacles.group);
-    if (this.landmarks) this.scene.remove(this.landmarks.group);
+    if (this.landmarks) {
+      this.scene.remove(this.landmarks.group);
+      disposeObject3D(this.landmarks.group);
+    }
     // Re-derive the landmark spec deterministically from the same seed
     // the server used; saves a wire round-trip for static structures.
     const t = Physics.generateTerrain({ seed, size, resolution });
@@ -243,6 +265,7 @@ export class Scene {
         v.group.remove(v.nameplate);
         disposeNameplate(v.nameplate);
       }
+      disposeObject3D(v.group);
       this.vehicles.delete(id);
     }
     const built = buildCarMesh(kind, isLocal, colorHash(id));
@@ -254,8 +277,6 @@ export class Scene {
       nameplate: null,
       nameplateText: '',
       carKind: kind,
-      lastSpin: [0, 0, 0, 0],
-      lastSpinAtMs: 0,
     };
     this.vehicles.set(id, v);
     return v;
@@ -284,6 +305,7 @@ export class Scene {
         const v = this.vehicles.get(id)!;
         if (v.nameplate) disposeNameplate(v.nameplate);
         this.scene.remove(v.group);
+        disposeObject3D(v.group);
         this.vehicles.delete(id);
       }
     }
@@ -466,7 +488,17 @@ export class Scene {
           // the snapshot.
           const useInputSteer = isLocal && i < 2;
           const steer = useInputSteer ? this._localInputSteer : (wa ? wa.steer : 0);
-          const spin = wa && wb ? wa.spin + (wb.spin - wa.spin) * t : 0;
+          // spin arrives wrapped to [0, 2pi) (see messages.ts SPIN_SCALE
+          // packing), so lerp along the shortest wrapped arc. A naive lerp
+          // sweeps backwards through a full revolution every time the value
+          // wraps - at speed that read as the wheels stuttering in reverse.
+          let spin = 0;
+          if (wa && wb) {
+            let d = (wb.spin - wa.spin) % TWO_PI;
+            if (d > Math.PI) d -= TWO_PI;
+            if (d < -Math.PI) d += TWO_PI;
+            spin = wa.spin + d * t;
+          }
           wheel.rotation.set(spin, -steer, 0);
         }
 
@@ -552,16 +584,39 @@ export class Scene {
     // throw particles. Pure visual; no networking impact.
     const frameDt = this.lastFrameTimeMs > 0 ? nowMs - this.lastFrameTimeMs : 16;
     this.lastFrameTimeMs = nowMs;
-    if (pair && this.terrain) {
-      this.spawnMudParticles(pair.b.snap, pair.b.recvAtMs);
+    // Gate on snapshot arrival, not frame rate - otherwise a 120 Hz
+    // client would emit 4x the particles of a 30 Hz one.
+    if (pair && this.terrain && pair.b.recvAtMs !== this._lastParticleSnapMs) {
+      this._lastParticleSnapMs = pair.b.recvAtMs;
+      this.spawnMudParticles(pair.b.snap);
     }
     this.particles.update(frameDt);
     this.sky.update(this.camera);
 
+    // Minimap dots come from the posed visuals, so they show exactly what
+    // the player sees (prediction for the local truck, interp for remotes).
+    // Entries are recycled to keep the render loop allocation-free.
+    let mi = 0;
+    for (const [id, v] of this.vehicles) {
+      const q = v.group.quaternion;
+      let entry = this._minimapBuf[mi];
+      if (!entry) {
+        entry = { x: 0, z: 0, yaw: 0, isLocal: false };
+        this._minimapBuf[mi] = entry;
+      }
+      entry.x = v.group.position.x;
+      entry.z = v.group.position.z;
+      entry.yaw = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y));
+      entry.isLocal = id === this.localId;
+      mi += 1;
+    }
+    this._minimapBuf.length = mi;
+    this.minimap.update(this._minimapBuf);
+
     this.renderer.render(this.scene, this.camera);
   }
 
-  private spawnMudParticles(snap: WorldSnapshot, recvAtMs: number): void {
+  private spawnMudParticles(snap: WorldSnapshot): void {
     const terrainData = this.terrain!.terrain;
     for (const p of snap.players) {
       const vis = this.vehicles.get(p.id);
@@ -569,19 +624,13 @@ export class Scene {
       const wheelPositions = Physics.restWheelPositions(p.carKind);
       // Vehicle ground speed (horizontal magnitude).
       const groundSpeed = Math.hypot(p.vehicle.linVel.x, p.vehicle.linVel.z);
-      const dtMs = recvAtMs - vis.lastSpinAtMs;
-      if (vis.lastSpinAtMs === 0 || dtMs <= 0) {
-        for (let i = 0; i < 4; i++) vis.lastSpin[i] = p.vehicle.wheels[i]?.spin ?? 0;
-        vis.lastSpinAtMs = recvAtMs;
-        continue;
-      }
       for (let i = 0; i < 4; i++) {
         const wheelSnap = p.vehicle.wheels[i];
         if (!wheelSnap || !wheelSnap.contact) continue;
-        const lastSpin = vis.lastSpin[i] ?? 0;
-        const spinRate = (wheelSnap.spin - lastSpin) / (dtMs / 1000); // rad/s
-        vis.lastSpin[i] = wheelSnap.spin;
-        const wheelLin = Math.abs(spinRate) * VEHICLE.wheelRadius;
+        // angVel is on the wire per wheel (rad/s); deriving a rate from
+        // consecutive spin values doesn't work because spin is wrapped
+        // mod 2pi for transport and aliases at speed.
+        const wheelLin = Math.abs(wheelSnap.angVel) * VEHICLE.wheelRadius;
         if (wheelLin <= groundSpeed + 1.5) continue; // not really slipping
         // World-space wheel contact point: rotate the local wheel position
         // (lowered slightly so particles emit near the ground) by the
@@ -603,7 +652,6 @@ export class Scene {
         const count = Math.min(3, Math.max(1, Math.floor(excess / 4)));
         for (let n = 0; n < count; n++) this.particles.emit(wx, wy, wz, color);
       }
-      vis.lastSpinAtMs = recvAtMs;
     }
   }
 

@@ -3,6 +3,32 @@
 This document is the snapshot of where the project is right now and what's
 next. Pair with `CLAUDE.md` (architecture + conventions) and the git log.
 
+## 2026-07-03 bug-fix + polish pass
+
+- **Fixed: carKind never reached the physics.** `Room.addPlayer` and the
+  client `Prediction` both spawned vehicles without the kind, so the
+  motorbike/hilux/ute per-kind geometry, mass, and power multipliers were
+  dead code. Regression-tested in `server/__tests__/car-kind.test.ts`.
+- **Fixed: remote wheels visually spun backwards once per revolution.**
+  `spin` crosses the wire wrapped mod 2π; the client now lerps along the
+  shortest wrapped arc, and mud-particle slip detection uses the wheel
+  `angVel` field instead of differencing wrapped spin values.
+- **Fixed: GPU leaks.** Car meshes / obstacles / landmarks are now
+  disposed (`disposeObject3D` in scene.ts) when players leave, swap kind,
+  or terrain rebuilds.
+- **Added: auto-reconnect** with exponential backoff (main.ts) and
+  stale-socket guards in NetClient.
+- **Added: minimap** (`client/src/minimap.ts`) — terrain surface base map
+  with hillshade + live player dots, local player as a heading wedge.
+- **Added: HANDBRAKE indicator in the HUD** — the Space toggle was
+  invisible state and read as "truck mysteriously stuck".
+- **Docs de-drifted:** CLAUDE.md now describes the soft-correction
+  prediction model, the msgpack quantized wire, and all four car kinds.
+  Sections below this one predate the pass and describe older states of
+  the project — trust CLAUDE.md and the git log over them.
+
+---
+
 Last commit at handoff: `d93a396 Fix wheel shake: rotation order was XYZ`.
 Branch: `claude/add-claude-documentation-b6LkY`.
 Tests: 22 shared + 18 server + 9 e2e = 49 green. Run `pnpm typecheck && pnpm test && pnpm test:e2e && pnpm build` to verify.

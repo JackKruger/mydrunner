@@ -155,7 +155,7 @@ export class Room {
 
   addPlayer(handle: PlayerHandle): void {
     const spawn = this.nextSpawn();
-    const vehicle = this.world.spawnVehicle(handle.id, spawn);
+    const vehicle = this.world.spawnVehicle(handle.id, spawn, handle.carKind);
     this.players.set(handle.id, {
       handle,
       vehicle,

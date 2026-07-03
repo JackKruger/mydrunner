@@ -44,6 +44,12 @@ export function clearKeys(): void {
   KEYS.clear();
 }
 
+/** Current handbrake-toggle state (keyboard). The HUD shows it because a
+ *  toggle with no indicator reads as "the truck is mysteriously stuck". */
+export function isHandbrakeOn(): boolean {
+  return handbrakeOn;
+}
+
 let seq = 0;
 
 export function sampleInput(): PlayerInput {
