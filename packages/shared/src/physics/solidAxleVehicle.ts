@@ -18,13 +18,12 @@
 //      steep slopes where chassis-down would miss the actual ground.
 //   4. Diff-lock equalise BEFORE slip computation, so the slip uses the
 //      locked angVel.
-//
-// See the matching Phase 1 plan in CLAUDE.md / the suspension overhaul plan.
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import {
+  ANTI_ROLL,
   FIXED_DT,
-  GRAVITY_Y,
+  SUSPENSION,
   TIRE_LATERAL,
   TIRE_LONG_FRICTION,
   VEHICLE,
@@ -65,20 +64,6 @@ import type {
   WheelSample,
 } from './vehicleTypes.js';
 import type { World } from './world.js';
-
-// Anti-roll bar: chassis-frame torque proportional to world-roll about
-// the chassis-forward axis. The per-wheel-end ride forces already give
-// static roll stability, but cornering hard unloads (or lifts) the
-// inside wheels and that loses much of the restoring torque exactly
-// when the chassis needs it. The sway bar fills the gap. Tuned soft
-// enough that cornering produces visible body lean (the player
-// feedback "needs a little more body roll") while still preventing
-// the unbounded-roll failure mode the per-wheel-end ride forces alone
-// can't catch when the inside is in the air. Damping at ~critical for
-// the new stiffness so roll oscillation still settles in one cycle:
-//   c_crit = 2*sqrt(k*I) ~ 2*sqrt(70000*900) ~ 15900 N*m*s/rad.
-const ANTI_ROLL_STIFFNESS = 70_000;
-const ANTI_ROLL_DAMPING = 16_000;
 
 type Vec3 = { x: number; y: number; z: number };
 
@@ -170,10 +155,6 @@ export class SolidAxleVehicle implements VehicleLike {
     this.input = input;
   }
 
-  setSteerAngle(angle: number): void {
-    this.currentSteer = angle;
-  }
-
   resetTo(spawn: VehicleSpawn): void {
     this.body.setTranslation(
       { x: spawn.position.x, y: spawn.position.y, z: spawn.position.z },
@@ -236,9 +217,9 @@ export class SolidAxleVehicle implements VehicleLike {
       const wL = this.wheels[wIdxL]!;
       const wR = this.wheels[wIdxR]!;
 
-      // Lift ray origins by 0.5m to prevent rays starting inside terrain.
-      // This is vital when the chassis is belly-out or wheels are deep.
-      const rayLift = 0.5;
+      // Lift ray origins to prevent rays starting inside terrain. This is
+      // vital when the chassis is belly-out or wheels are deep.
+      const rayLift = SUSPENSION.rayLift;
       const leftLocal = { x: -ag.trackHalf, y: ag.centerLocalY + rayLift, z: ag.centerLocalZ };
       const rightLocal = { x: +ag.trackHalf, y: ag.centerLocalY + rayLift, z: ag.centerLocalZ };
       const leftWorld = addVec(t, rotateVecByQuat(leftLocal, r));
@@ -347,9 +328,9 @@ export class SolidAxleVehicle implements VehicleLike {
         // edge) would otherwise produce damping forces that exceed the
         // spring saturation force and destabilise the integrator.
         const compRate = clamp(rawRate, -3, 3);
-        // Engagement ramps from 0→1 as compression reaches ~0.05m.
-        // Suspension only exerts force while compressed (comp > 0).
-        const engagement = Math.min(1, comp / 0.05);
+        // Engagement ramps from 0→1 as compression reaches the engage
+        // depth. Suspension only exerts force while compressed (comp > 0).
+        const engagement = Math.min(1, comp / SUSPENSION.dampingEngageComp);
         // Per-wheel-end stiffness is HALF the axle's total.
         const F = 0.5 * ag.rideStiffness * comp
                 + 0.5 * ag.rideDamping * engagement * compRate;
@@ -414,7 +395,7 @@ export class SolidAxleVehicle implements VehicleLike {
     {
       const rollSin = right.y;
       const rollVel = av.x * fwd.x + av.y * fwd.y + av.z * fwd.z;
-      const tq = -ANTI_ROLL_STIFFNESS * rollSin - ANTI_ROLL_DAMPING * rollVel;
+      const tq = -ANTI_ROLL.stiffness * rollSin - ANTI_ROLL.damping * rollVel;
       const sf = this._scratchForce;
       sf.x = fwd.x * tq; sf.y = fwd.y * tq; sf.z = fwd.z * tq;
       this.body.addTorque(sf, true);
@@ -503,8 +484,8 @@ export class SolidAxleVehicle implements VehicleLike {
       // Surface-dependent rolling resistance. Mud and deep mud provide
       // significantly more drag than hard surfaces.
       let rollingMult = 1.0;
-      if (w.surface === Surface.Mud) rollingMult = 4.0;
-      else if (w.surface === Surface.DeepMud) rollingMult = 12.0;
+      if (w.surface === Surface.Mud) rollingMult = WHEEL.rollingMultMud;
+      else if (w.surface === Surface.DeepMud) rollingMult = WHEEL.rollingMultDeepMud;
       const rollingResistance = WHEEL.rollingResistance * rollingMult;
 
       // Velocity of the chassis at the contact point.
@@ -525,7 +506,7 @@ export class SolidAxleVehicle implements VehicleLike {
       // force (which can be 0 or negative during unweighting) and clamp
       // it to a minimum to avoid zero-grip singularities while still
       // allowing the car to slide when unweighted.
-      const normalLoad = Math.max(500, w.lastForce ?? 0);
+      const normalLoad = Math.max(WHEEL.minNormalLoad, w.lastForce ?? 0);
       const longGripCap =
         TIRE_LONG_FRICTION * surfMult * axleGripMult * inclineMult * normalLoad;
 
@@ -657,24 +638,6 @@ export class SolidAxleVehicle implements VehicleLike {
   applyAxleSnaps(snaps: [AxleSnap, AxleSnap]): void {
     applyAxleSnap(this.axles[0]!, snaps[0]);
     applyAxleSnap(this.axles[1]!, snaps[1]);
-  }
-
-  applyWheelAngVels(angVels: number[]): void {
-    for (let i = 0; i < 4 && i < angVels.length; i++) {
-      this.wheels[i]!.angVel = angVels[i]!;
-    }
-  }
-
-  applyEngineSnap(rpm: number, signedGear: number): void {
-    this.engine.rpm = rpm;
-    // Convert signed gear (-1=reverse, 0=neutral, 1..5=forward) back to
-    // the internal gearIndex used by stepEngine.
-    this.engine.gearIndex = signedGear < 0 ? 0 : signedGear + 1;
-    this.engine.shiftCooldown = 0;
-  }
-
-  setReplaying(replaying: boolean): void {
-    this.engine.replaying = replaying;
   }
 
   dispose(): void {

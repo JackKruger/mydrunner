@@ -3,14 +3,10 @@
 // numerical drift) that cause the car to creep or oscillate at idle.
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { Physics, EMPTY_INPUT, VEHICLE, AXLE, GRAVITY_Y } from '@mydrunner/shared';
+import { Physics, EMPTY_INPUT } from '@mydrunner/shared';
 
-// Same formula as room.ts SPAWN_Y_ABOVE_GROUND
-const SPAWN_Y =
-  VEHICLE.suspensionRestLength +
-  VEHICLE.wheelRadius +
-  Math.abs(VEHICLE.wheelPositions[0]!.y) -
-  (VEHICLE.mass * Math.abs(GRAVITY_Y)) / (AXLE.front.rideStiffness + AXLE.rear.rideStiffness);
+// Same equilibrium height Room uses when spawning players.
+const SPAWN_Y = Physics.spawnYAboveGround('patrol');
 
 beforeAll(async () => {
   await Physics.initRapier();

@@ -8,7 +8,7 @@
 // responds within one tick; each snapshot nudges it toward the server
 // pose instead of snap-and-replay reconciliation.
 
-import { Physics, FIXED_DT, type PlayerId } from '@mydrunner/shared';
+import { Physics, FIXED_DT, normalizeCarKind, type PlayerId } from '@mydrunner/shared';
 
 import { EngineAudio } from './engineAudio.js';
 import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './joinScreen.js';
@@ -52,11 +52,12 @@ const scene = new Scene(app);
 const engineAudio = new EngineAudio();
 
 // Network + frame diagnostics: snapshot arrival jitter and per-frame
-// CPU/GPU breakdown. Cheap counters, flushed every 5 s. Now that there
-// is no client-side prediction, the relevant signals are jitter (gaps
-// over the interpolation buffer) and frame time. The reconcile/replay/
-// wheel-angVel-error fields the previous version tracked are gone with
-// the prediction layer they were diagnosing.
+// CPU/GPU breakdown. Cheap counters, flushed every 5 s. Jitter (gaps
+// over the interpolation buffer) matters for remote-vehicle smoothness;
+// frame time for overall render health. The soft-correction prediction
+// model has no replay queue, so there is nothing prediction-specific
+// worth counting here - divergence shows up as visible rubber-banding,
+// not as a counter.
 const NET_DIAG_WINDOW_MS = 5000;
 const netDiag = {
   windowStart: 0,
@@ -166,9 +167,8 @@ let terrainData: Physics.TerrainData | null = null;
 let prediction: Prediction | null = null;
 
 async function start(): Promise<void> {
-  // Rapier WASM init - the shared physics package still depends on it
-  // for terrain generation (sampleSurface etc), even though the client
-  // no longer runs a physics simulation.
+  // Rapier WASM init - needed before the prediction sim's World can be
+  // constructed (and by terrain generation helpers in the shared package).
   await Physics.initRapier();
 
   // Show the name + car picker on every load so the player can pick a
@@ -180,9 +180,10 @@ async function start(): Promise<void> {
   const saved = loadSavedJoin();
   let choice: JoinChoice;
   if (auto) {
+    const carParam = params.get('car');
     choice = {
       name: params.get('name') || saved?.name || `player-${Math.floor(Math.random() * 1000)}`,
-      carKind: params.get('car') === 'hilux' ? 'hilux' : (saved?.carKind ?? 'patrol'),
+      carKind: carParam ? normalizeCarKind(carParam) : (saved?.carKind ?? 'patrol'),
     };
   } else {
     choice = await showJoinScreen(saved ?? {});
@@ -211,19 +212,21 @@ async function start(): Promise<void> {
     onWelcome(id, _serverTimeMs, terrain, spawn) {
       localId = id;
       scene.setLocalPlayer(id, choice.carKind);
-      scene.setTerrain(terrain.seed, terrain.size, terrain.resolution);
-      // Cache terrain data for the surface-name HUD lookup and for the
-      // local prediction sim's terrain.
+      // Generate the deterministic TerrainData ONCE per welcome and share
+      // it everywhere it's needed: the terrain mesh, obstacles, landmarks,
+      // the surface-name HUD lookup, and the prediction sim. It used to be
+      // regenerated five times from the same seed at every (re)connect.
       terrainData = Physics.generateTerrain({
         seed: terrain.seed,
         size: terrain.size,
         resolution: terrain.resolution,
       });
-      // Build the local prediction world. Same seed + spawn as server,
+      scene.setTerrain(terrainData);
+      // Build the local prediction world. Same terrain + spawn as server,
       // so the local Rapier sim is integrating against an identical
       // heightmap and starts at the same pose.
       prediction?.dispose();
-      prediction = new Prediction(terrain.seed, terrain.size, terrain.resolution, spawn, choice.carKind);
+      prediction = new Prediction(terrainData, spawn, choice.carKind);
       if (import.meta.env.DEV) {
         (window as unknown as { __prediction: unknown }).__prediction = prediction;
       }

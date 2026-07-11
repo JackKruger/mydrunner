@@ -1,9 +1,10 @@
 // Live tuning panel. Activated only when the player's saved name matches
 // "jack" (case-insensitive). Renders a side panel of sliders bound to
-// the shared TUNING object. The client no longer simulates physics, so
-// changes only take effect on the server side once the values are baked
-// into constants.ts and the server is rebuilt. The panel is kept as a
-// way to author and copy candidate values, not to live-tune in flight.
+// the shared TUNING object. The local prediction sim reads TUNING, so a
+// slider change is felt immediately on the local truck — but the server
+// keeps its own TUNING instance, so the two sims diverge until the values
+// are baked into constants.ts and the server restarts. The soft-correction
+// model absorbs that divergence as a steady pull; expected while tuning.
 //
 // "Copy settings" serialises TUNING as a TypeScript snippet so the
 // values can be pasted into constants.ts as new defaults.
@@ -48,10 +49,6 @@ const SLIDERS: Slider[] = [
   { label: 'brakeForce', min: 500, max: 6000, step: 50, get: () => TUNING.brakeForce, set: (v) => (TUNING.brakeForce = v) },
   { label: 'maxSteer (rad)', min: 0.1, max: 0.8, step: 0.02, get: () => TUNING.maxSteer, set: (v) => (TUNING.maxSteer = v) },
   { label: 'steerSpeed', min: 0.5, max: 6, step: 0.1, get: () => TUNING.steerSpeed, set: (v) => (TUNING.steerSpeed = v) },
-  // Tyre slip curve.
-  { label: 'tire.slipPeak', min: 0.05, max: 0.5, step: 0.01, get: () => TUNING.slipPeak, set: (v) => (TUNING.slipPeak = v) },
-  { label: 'tire.slipFalloff', min: 1, max: 10, step: 0.1, get: () => TUNING.slipFalloff, set: (v) => (TUNING.slipFalloff = v) },
-  { label: 'tire.slipFloor', min: 0, max: 1, step: 0.02, get: () => TUNING.slipFloor, set: (v) => (TUNING.slipFloor = v) },
 ];
 
 const STYLE = `
@@ -230,10 +227,6 @@ export const SURFACE_FRICTION = {
 //   steerSpeed: ${f(t.steerSpeed, 2)},
 //   frontGripMult: ${f(t.frontGripMult, 2)},
 //   rearGripMult: ${f(t.rearGripMult, 2)},
-// TIRE.*:
-//   slipPeak: ${f(t.slipPeak, 2)},
-//   slipFalloff: ${f(t.slipFalloff, 2)},
-//   slipFloor: ${f(t.slipFloor, 2)},
 `;
 }
 

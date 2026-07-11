@@ -13,7 +13,6 @@ import {
   AXLE,
   INCLINE_ASSIST_MAX,
   SURFACE_FRICTION,
-  TIRE,
   TIRE_BASE_GRIP,
   TIRE_LATERAL,
   VEHICLE,
@@ -44,9 +43,6 @@ export interface Tuning {
   steerSpeed: number;
   frontGripMult: number;
   rearGripMult: number;
-  slipPeak: number;
-  slipFalloff: number;
-  slipFloor: number;
   // Solid-axle vehicle knobs. Per-axle tuning so the front and rear can
   // diverge (front stiffer for nose-up climbs, rear softer for cargo
   // articulation). diffLock* toggles the per-axle differential lock
@@ -70,9 +66,6 @@ export const TUNING: Tuning = {
   steerSpeed: VEHICLE.steerSpeed,
   frontGripMult: VEHICLE.frontGripMult,
   rearGripMult: VEHICLE.rearGripMult,
-  slipPeak: TIRE.slipPeak,
-  slipFalloff: TIRE.slipFalloff,
-  slipFloor: TIRE.slipFloor,
   axleFront: {
     rideStiffness: AXLE.front.rideStiffness,
     rideDamping: AXLE.front.rideDamping,

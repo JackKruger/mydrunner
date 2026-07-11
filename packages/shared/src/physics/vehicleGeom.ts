@@ -1,10 +1,9 @@
-// Per-CarKind axle + chassis geometry. Phase 1 keeps both kinds on the
-// shared AXLE defaults (so Patrol and Hilux drive identically through the
-// new model, just as they do today). Phase 3 differentiates them - that's
-// the natural place to give the Hilux a longer wheelbase, narrower track,
-// and a softer rear axle for cargo carrying.
+// Per-CarKind axle + chassis geometry: where a kind's physics identity
+// lives (axle placement, spring rates, mass and power multipliers).
+// Adding a kind = add a geom here + a body builder/palette in the
+// client's carMesh.ts + a picker entry in joinScreen.ts.
 
-import { AXLE, VEHICLE } from '../constants.js';
+import { AXLE, GRAVITY_Y, VEHICLE } from '../constants.js';
 import type { CarKind } from '../types.js';
 
 export interface AxleGeom {
@@ -94,7 +93,7 @@ const uteGeom: VehicleGeom = {
 // Motorbike: chassis extents + trackHalf are shared with Patrol so the
 // 4-wheel solid-axle solver keeps working unchanged. We DO scale mass
 // and engine torque per-kind so the bike feels lighter and quicker:
-//   massMult 0.5  → ~1250 kg vs Patrol's 2500 kg
+//   massMult 0.5  → ~750 kg vs Patrol's 1500 kg (VEHICLE.mass)
 //   powerMult 1.4 → 40 % more torque at the wheels
 // The visual layer in carMesh.ts overlaps the per-axle wheel pair at
 // x=0 so the silhouette reads as 1 front + 1 rear wheel.
@@ -117,6 +116,18 @@ export const VEHICLE_GEOM: Record<CarKind, VehicleGeom> = {
 
 export function geomFor(kind: CarKind): VehicleGeom {
   return VEHICLE_GEOM[kind];
+}
+
+/** Chassis-centre height above the ground at suspension equilibrium for
+ *  a kind: rest length + wheel radius + |axle mount Y|, minus the static
+ *  spring compression under the kind's actual mass (massMult applied —
+ *  a motorbike compresses its springs half as much as a Patrol).
+ *  Spawning at this height means no free-fall and no settle bounce. */
+export function spawnYAboveGround(kind: CarKind): number {
+  const g = geomFor(kind);
+  const massKg = VEHICLE.mass * g.massMult;
+  const staticComp = (massKg * Math.abs(GRAVITY_Y)) / (g.front.rideStiffness + g.rear.rideStiffness);
+  return g.front.suspensionRestLength + g.wheelRadius + Math.abs(g.front.centerLocalY) - staticComp;
 }
 
 type WheelRest = readonly [
@@ -142,9 +153,8 @@ const REST_WHEEL_POSITIONS: Record<CarKind, WheelRest> = {
 };
 
 /** Rest-pose wheel positions in chassis-local space, derived from the
- *  per-kind axle geometry. Order: [FL, FR, RL, RR] - matches the legacy
- *  VEHICLE.wheelPositions index convention so existing renderers can
- *  still reference indices the same way.
+ *  per-kind axle geometry. Order: [FL, FR, RL, RR] - the index
+ *  convention every renderer and the wheel-state wire tuple share.
  *  Returns a shared frozen-shape array; callers must NOT mutate it. */
 export function restWheelPositions(kind: CarKind): WheelRest {
   return REST_WHEEL_POSITIONS[kind];

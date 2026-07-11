@@ -8,7 +8,11 @@
 // Slip ratio = (wheelSurfaceSpeed - groundSpeed) / max(|wheelSurfaceSpeed|, |groundSpeed|, eps)
 // where wheelSurfaceSpeed = wheelAngVel * wheelRadius.
 
-import { TUNING } from '../tuning.js';
+// NOTE: this module is not used by the live solid-axle model (which uses
+// an impulse-clamped friction-circle instead of a slip curve). It is kept
+// as a tested building block for a future tire model. Reads the TIRE
+// constants directly — there is no runtime-tunable surface for it.
+import { TIRE } from '../constants.js';
 
 // Velocity floor for the slip-ratio denominator. Below this, slip is
 // computed against a fixed reference rather than the actual (tiny) max
@@ -34,13 +38,13 @@ export function slipRatio(wheelAngVel: number, wheelRadius: number, groundSpeed:
  *  still no slip). Peak at slipPeak, decays toward slipFloor past it. */
 export function gripFromSlip(slip: number): number {
   const a = Math.abs(slip);
-  const peak = TUNING.slipPeak;
-  const floor = TUNING.slipFloor;
+  const peak = TIRE.slipPeak;
+  const floor = TIRE.slipFloor;
   if (a <= peak) {
     const t = a / peak;
     return floor + (1 - floor) * t;
   }
   const over = a - peak;
-  const decay = Math.exp(-over * TUNING.slipFalloff);
+  const decay = Math.exp(-over * TIRE.slipFalloff);
   return floor + (1 - floor) * decay;
 }

@@ -19,8 +19,13 @@ export class TerrainMesh {
   private geometry: THREE.PlaneGeometry;
   private material: THREE.ShaderMaterial;
 
-  constructor(seed: number, size: number, resolution: number) {
-    this.terrain = Physics.generateTerrain({ seed, size, resolution });
+  constructor(terrain: Physics.TerrainData) {
+    // Shares the TerrainData instance generated once in main.ts. Note
+    // applyRut mutates terrain.heights in place - every consumer of the
+    // shared instance (HUD surface lookup, minimap, prediction world's
+    // source data) sees rut deltas without a second copy.
+    this.terrain = terrain;
+    const { size, resolution } = terrain;
     const n = resolution;
     const geo = new THREE.PlaneGeometry(size, size, n - 1, n - 1);
     geo.rotateX(-Math.PI / 2);

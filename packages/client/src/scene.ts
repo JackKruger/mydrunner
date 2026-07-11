@@ -178,7 +178,10 @@ export class Scene {
     this.localCarKind = carKind;
   }
 
-  setTerrain(seed: number, size: number, resolution: number): void {
+  /** Install the world visuals from the TerrainData generated once in
+   *  main.ts (obstacles + landmarks derive deterministically from it, so
+   *  nothing but the seed ever crosses the wire). */
+  setTerrain(terrain: Physics.TerrainData): void {
     if (this.terrainPlaceholder) {
       this.scene.remove(this.terrainPlaceholder);
       (this.terrainPlaceholder.material as THREE.Material).dispose();
@@ -190,7 +193,7 @@ export class Scene {
       this.terrain.mesh.geometry.dispose();
       (this.terrain.mesh.material as THREE.Material).dispose();
     }
-    this.terrain = new TerrainMesh(seed, size, resolution);
+    this.terrain = new TerrainMesh(terrain);
     this.scene.add(this.terrain.mesh);
     this.minimap.setTerrain(this.terrain.terrain);
     this.cam.setTerrain({ heightAt: (x, z) => this.terrainHeightAt(x, z) });
@@ -198,16 +201,13 @@ export class Scene {
       this.scene.remove(this.obstacles.group);
       disposeObject3D(this.obstacles.group);
     }
-    this.obstacles = new Obstacles(seed, size, resolution);
+    this.obstacles = new Obstacles(terrain);
     this.scene.add(this.obstacles.group);
     if (this.landmarks) {
       this.scene.remove(this.landmarks.group);
       disposeObject3D(this.landmarks.group);
     }
-    // Re-derive the landmark spec deterministically from the same seed
-    // the server used; saves a wire round-trip for static structures.
-    const t = Physics.generateTerrain({ seed, size, resolution });
-    this.landmarks = new LandmarkMeshes(Physics.landmarksFor(t));
+    this.landmarks = new LandmarkMeshes(Physics.landmarksFor(terrain));
     this.scene.add(this.landmarks.group);
   }
 
@@ -313,8 +313,9 @@ export class Scene {
 
   /** Read-only accessors used by the HUD (surface-under-truck lookup),
    *  the debug panel (axle DOF readout), and e2e tests. All sourced from
-   *  the most recent snapshot interpolation, so they are exactly the
-   *  visual-frame state. */
+   *  the pose the vehicle was actually rendered with this frame - the
+   *  prediction override for the local truck when active, snapshot
+   *  interpolation/extrapolation otherwise. */
   localPosition(): { x: number; y: number; z: number } | null {
     return this._localHasState ? this._localPos : null;
   }
@@ -448,11 +449,11 @@ export class Scene {
         const vis = this.ensureVehicle(pa.id, isLocal, pa.carKind);
         this.setNameplate(vis, pa.name, isLocal);
 
-        // Server-authoritative rendering: every vehicle (local included)
-        // is interpolated from the snapshot pair at the same RENDER_DELAY_MS
-        // offset. The local truck lags real input by that delay, but in
-        // exchange there is no client-side prediction loop, no reconcile
-        // stutter, and the local truck cannot ever disagree with the server.
+        // Snapshot interpolation pass: every vehicle is first posed from
+        // the snapshot pair at RENDER_DELAY_MS in the past. For remote
+        // vehicles this is final. For the LOCAL truck it is overwritten
+        // below by the prediction override (or, before the prediction's
+        // first state arrives, by extrapolation from the latest snapshot).
         vis.group.position.set(
           pa.vehicle.position.x + (pb.vehicle.position.x - pa.vehicle.position.x) * t,
           pa.vehicle.position.y + (pb.vehicle.position.y - pa.vehicle.position.y) * t,

@@ -50,9 +50,9 @@ export type ServerMessage =
 //
 // Quantization is lossy by design - millimetre / centimetre / millirad
 // precision is well below human-visible error, and the values are only
-// consumed by visuals + the reconcile snap target. They never feed back
-// into Rapier on either side, so determinism (client/server prediction
-// lockstep on full-precision floats) is preserved.
+// consumed by visuals + the prediction's soft-correction target. They
+// never feed back into Rapier on either side, so determinism (client/
+// server prediction lockstep on full-precision floats) is preserved.
 type Wire = string | Uint8Array | ArrayBuffer;
 
 function toBytes(raw: Wire): Uint8Array {
@@ -200,8 +200,62 @@ export function encode(msg: ClientMessage | ServerMessage): Uint8Array {
   return msgpackEncode(msg);
 }
 
+function isFiniteNum(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+/** Decode + validate a client->server message. Throws on malformed bytes
+ *  AND on wrong-shaped-but-valid msgpack: this is the trust boundary for
+ *  everything a client can send, and a thrown TypeError further in (e.g.
+ *  `name.slice` on a number) would escape the ws message handler and
+ *  crash the whole room. NaN/Infinity in input fields are rejected here
+ *  too — a NaN throttle would otherwise poison the sender's Rapier body. */
 export function decodeClient(raw: Wire): ClientMessage {
-  return msgpackDecode(toBytes(raw)) as ClientMessage;
+  const m = msgpackDecode(toBytes(raw)) as Record<string, unknown> | null;
+  if (m === null || typeof m !== 'object') throw new Error('client message: not an object');
+  switch (m.t) {
+    case 'hello': {
+      if (typeof m.name !== 'string') throw new Error('hello: name must be a string');
+      const carKind = typeof m.carKind === 'string' ? (m.carKind as CarKind) : undefined;
+      return { t: 'hello', name: m.name, carKind };
+    }
+    case 'input': {
+      const i = m.input as Record<string, unknown> | null | undefined;
+      if (i === null || i === undefined || typeof i !== 'object') {
+        throw new Error('input: missing payload');
+      }
+      if (
+        !Number.isSafeInteger(i.seq) ||
+        !isFiniteNum(i.throttle) ||
+        !isFiniteNum(i.steer) ||
+        !isFiniteNum(i.brake) ||
+        !isFiniteNum(i.handbrake)
+      ) {
+        throw new Error('input: non-finite field');
+      }
+      return {
+        t: 'input',
+        input: {
+          seq: i.seq as number,
+          throttle: i.throttle,
+          steer: i.steer,
+          brake: i.brake,
+          handbrake: i.handbrake,
+          buttons: isFiniteNum(i.buttons) ? i.buttons | 0 : 0,
+        },
+      };
+    }
+    case 'ping': {
+      if (!isFiniteNum(m.clientTimeMs)) throw new Error('ping: clientTimeMs must be a number');
+      return { t: 'ping', clientTimeMs: m.clientTimeMs };
+    }
+    case 'chat': {
+      if (typeof m.text !== 'string') throw new Error('chat: text must be a string');
+      return { t: 'chat', text: m.text };
+    }
+    default:
+      throw new Error('client message: unknown type');
+  }
 }
 
 export function decodeServer(raw: Wire): ServerMessage {

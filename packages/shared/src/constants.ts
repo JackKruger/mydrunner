@@ -29,25 +29,10 @@ export const VEHICLE = {
   cabinRoofY: 1.2,
   wheelRadius: 0.46,
   wheelWidth: 0.42,
-  // Suspension geometry. Chassis-connection points (wp.y) sit at the
-  // chassis bottom edge; wheels hang below at restLength. Lifted ride
-  // height + chunky tyres for that off-road look: chassis-bottom rests
-  // roughly (restLength + wheelRadius - chassisHalfY) ~= 0.55m above
-  // ground at equilibrium, more than a stock SUV.
-  suspensionRestLength: 0.55,
-  suspensionStiffness: 35,
-  suspensionDamping: 4.5,
-  suspensionCompression: 0.83,
-  maxSuspensionForce: 9000,
-  maxSuspensionTravel: 0.3,
-  wheelPositions: [
-    { x: -0.92, y: -0.45, z: 1.3 },  // FL (chassis-connection: bottom edge)
-    { x: 0.92, y: -0.45, z: 1.3 },   // FR
-    { x: -0.92, y: -0.45, z: -1.3 }, // RL
-    { x: 0.92, y: -0.45, z: -1.3 },  // RR
-  ],
+  // Suspension geometry, spring rates, and wheel positions live in AXLE
+  // below (the solid-axle model's per-axle source of truth); the legacy
+  // raycast-vehicle fields that used to sit here were deleted with it.
   // AWD torque split front:rear. 0.5/0.5 for symmetric 4x4 feel.
-  engineForce: 3200,
   driveSplit: { front: 0.5, rear: 0.5 },
   brakeForce: 4500,
   maxSteer: 0.72,
@@ -218,10 +203,43 @@ export const TIRE_LONG_FRICTION = 1.15;
 // Wheel spin physics for the solid-axle model. inertia governs how fast
 // a wheel spins up under torque (kg*m^2 of a tyre + rim + brake disc).
 // rollingResistance is a small proportional drag torque that bleeds spin
-// when the throttle is off, so the truck doesn't coast forever.
+// when the throttle is off, so the truck doesn't coast forever. The
+// rollingMult* factors scale it on soft surfaces - mud drags far more
+// than hardpack. minNormalLoad floors the friction-circle load so an
+// unweighted tire keeps a sliver of grip instead of a zero-grip
+// singularity (the car can still slide when unweighted).
 export const WHEEL = {
   inertia: 1.6,
   rollingResistance: 0.010,
+  rollingMultMud: 4.0,
+  rollingMultDeepMud: 12.0,
+  minNormalLoad: 500,
+} as const;
+
+// Suspension raycast / damping shape shared by every axle end.
+// rayLift: wheel-end rays start this far above the attachment so they
+// don't begin inside the terrain when the chassis is belly-out or a
+// wheel is deep in a rut.
+// dampingEngageComp: compression (m) over which the damper ramps from
+// 0 to full. A wheel just kissing ground stays soft; typical equilibrium
+// compression (~87 mm) is already at full damping - see the body-bob
+// analysis in solidAxleVehicle.ts.
+export const SUSPENSION = {
+  rayLift: 0.5,
+  dampingEngageComp: 0.05,
+} as const;
+
+// Anti-roll bar: chassis-frame torque proportional to world-roll about
+// the chassis-forward axis. The per-wheel-end ride forces already give
+// static roll stability, but hard cornering unloads (or lifts) the
+// inside wheels exactly when the restoring torque is needed most; the
+// sway bar fills that gap. Tuned soft enough that cornering produces
+// visible body lean while still preventing unbounded roll. Damping at
+// ~critical for this stiffness so roll oscillation settles in one cycle:
+//   c_crit = 2*sqrt(k*I) ~ 2*sqrt(70000*900) ~ 15900 N*m*s/rad.
+export const ANTI_ROLL = {
+  stiffness: 70_000,
+  damping: 16_000,
 } as const;
 
 // Hill-climb traction assist. Real 4x4s lose grip on slopes because
@@ -254,7 +272,6 @@ export const CAMERA = {
 
 // Networking
 export const DEFAULT_PORT = 2567;
-export const MAX_INPUT_QUEUE = 64;
 export const INTERPOLATION_DELAY_MS = 100;
 
 // Terrain generation tunables.
@@ -367,11 +384,12 @@ export const TRAIL_FEATURES = {
 export const RUT_RATE = 0.3035;        // m per tick at full slip  0.0035;
 export const RUT_MAX_DEPTH = 0.9;      // m below original height 0.6;    
 export const RUT_REBUILD_INTERVAL_TICKS = 30;
-// Disabled for now: at the current world size (200m) / heightfield
-// resolution (64), each rut cell is ~3.17m across - much wider than a
-// tire - so wheel passes sink large patches instead of carving tracks.
-// Also causes prediction divergence (the client's prediction world
-// never receives rut deltas), producing periodic rubberbanding on mud.
-// Re-enable once terrain resolution bumps or a sub-cell rut overlay
-// (visuals decoupled from the collider) lands.
+// Disabled for now: at the live world size (320m) / heightfield
+// resolution (128, see Room's constructor), each rut cell is ~2.5m
+// across - much wider than a tire - so wheel passes sink large patches
+// instead of carving tracks. Also causes prediction divergence (the
+// client's prediction world never receives rut deltas), producing
+// periodic rubberbanding on mud. Re-enable once terrain resolution
+// bumps or a sub-cell rut overlay (visuals decoupled from the collider)
+// lands.
 export const RUTS_ENABLED = false;

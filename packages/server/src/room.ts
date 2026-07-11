@@ -9,8 +9,6 @@ import {
   RUTS_ENABLED,
   EMPTY_INPUT,
   VEHICLE,
-  AXLE,
-  GRAVITY_Y,
   TERRAIN,
   Net,
   Physics,
@@ -20,16 +18,6 @@ import {
   type WorldSnapshot,
   type CarKind,
 } from '@mydrunner/shared';
-
-// Spawn chassis at suspension equilibrium so there is no free-fall and the
-// springs are already at their loaded rest position.  Derived from:
-//   comp_eq = weight / (k_front + k_rear)
-//   chassis_y = restLength + wheelRadius + |wheel_local_y| - comp_eq
-const SPAWN_Y_ABOVE_GROUND =
-  VEHICLE.suspensionRestLength +
-  VEHICLE.wheelRadius +
-  Math.abs(VEHICLE.wheelPositions[0]!.y) -
-  (VEHICLE.mass * Math.abs(GRAVITY_Y)) / (AXLE.front.rideStiffness + AXLE.rear.rideStiffness);
 
 export interface PlayerHandle {
   id: PlayerId;
@@ -132,9 +120,9 @@ export class Room {
 
   /** Spawn at the start of the road (the -X end of the world), facing
    *  along +X so pressing W drives toward the petrol station and then
-   *  the mountain. Y clearance is generous: chassis-center must clear
-   *  chassis half-extent + suspension + wheel radius. */
-  private nextSpawn(): { position: { x: number; y: number; z: number }; yaw: number } {
+   *  the mountain. Y sits at the kind's suspension equilibrium
+   *  (spawnYAboveGround) so there is no free-fall or settle bounce. */
+  private nextSpawn(kind: CarKind): { position: { x: number; y: number; z: number }; yaw: number } {
     const n = this.players.size;
     const slot = n % 16;
     const col = slot % 8;
@@ -150,11 +138,11 @@ export class Room {
     const yaw = Math.PI / 2;
     const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);
     const ground = idx >= 0 ? (this.world.terrain.heights[idx] ?? 0) : 0;
-    return { position: { x, y: ground + SPAWN_Y_ABOVE_GROUND, z }, yaw };
+    return { position: { x, y: ground + Physics.spawnYAboveGround(kind), z }, yaw };
   }
 
   addPlayer(handle: PlayerHandle): void {
-    const spawn = this.nextSpawn();
+    const spawn = this.nextSpawn(handle.carKind);
     const vehicle = this.world.spawnVehicle(handle.id, spawn, handle.carKind);
     this.players.set(handle.id, {
       handle,
@@ -192,6 +180,10 @@ export class Room {
   applyInput(id: PlayerId, input: PlayerInput): void {
     const p = this.players.get(id);
     if (!p) return;
+    // decodeClient already rejects malformed messages; this is defense in
+    // depth for the direct-call path (tests, future message types). A
+    // non-finite value here would feed NaN into the physics.
+    if (!Number.isSafeInteger(input.seq)) return;
     if (input.seq <= p.lastAckSeq) return;
     // Latency trace: detect a clear 0 -> deflection transition. Only
     // arms when no trace is in flight, so a held input doesn't keep
@@ -477,6 +469,10 @@ function newPerfBucket(): PerfBucket {
   };
 }
 
+/** NaN-safe clamp: comparisons are false for NaN, so the naive ternary
+ *  passes NaN straight through — and NaN input fields would corrupt the
+ *  sender's rigid body. Non-finite maps to 0 (neutral input). */
 function clamp(v: number, lo: number, hi: number): number {
+  if (!Number.isFinite(v)) return 0;
   return v < lo ? lo : v > hi ? hi : v;
 }

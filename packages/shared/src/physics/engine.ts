@@ -22,19 +22,10 @@ export interface EngineState {
   gearIndex: number;
   /** Ticks remaining before the next automatic RPM-triggered shift is allowed. */
   shiftCooldown: number;
-  /** Set to true while the client prediction is replaying queued inputs after
-   *  a reconcile. The auto-shift state machine reads RPM + speed and can
-   *  flip the gear within a tick of applyEngineSnap restoring the server's
-   *  gear, undoing the snap and producing client/server gear mismatch -
-   *  the dominant cause of large replay divergence. While this flag is
-   *  set, gear is held to whatever applyEngineSnap put it at; direction
-   *  switches (forward/reverse) and idle-into-neutral still happen because
-   *  those are driven by the player's actual input intent. */
-  replaying: boolean;
 }
 
 export function createEngineState(): EngineState {
-  return { rpm: ENGINE.idleRpm, gearIndex: ENGINE.neutralGear, shiftCooldown: 0, replaying: false };
+  return { rpm: ENGINE.idleRpm, gearIndex: ENGINE.neutralGear, shiftCooldown: 0 };
 }
 
 /** Approximate torque curve. Peak around peakTorqueRpm, falls off either
@@ -130,7 +121,7 @@ export function stepEngine(
     nextGear = ENGINE.reverseGear;
   } else if (wantsReverse && gIdx === ENGINE.neutralGear) {
     nextGear = ENGINE.reverseGear;
-  } else if (gIdx >= ENGINE.firstGear && !state.replaying) {
+  } else if (gIdx >= ENGINE.firstGear) {
     // Forward auto-shifting based on chassis speed (vehicleAngVel), NOT
     // wheel spin. Wheel angVel inflates when tires slip (stuck on hill,
     // mud bog, etc.) and using it for shift decisions causes a feedback
@@ -138,9 +129,6 @@ export function stepEngine(
     // higher gear → wheels slow → downshift → wheels spin up → upshift
     // again (the 1-2-1-2 hunting the player reported). Chassis speed is
     // unaffected by slip and gives a stable, speed-accurate shift point.
-    //
-    // Skipped during reconcile replay so the gear that the server told
-    // us to hold isn't immediately overwritten by a stale shift threshold.
     const vehicleRpmAbs = (vehicleAngVel * 60) / (2 * Math.PI);
     const vehicleLockedRpm = vehicleRpmAbs * Math.abs(ratio) * ENGINE.finalDrive;
     if (state.shiftCooldown > 0) {
@@ -152,7 +140,7 @@ export function stepEngine(
       nextGear = gIdx - 1;
       state.shiftCooldown = ENGINE.shiftHoldTicks;
     }
-  } else if (!state.replaying && Math.abs(throttle) < 0.05 && Math.abs(wheelAngVel) < 0.5) {
+  } else if (Math.abs(throttle) < 0.05 && Math.abs(wheelAngVel) < 0.5) {
     nextGear = ENGINE.neutralGear;
   }
   state.gearIndex = nextGear;

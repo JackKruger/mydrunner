@@ -42,8 +42,7 @@ function makeCautionStripeTexture(): THREE.CanvasTexture {
 export class Obstacles {
   readonly group = new THREE.Group();
 
-  constructor(seed: number, size: number, resolution: number) {
-    const terrain = Physics.generateTerrain({ seed, size, resolution });
+  constructor(terrain: PhysicsNs.TerrainData) {
     const list = Physics.generateObstacles(terrain);
     this.build(list);
   }

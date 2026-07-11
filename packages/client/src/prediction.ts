@@ -12,9 +12,10 @@
 // snapshot is treated as a SOFT CORRECTION rather than authority: the
 // body is nudged toward the server pose by a small fraction each
 // snapshot, with the delta absorbed by a decaying visual offset so the
-// rendered pose stays continuous. Internal state (wheel angular
-// velocities, engine RPM, gear) is always SNAPPED to server values so
-// the local physics integrator doesn't slowly diverge from the server's.
+// rendered pose stays continuous. Input-driven internal state (wheel
+// angular velocities, engine RPM, gear) is NOT snapped - both sims
+// integrate it identically from the same inputs; only the terrain-
+// contact-driven axle DOFs are snapped (see applyServerSnapshot).
 //
 // Properties:
 //   - Local body responds to input within one tick (~16 ms).
@@ -75,13 +76,13 @@ export class Prediction {
   };
 
   constructor(
-    seed: number,
-    size: number,
-    resolution: number,
+    terrain: Physics.TerrainData,
     spawn: { position: { x: number; y: number; z: number }; yaw?: number },
     carKind: CarKind = 'patrol',
   ) {
-    const terrain = Physics.generateTerrain({ seed, size, resolution });
+    // Terrain is generated once in main.ts and shared with the scene;
+    // the Rapier collider copies the heights on construction, so scene-
+    // side visual mutations can't desync the local sim mid-session.
     this.world = new Physics.World({ terrain });
     this.spawn = { position: spawn.position, yaw: spawn.yaw ?? 0 };
     // Must match the kind the server spawned for us (Room.addPlayer uses
