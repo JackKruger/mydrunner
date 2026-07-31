@@ -215,7 +215,7 @@ export class Scene {
       this.scene.remove(this.obstacles.group);
       disposeObject3D(this.obstacles.group);
     }
-    this.obstacles = new Obstacles(terrain);
+    this.obstacles = new Obstacles(Physics.generateObstacles(terrain));
     this.scene.add(this.obstacles.group);
     if (this.landmarks) {
       this.scene.remove(this.landmarks.group);

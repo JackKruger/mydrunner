@@ -1,10 +1,26 @@
-// Visuals for the procedural rocks and trees. Built once on terrain
-// handshake from the same generator the server uses; no per-frame state.
+// Visuals for the rocks and trees. Built from the obstacle list the world
+// was actually assembled with; no per-frame state.
+//
+// Appearance is derived from each obstacle's id rather than Math.random():
+// the editor rebuilds this group whenever the world changes, and random
+// colours meant every rock and every tree reshuffled on each rebuild.
+// Hashing the id also means a given rock looks the same on every client.
 
 import * as THREE from 'three';
-import { Physics, type Physics as PhysicsNs } from '@mydrunner/shared';
+import { Physics, fnv1a32, type Physics as PhysicsNs } from '@mydrunner/shared';
 
 type Obstacle = PhysicsNs.Obstacle;
+
+/** Deterministic [0,1) from an obstacle id. `salt` separates the several
+ *  independent choices made for one obstacle. */
+function hash01(id: string, salt: string): number {
+  return fnv1a32(`${id}:${salt}`) / 4294967296;
+}
+
+/** Deterministic pick from a palette. */
+function pick<T>(palette: readonly T[], id: string, salt: string): T {
+  return palette[Math.floor(hash01(id, salt) * palette.length)] ?? palette[0]!;
+}
 
 const ROCK_COLORS = [0x6f6864, 0x55504c, 0x7a736e];
 const TRUNK_COLOR = 0x4a3826;
@@ -42,12 +58,22 @@ function makeCautionStripeTexture(): THREE.CanvasTexture {
 export class Obstacles {
   readonly group = new THREE.Group();
 
-  constructor(terrain: PhysicsNs.TerrainData) {
-    const list = Physics.generateObstacles(terrain);
+  /** Takes the composed list rather than a TerrainData it would generate
+   *  from. Generating here meant a second, independent call to
+   *  generateObstacles — fine while the only obstacles were procedural,
+   *  wrong the moment a map adds or removes any, because the visuals and
+   *  the colliders would disagree about what exists. */
+  constructor(list: readonly Obstacle[]) {
     this.build(list);
   }
 
-  private build(list: Obstacle[]): void {
+  /** Stamp the obstacle id onto a mesh so the editor can resolve a
+   *  raycast hit back to the object it should select or delete. */
+  private tag(obj: THREE.Object3D, o: Obstacle): void {
+    obj.userData.obstacleId = o.id;
+  }
+
+  private build(list: readonly Obstacle[]): void {
     const trunkMat = new THREE.MeshStandardMaterial({ color: TRUNK_COLOR, roughness: 0.95 });
     const pineTrunkMat = new THREE.MeshStandardMaterial({ color: 0x3c2a18, roughness: 0.95 });
     // Caution-striped texture for the ramp top so it's unmistakable as a
@@ -70,6 +96,7 @@ export class Obstacles {
         const pole = new THREE.Mesh(poleGeo, flagPostMat);
         pole.castShadow = true;
         pole.position.set(o.x, o.y + poleH / 2, o.z);
+        this.tag(pole, o);
         this.group.add(pole);
         const flagGeo = new THREE.PlaneGeometry(1.6, 0.9);
         const flag = new THREE.Mesh(flagGeo, flagMat);
@@ -90,6 +117,7 @@ export class Obstacles {
         mesh.receiveShadow = true;
         mesh.position.set(t.cx, t.cy, t.cz);
         mesh.quaternion.set(t.qx, t.qy, t.qz, t.qw);
+        this.tag(mesh, o);
         this.group.add(mesh);
 
         // Tall flagpole next to the ramp so it's findable from anywhere
@@ -108,7 +136,7 @@ export class Obstacles {
       }
       if (o.kind === 'rock') {
         const mat = new THREE.MeshStandardMaterial({
-          color: ROCK_COLORS[Math.floor(Math.random() * ROCK_COLORS.length)] ?? 0x6f6864,
+          color: pick(ROCK_COLORS, o.id, 'rockColor'),
           roughness: 0.85,
           flatShading: true,
         });
@@ -119,8 +147,9 @@ export class Obstacles {
         mesh.receiveShadow = true;
         mesh.position.set(o.x, o.y + o.size * 0.6, o.z);
         mesh.rotation.y = o.yaw;
-        // Random non-uniform scale to make rocks look less spherical.
-        mesh.scale.set(1, 0.7 + Math.random() * 0.6, 1);
+        // Non-uniform scale to make rocks look less spherical.
+        mesh.scale.set(1, 0.7 + hash01(o.id, 'rockSquash') * 0.6, 1);
+        this.tag(mesh, o);
         this.group.add(mesh);
       } else {
         // Tree: trunk capsule + canopy cone-stack.
@@ -129,20 +158,21 @@ export class Obstacles {
         const trunk = new THREE.Mesh(trunkGeo, trunkMat);
         trunk.castShadow = true;
         trunk.position.set(o.x, o.y + (trunkHeight + 2 * o.size) / 2, o.z);
+        this.tag(trunk, o);
         this.group.add(trunk);
 
         const foliageMat = new THREE.MeshStandardMaterial({
-          color: FOLIAGE_COLORS[Math.floor(Math.random() * FOLIAGE_COLORS.length)] ?? 0x33502a,
+          color: pick(FOLIAGE_COLORS, o.id, 'foliage'),
           roughness: 0.95,
           flatShading: true,
         });
         // Stack 2-3 cones of decreasing size for a fir-tree silhouette.
-        const layers = 2 + Math.floor(Math.random() * 2);
+        const layers = 2 + Math.floor(hash01(o.id, 'layers') * 2);
         const baseRadius = o.size * 4;
         const baseY = o.y + trunkHeight * 0.6;
         for (let l = 0; l < layers; l++) {
           const r = baseRadius * (1 - l * 0.25);
-          const h = 1.6 + Math.random() * 0.4;
+          const h = 1.6 + hash01(o.id, `coneH${l}`) * 0.4;
           const cone = new THREE.Mesh(
             new THREE.ConeGeometry(r, h, 7),
             foliageMat,
@@ -166,10 +196,11 @@ export class Obstacles {
     trunk.castShadow = true;
     trunk.receiveShadow = true;
     trunk.position.set(o.x, o.y + fullTrunkH / 2, o.z);
+    this.tag(trunk, o);
     this.group.add(trunk);
 
     const foliageMat = new THREE.MeshStandardMaterial({
-      color: PINE_COLORS[Math.floor(Math.random() * PINE_COLORS.length)] ?? PINE_COLORS[0]!,
+      color: pick(PINE_COLORS, o.id, 'pine'),
       roughness: 0.95,
       flatShading: true,
     });
