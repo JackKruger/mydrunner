@@ -25,6 +25,9 @@ uniform vec3 uCloudColor;
 uniform float uCloudCover;   // [0,1] - threshold above which clouds form
 uniform float uCloudSoftness;// [0,1] - smoothstep width on the threshold
 uniform float uTime;
+uniform vec3 uSunDir;        // unit vector toward the sun
+uniform vec3 uSunColor;
+uniform vec3 uHorizonWarm;   // warm tint mixed into the horizon band
 
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -41,39 +44,72 @@ float vnoise(vec2 p) {
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
-float fbm(vec2 p) {
-  // 3 octaves is plenty for clouds at this scale - 5 was overkill and
-  // measurably slower per-frame.
+float fbm5(vec2 p) {
+  // 5 octaves for puffier, more detailed clouds than the terrain shader.
   float v = 0.0;
-  float a = 0.55;
-  for (int i = 0; i < 3; i++) {
+  float a = 0.5;
+  for (int i = 0; i < 5; i++) {
     v += a * vnoise(p);
-    p *= 2.1;
-    a *= 0.5;
+    p *= 2.03;
+    a *= 0.48;
   }
   return v;
 }
 
 void main() {
   vec3 d = normalize(vDir);
-  // Vertical gradient: horizon at d.y=0, zenith at d.y=1. We bias the
-  // gradient toward the horizon so most of the sky reads as zenith blue.
   float t = clamp(d.y, 0.0, 1.0);
-  t = pow(t, 0.55);
-  vec3 sky = mix(uHorizon, uZenith, t);
 
-  // Clouds: project the upper hemisphere onto a plane via stereographic
-  // projection so noise tiles smoothly without poles. Slow drift via
-  // uTime. Hide clouds below the horizon.
+  // ---- Sky gradient ----
+  // Warm horizon band: blends a golden/warm tone into the lower sky so
+  // the horizon reads as atmospheric rather than just a flat blue edge.
+  // The warm band is strongest at t=0 (horizon) and fades above ~15 deg.
+  float horizonBand = smoothstep(0.25, 0.0, t);
+  vec3 horizonCol = mix(uHorizon, uHorizonWarm, horizonBand * 0.55);
+  float grad = pow(t, 0.55);
+  vec3 sky = mix(horizonCol, uZenith, grad);
+
+  // ---- Clouds ----
   if (d.y > 0.0) {
+    // Stereographic projection for smooth polar tiling.
     vec2 uv = d.xz / (d.y + 0.6);
     uv += vec2(uTime * 0.012, uTime * 0.005);
-    float n = fbm(uv * 1.4);
+
+    // Two scales of FBM: large puffy masses + fine wispy detail.
+    float nLarge = fbm5(uv * 1.2);
+    float nFine  = fbm5(uv * 3.5 + 17.0);
+    float n = nLarge * 0.72 + nFine * 0.28;
+
     float coverage = smoothstep(uCloudCover, uCloudCover + uCloudSoftness, n);
-    // Clouds get whiter as they approach zenith, more grey near horizon.
-    vec3 cloud = mix(uCloudColor * 0.78, uCloudColor, t);
-    sky = mix(sky, cloud, coverage * (0.4 + 0.6 * t));
+
+    // Cloud edge softening: lower coverage near horizon for a natural
+    // taper, denser overhead.
+    float heightFade = smoothstep(0.0, 0.35, d.y);
+    coverage *= heightFade;
+
+    // Cloud colour: whiter at zenith, slightly warm near horizon.
+    vec3 cloudBase = mix(uCloudColor * 0.82, uCloudColor, t);
+    // Subtle undershade on thick parts for depth.
+    float thickness = smoothstep(uCloudCover + 0.05, uCloudCover + 0.25, n);
+    vec3 cloud = mix(cloudBase, cloudBase * 0.72, thickness * 0.3);
+
+    sky = mix(sky, cloud, coverage * (0.45 + 0.55 * t));
   }
+
+  // ---- Sun disc + glow ----
+  // Fixed sun position. The disc is a sharp circle; the glow is a wider
+  // soft halo that tints nearby sky warm.
+  float sunDot = dot(d, uSunDir);
+  // Disc: sharp cutoff at ~0.9997 (~1.4 deg radius).
+  float disc = smoothstep(0.9993, 0.9998, sunDot);
+  // Glow: wide soft halo (~8 deg).
+  float glow = pow(max(0.0, sunDot), 64.0);
+  // Horizon scatter: sun glow intensifies near the horizon for a
+  // "golden hour" feel even when the sun is higher.
+  float horizonScatter = smoothstep(0.3, 0.0, d.y) * 0.4;
+
+  sky += uSunColor * (disc * 1.8);
+  sky += uSunColor * (glow * 0.35 + horizonScatter * glow);
 
   gl_FragColor = vec4(sky, 1.0);
 }
@@ -90,9 +126,12 @@ export class Sky {
         uHorizon: { value: new THREE.Color(0xd6e2ec) },
         uZenith: { value: new THREE.Color(0x6c95c4) },
         uCloudColor: { value: new THREE.Color(0xfafcff) },
-        uCloudCover: { value: 0.55 },
+        uCloudCover: { value: 0.52 },
         uCloudSoftness: { value: 0.18 },
         uTime: { value: 0 },
+        uSunDir: { value: new THREE.Vector3(0.5, 0.45, 0.3).normalize() },
+        uSunColor: { value: new THREE.Color(0xfff4dd) },
+        uHorizonWarm: { value: new THREE.Color(0xf0c88a) },
       },
       vertexShader: VERT,
       fragmentShader: FRAG,

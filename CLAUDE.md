@@ -127,7 +127,7 @@ Client:
 - `packages/client/src/camera.ts` — `ChaseCamera`: chase-cam yaw spring with corner swing, pitch-aware lookAt for hill driving, hood cam, sky cam.
 - `packages/client/src/carMesh.ts` — `buildCarMesh(kind, isLocal, idHash)` for all four `CarKind`s. Shared materials + wheel builder, per-kind body builders. Wheels have visible spokes + tread lugs so rotation direction reads.
 - `packages/client/src/terrain.ts` — Three.js terrain mesh + surface-ID shader, built from the shared `TerrainData`; `applyRut(i, dy)` deforms it (currently unused since ruts are off).
-- `packages/client/src/obstacles.ts` / `landmarks.ts` / `sky.ts` / `particles.ts` / `nameplate.ts` / `minimap.ts` — world + HUD visuals, all deterministic from the terrain handshake.
+- `packages/client/src/obstacles.ts` / `landmarks.ts` / `sky.ts` (procedural sky dome: gradient + clouds + sun) / `particles.ts` / `nameplate.ts` / `minimap.ts` — world + HUD visuals, all deterministic from the terrain handshake.
 - `packages/client/src/joinScreen.ts` — first-load name + car picker. Persists name + carKind to localStorage; subsequent visits pre-fill the picker. `?auto=1` URL bypass for e2e (`?car=` accepts any `CarKind`).
 - `packages/client/src/chat.ts` — text chat UI (T to open); server relays with rate-limiting + sanitisation in `Room.broadcastChat`.
 - `packages/client/src/engineAudio.ts` — RPM-driven engine sound via `AudioContext`.
@@ -188,6 +188,7 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - Soft-correction client prediction for the local truck.
 - Mountain switchback trail with per-traverse features (whoops, rocky step, mud puddle).
 - Multiple roads: north loop (dirt circuit), south bog trail, east gravel connector.
+- Procedural sky dome: gradient + warm horizon band + 5-octave FBM clouds + sun disc with glow.
 
 ### Content
 - Cargo objective: spawn a crate to deliver from A to B; mass affects vehicle handling.
