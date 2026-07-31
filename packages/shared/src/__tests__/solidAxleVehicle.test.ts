@@ -5,8 +5,8 @@
 // physics: settles to a stable rest pose, drives forward under throttle,
 // road-vs-mud grip difference, and is deterministic across two worlds.
 
-import { describe, it, expect, beforeAll } from 'vitest';
-import { Physics, EMPTY_INPUT, type PlayerInput } from '../index.js';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
+import { Physics, EMPTY_INPUT, TUNING, type PlayerInput } from '../index.js';
 import { mountainFor, petrolStationPadFor } from '../physics/terrain.js';
 
 beforeAll(async () => {
@@ -201,6 +201,51 @@ describe('solid-axle vehicle: snapshot round-trip', () => {
     expect(after[1].rideY).toBeCloseTo(before[1].rideY, 5);
     expect(after[1].rollAngle).toBeCloseTo(before[1].rollAngle, 5);
     world.dispose();
+  });
+});
+
+// The debug panel's suspension sliders were writing to TUNING fields no
+// physics code read, so dragging them did nothing at all. They are
+// multipliers on the per-kind geom rates now; this proves the value
+// actually reaches the chassis.
+describe('SolidAxleVehicle: TUNING axle multipliers', () => {
+  afterEach(() => {
+    // TUNING is a process-wide singleton; leaking a mutation here would
+    // silently skew every physics test that runs after this file.
+    TUNING.axleFront.rideStiffnessMult = 1;
+    TUNING.axleRear.rideStiffnessMult = 1;
+  });
+
+  /** Settle a fresh truck and report its resting chassis height. */
+  function settledHeight(): number {
+    const { world, vehicle } = makeWorld();
+    for (let i = 0; i < 180; i++) world.step();
+    const y = vehicle.getState().position.y;
+    world.dispose();
+    return y;
+  }
+
+  it('stiffer springs settle the chassis higher', () => {
+    const baseline = settledHeight();
+
+    TUNING.axleFront.rideStiffnessMult = 2;
+    TUNING.axleRear.rideStiffnessMult = 2;
+    const stiff = settledHeight();
+
+    TUNING.axleFront.rideStiffnessMult = 0.5;
+    TUNING.axleRear.rideStiffnessMult = 0.5;
+    const soft = settledHeight();
+
+    // Static compression is mg / k, so doubling k halves the sag.
+    expect(stiff).toBeGreaterThan(baseline);
+    expect(soft).toBeLessThan(baseline);
+  });
+
+  it('leaves the rest pose untouched at 1.0', () => {
+    const a = settledHeight();
+    TUNING.axleFront.rideStiffnessMult = 1;
+    TUNING.axleRear.rideStiffnessMult = 1;
+    expect(settledHeight()).toBeCloseTo(a, 6);
   });
 });
 

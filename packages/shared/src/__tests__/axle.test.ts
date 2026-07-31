@@ -162,6 +162,74 @@ describe('axle: roll articulation', () => {
   });
 });
 
+// The debug panel's axle sliders wrote to TUNING.axleFront/axleRear,
+// which nothing read - stepAxle and solidAxleVehicle both took their
+// rates straight from the geom. They are multipliers now, threaded
+// through StepAxleInputs so this module stays free of shared mutable
+// state.
+describe('axle: runtime multipliers', () => {
+  it('maxArticulationMult scales the articulation cap', () => {
+    const g = frontGeom();
+    const s = createAxleState(g);
+    // Depth has to be steep enough that atan2(depth, 2*trackHalf) clears
+    // the DOUBLED cap, or it never clamps and the test proves nothing.
+    const doubled = g.maxArticulation * 2;
+    const rightDepth = Math.tan(doubled) * 2 * g.trackHalf * 1.5;
+    stepAxle(s, {
+      leftDepth: 0,
+      rightDepth,
+      leftContact: false,
+      rightContact: true,
+      chassisVertVelAtAnchor: 0,
+      dt: FIXED_DT,
+      maxArticulationMult: 2,
+    });
+    expect(Math.atan2(rightDepth, 2 * g.trackHalf)).toBeGreaterThan(doubled); // sanity
+    expect(s.rollAngle).toBeCloseTo(doubled, 5);
+  });
+
+  it('a larger cap absorbs articulation that would otherwise lever the chassis', () => {
+    const g = frontGeom();
+    const s = createAxleState(g);
+    const base = { leftDepth: 0, rightDepth: 0.9, leftContact: false, rightContact: true, chassisVertVelAtAnchor: 0, dt: FIXED_DT };
+    const capped = stepAxle(s, base);
+    expect(capped.chassisRollTorque).toBeGreaterThan(0);
+
+    resetAxleState(s);
+    const roomy = stepAxle(s, { ...base, maxArticulationMult: 3 });
+    expect(roomy.chassisRollTorque).toBe(0);
+  });
+
+  it('rollStiffnessMult scales the surplus torque past the cap', () => {
+    const g = frontGeom();
+    const s = createAxleState(g);
+    const base = { leftDepth: 0, rightDepth: 2.0, leftContact: false, rightContact: true, chassisVertVelAtAnchor: 0, dt: FIXED_DT };
+    const plain = stepAxle(s, base);
+    resetAxleState(s);
+    const doubled = stepAxle(s, { ...base, rollStiffnessMult: 2 });
+    expect(doubled.chassisRollTorque).toBeCloseTo(plain.chassisRollTorque * 2, 5);
+  });
+
+  it('defaults to the geom values when no multiplier is supplied', () => {
+    const g = frontGeom();
+    const s = createAxleState(g);
+    const withOne = step(s, { l: 0, r: 1.5 }, 1);
+    resetAxleState(s);
+    const explicit = stepAxle(s, {
+      leftDepth: 0,
+      rightDepth: 1.5,
+      leftContact: false,
+      rightContact: true,
+      chassisVertVelAtAnchor: 0,
+      dt: FIXED_DT,
+      rollStiffnessMult: 1,
+      maxArticulationMult: 1,
+    });
+    expect(explicit.chassisRollTorque).toBeCloseTo(withOne.chassisRollTorque, 5);
+    expect(s.rollAngle).toBeCloseTo(g.maxArticulation, 5);
+  });
+});
+
 describe('axle snap apply/extract round-trip', () => {
   it('applyAxleSnap restores rideY/rollAngle and zeroes velocities', () => {
     const g = frontGeom();

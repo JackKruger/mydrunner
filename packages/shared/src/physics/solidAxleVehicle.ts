@@ -214,6 +214,10 @@ export class SolidAxleVehicle implements VehicleLike {
     for (let aIdx = 0; aIdx < 2; aIdx++) {
       const axle = this.axles[aIdx]!;
       const ag = axle.geom;
+      // Runtime scalars on this axle's compile-time rates. Multipliers,
+      // not overrides, so the per-kind differences baked into ag (the
+      // Hilux's softer rear, say) survive a slider move.
+      const at = aIdx === 0 ? TUNING.axleFront : TUNING.axleRear;
 
       const wIdxL = aIdx * 2;
       const wIdxR = aIdx * 2 + 1;
@@ -267,6 +271,8 @@ export class SolidAxleVehicle implements VehicleLike {
         rightContact: wR.contact,
         chassisVertVelAtAnchor: 0, // unused now; per-wheel damping below
         dt,
+        rollStiffnessMult: at.rollStiffnessMult,
+        maxArticulationMult: at.maxArticulationMult,
       });
 
       // Per-wheel-end ride forces. Compression is read directly from
@@ -335,8 +341,8 @@ export class SolidAxleVehicle implements VehicleLike {
         // depth. Suspension only exerts force while compressed (comp > 0).
         const engagement = Math.min(1, comp / SUSPENSION.dampingEngageComp);
         // Per-wheel-end stiffness is HALF the axle's total.
-        const F = 0.5 * ag.rideStiffness * comp
-                + 0.5 * ag.rideDamping * engagement * compRate;
+        const F = 0.5 * ag.rideStiffness * at.rideStiffnessMult * comp
+                + 0.5 * ag.rideDamping * at.rideDampingMult * engagement * compRate;
         w.lastForce = F;
         // Apply spring force along the CONTACT NORMAL (the direction the
         // ground actually pushes on the wheel), not chassis-up or world-up.

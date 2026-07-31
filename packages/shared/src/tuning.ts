@@ -13,21 +13,28 @@ import {
   AXLE,
   INCLINE_ASSIST_MAX,
   SURFACE_FRICTION,
-  TIRE_BASE_GRIP,
   TIRE_LATERAL,
   VEHICLE,
 } from './constants.js';
 
+/** Runtime scalars on an axle's compile-time spring rates.
+ *
+ *  Multipliers rather than absolute values on purpose: the rates
+ *  themselves are per-CarKind (vehicleGeom.ts gives the Hilux a 75k rear
+ *  against the Patrol's 90k), and a global absolute override would flatten
+ *  those differences the moment a slider moved. Scaling preserves the
+ *  per-kind character while still letting a tester twist the feel.
+ *
+ *  All default to 1.0, so an untouched TUNING reproduces the constants
+ *  exactly. */
 export interface AxleTuning {
-  rideStiffness: number;
-  rideDamping: number;
-  rollStiffness: number;
-  rollDamping: number;
-  maxArticulation: number;
+  rideStiffnessMult: number;
+  rideDampingMult: number;
+  rollStiffnessMult: number;
+  maxArticulationMult: number;
 }
 
 export interface Tuning {
-  tireBaseGrip: number;
   inclineAssistMax: number;
   surfaceFriction: {
     road: number;
@@ -43,7 +50,7 @@ export interface Tuning {
   steerSpeed: number;
   frontGripMult: number;
   rearGripMult: number;
-  // Solid-axle vehicle knobs. Per-axle tuning so the front and rear can
+  // Solid-axle vehicle knobs. Per-axle scaling so the front and rear can
   // diverge (front stiffer for nose-up climbs, rear softer for cargo
   // articulation). diffLock* toggles the per-axle differential lock
   // (both wheels rotate together) - the rock-crawler trick that lets
@@ -58,7 +65,6 @@ export interface Tuning {
 }
 
 export const TUNING: Tuning = {
-  tireBaseGrip: TIRE_BASE_GRIP,
   inclineAssistMax: INCLINE_ASSIST_MAX,
   surfaceFriction: { ...SURFACE_FRICTION } as Tuning['surfaceFriction'],
   brakeForce: VEHICLE.brakeForce,
@@ -67,18 +73,16 @@ export const TUNING: Tuning = {
   frontGripMult: VEHICLE.frontGripMult,
   rearGripMult: VEHICLE.rearGripMult,
   axleFront: {
-    rideStiffness: AXLE.front.rideStiffness,
-    rideDamping: AXLE.front.rideDamping,
-    rollStiffness: AXLE.front.rollStiffness,
-    rollDamping: AXLE.front.rollDamping,
-    maxArticulation: AXLE.front.maxArticulation,
+    rideStiffnessMult: 1,
+    rideDampingMult: 1,
+    rollStiffnessMult: 1,
+    maxArticulationMult: 1,
   },
   axleRear: {
-    rideStiffness: AXLE.rear.rideStiffness,
-    rideDamping: AXLE.rear.rideDamping,
-    rollStiffness: AXLE.rear.rollStiffness,
-    rollDamping: AXLE.rear.rollDamping,
-    maxArticulation: AXLE.rear.maxArticulation,
+    rideStiffnessMult: 1,
+    rideDampingMult: 1,
+    rollStiffnessMult: 1,
+    maxArticulationMult: 1,
   },
   diffLockFront: AXLE.front.diffLocked,
   diffLockRear: AXLE.rear.diffLocked,

@@ -32,6 +32,9 @@ interface InternalPlayer {
   pendingInput: PlayerInput;
   lastAckSeq: number;
   spawn: { position: { x: number; y: number; z: number }; yaw: number };
+  /** Index into the spawn grid. Freed implicitly when the player is
+   *  removed - takeSpawnSlot() derives occupancy from the live players. */
+  slot: number;
   /** Last chat broadcast time (server clock ms). Used for rate-limiting. */
   lastChatAtMs: number;
   /** Latency trace state. Populated when input.steer transitions from
@@ -122,9 +125,10 @@ export class Room {
    *  along +X so pressing W drives toward the petrol station and then
    *  the mountain. Y sits at the kind's suspension equilibrium
    *  (spawnYAboveGround) so there is no free-fall or settle bounce. */
-  private nextSpawn(kind: CarKind): { position: { x: number; y: number; z: number }; yaw: number } {
-    const n = this.players.size;
-    const slot = n % 16;
+  private nextSpawn(
+    kind: CarKind,
+  ): { position: { x: number; y: number; z: number }; yaw: number; slot: number } {
+    const slot = this.takeSpawnSlot();
     const col = slot % 8;
     const row = Math.floor(slot / 8);
     const startX = -this.world.terrain.size / 2 + 24; // 24m in from the world edge
@@ -138,11 +142,32 @@ export class Room {
     const yaw = Math.PI / 2;
     const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);
     const ground = idx >= 0 ? (this.world.terrain.heights[idx] ?? 0) : 0;
-    return { position: { x, y: ground + Physics.spawnYAboveGround(kind), z }, yaw };
+    return { position: { x, y: ground + Physics.spawnYAboveGround(kind), z }, yaw, slot };
+  }
+
+  /** Lowest slot in the spawn grid not held by a live player.
+   *
+   *  Occupancy is derived from `players` on each join rather than tracked
+   *  in a side set: joins are rare enough that the scan is free, and a
+   *  derived answer can't drift out of sync with who is actually in the
+   *  room. The previous `players.size % 16` meant any disconnect made the
+   *  next joiner reuse a live slot - A/B/C take 0/1/2, B leaves, size is
+   *  2, the next player spawns inside C, which is exactly the overlap the
+   *  5 m slot spacing in nextSpawn() exists to prevent.
+   *
+   *  Past 16 concurrent players every slot is live and an overlap is
+   *  unavoidable with this grid; wrapping beats refusing the connection. */
+  private takeSpawnSlot(): number {
+    const used = new Set<number>();
+    for (const p of this.players.values()) used.add(p.slot);
+    for (let s = 0; s < SPAWN_SLOTS; s++) {
+      if (!used.has(s)) return s;
+    }
+    return this.players.size % SPAWN_SLOTS;
   }
 
   addPlayer(handle: PlayerHandle): void {
-    const spawn = this.nextSpawn(handle.carKind);
+    const { slot, ...spawn } = this.nextSpawn(handle.carKind);
     const vehicle = this.world.spawnVehicle(handle.id, spawn, handle.carKind);
     this.players.set(handle.id, {
       handle,
@@ -151,6 +176,7 @@ export class Room {
       lastAckSeq: 0,
       trace: null,
       spawn,
+      slot,
       lastChatAtMs: 0,
     });
     handle.send(
@@ -399,19 +425,15 @@ export class Room {
     }
   }
 
-  /** Sanitise + rate-limit + relay a chat message. Strips control chars
-   *  and clamps length; drops messages from a sender that chatted within
-   *  CHAT_MIN_INTERVAL_MS of their last broadcast. */
-  broadcastChat(handle: PlayerHandle, raw: string): void {
+  /** Rate-limit + relay a chat message. Control-char stripping and length
+   *  clamping happen in Net.decodeClient (the trust boundary), so all this
+   *  adds is the per-sender cooldown: drop messages from a sender that
+   *  chatted within CHAT_MIN_INTERVAL_MS of their last broadcast. */
+  broadcastChat(handle: PlayerHandle, text: string): void {
     const p = this.players.get(handle.id);
     if (!p) return;
     const now = this.nowMs();
     if (now - p.lastChatAtMs < CHAT_MIN_INTERVAL_MS) return;
-    const text = raw
-      // eslint-disable-next-line no-control-regex
-      .replace(/[\x00-\x1f\x7f]/g, '')
-      .trim()
-      .slice(0, CHAT_MAX_LEN);
     if (!text) return;
     p.lastChatAtMs = now;
     const msg = Net.encode({
@@ -429,8 +451,10 @@ export class Room {
   }
 }
 
-const CHAT_MAX_LEN = 200;
 const CHAT_MIN_INTERVAL_MS = 800;
+
+/** 8 columns x 2 road lanes. */
+const SPAWN_SLOTS = 16;
 
 const TARGET_TICK_MS = 1000 / TICK_RATE;
 const PERF_WINDOW_MS = 5000;

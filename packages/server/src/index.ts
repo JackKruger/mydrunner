@@ -23,7 +23,12 @@ async function main(): Promise<void> {
     res.writeHead(404);
     res.end();
   });
-  const wss = new WebSocketServer({ server: http });
+  // maxPayload bounds what a single unauthenticated socket can make us
+  // allocate before decodeClient ever runs. The largest legitimate client
+  // message is a 200-char chat (CHAT_MAX_LEN); inputs and hello are well
+  // under 100 bytes. The `ws` default is 100 MB, which on a 256 MB VM is
+  // a one-frame memory exhaustion.
+  const wss = new WebSocketServer({ server: http, maxPayload: 4096 });
   http.listen(port);
 
   // Liveness heartbeat. ws.on('close') only fires when the TCP layer
@@ -75,7 +80,9 @@ async function main(): Promise<void> {
       switch (msg.t) {
         case 'hello':
           if (joined) return;
-          handle.name = msg.name.slice(0, 32) || 'anon';
+          // decodeClient already sanitised + length-capped the name; all
+          // that's left is the empty-after-stripping case.
+          handle.name = msg.name || 'anon';
           handle.carKind = normalizeCarKind(msg.carKind);
           room.addPlayer(handle);
           joined = true;

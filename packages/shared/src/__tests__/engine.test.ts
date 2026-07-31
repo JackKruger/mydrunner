@@ -103,3 +103,45 @@ describe('gearbox', () => {
     expect(out.wheelForce).toBeCloseTo(0, 1);
   });
 });
+
+// Engine braking used to take its sign from the gear ratio while both of
+// its magnitude terms were unsigned. Off-throttle in a forward gear while
+// rolling BACKWARD - the classic "lost momentum on a switchback" case -
+// that produced a negative wheel torque, so the thing meant to hold you
+// on the hill drove you further down it.
+describe('engine braking opposes travel, not gear', () => {
+  it('pushes forward when rolling backward in a forward gear', () => {
+    const s = createEngineState();
+    s.gearIndex = ENGINE.firstGear;
+    const out = stepEngine(s, -8, 8, 0, dt);
+    expect(
+      out.wheelForce,
+      `rolling backward in 1st off-throttle gave ${out.wheelForce.toFixed(1)} N·m; ` +
+        'engine braking must oppose the rollback, not add to it',
+    ).toBeGreaterThan(0);
+  });
+
+  it('pushes backward when rolling forward in reverse gear', () => {
+    const s = createEngineState();
+    s.gearIndex = ENGINE.reverseGear;
+    const out = stepEngine(s, 8, 8, 0, dt);
+    expect(out.wheelForce).toBeLessThan(0);
+  });
+
+  it('still brakes normally when travel matches the gear', () => {
+    const fwd = createEngineState();
+    fwd.gearIndex = ENGINE.firstGear;
+    expect(stepEngine(fwd, 8, 8, 0, dt).wheelForce).toBeLessThan(0);
+
+    const rev = createEngineState();
+    rev.gearIndex = ENGINE.reverseGear;
+    expect(stepEngine(rev, -8, 8, 0, dt).wheelForce).toBeGreaterThan(0);
+  });
+
+  it('applies no engine braking at a standstill in gear', () => {
+    const s = createEngineState();
+    s.gearIndex = ENGINE.firstGear;
+    const out = stepEngine(s, 0, 0, 0, dt);
+    expect(out.wheelForce).toBeCloseTo(0, 1);
+  });
+});

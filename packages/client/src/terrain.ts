@@ -63,6 +63,20 @@ export class TerrainMesh {
   flush(): void {
     this.geometry.computeVertexNormals();
   }
+
+  /** Free geometry, material AND the surface-ID DataTexture.
+   *
+   *  Material.dispose() does not touch textures, and the surface map is
+   *  only reachable through the shader uniform - so the old inline
+   *  "dispose geometry + material" in Scene.setTerrain leaked a
+   *  resolution^2 RGBA texture on every reconnect (main.ts reconnects
+   *  automatically with backoff, rebuilding terrain each welcome). */
+  dispose(): void {
+    this.geometry.dispose();
+    const surfaceMap = this.material.uniforms.uSurfaceMap?.value as THREE.Texture | undefined;
+    surfaceMap?.dispose();
+    this.material.dispose();
+  }
 }
 
 const VERT = /* glsl */ `

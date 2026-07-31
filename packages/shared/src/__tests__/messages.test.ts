@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
-import { decodeClient, encode } from '../net/messages.js';
+import { CHAT_MAX_LEN, NAME_MAX_LEN, decodeClient, encode } from '../net/messages.js';
 
 const raw = (obj: unknown): Uint8Array => msgpackEncode(obj);
 
@@ -57,3 +57,97 @@ describe('decodeClient validation', () => {
     expect(msg.input.buttons).toBe(0);
   });
 });
+
+// Names used to skip sanitisation entirely (index.ts only length-capped
+// them) while chat text got stripped in Room.broadcastChat. A name is
+// broadcast in every snapshot and drawn into every other player's
+// nameplate, so control characters in one reached everyone.
+//
+// Control characters are built with fromCharCode rather than written as
+// literals so this file stays plain ASCII - a raw NUL in the source makes
+// git treat it as a binary blob and the diff becomes unreviewable.
+const ch = (code: number): string => String.fromCharCode(code);
+const NUL = ch(0x00);
+const BEL = ch(0x07);
+const DEL = ch(0x7f);
+const RLO = ch(0x202e); // right-to-left override - the name-spoofing vector
+const ZWSP = ch(0x200b);
+const BOM = ch(0xfeff);
+const ZWJ = ch(0x200d); // must SURVIVE: real emoji sequences need it
+
+describe('decodeClient free-text sanitisation', () => {
+  it('strips control characters from a hello name', () => {
+    const msg = decodeClient(raw({ t: 'hello', name: `ja${NUL}ck${BEL}` }));
+    if (msg.t !== 'hello') throw new Error('expected hello');
+    expect(msg.name).toBe('jack');
+  });
+
+  it('strips newlines, tabs and DEL from chat text', () => {
+    const msg = decodeClient(raw({ t: 'chat', text: `hi\r\nthe\tre${DEL}` }));
+    if (msg.t !== 'chat') throw new Error('expected chat');
+    expect(msg.text).toBe('hithere');
+  });
+
+  it('clamps an over-long name and over-long chat text', () => {
+    const name = decodeClient(raw({ t: 'hello', name: 'x'.repeat(500) }));
+    if (name.t !== 'hello') throw new Error('expected hello');
+    expect(name.name).toHaveLength(NAME_MAX_LEN);
+
+    const chat = decodeClient(raw({ t: 'chat', text: 'y'.repeat(500) }));
+    if (chat.t !== 'chat') throw new Error('expected chat');
+    expect(chat.text).toHaveLength(CHAT_MAX_LEN);
+  });
+
+  it('leaves a name that is nothing but control characters empty', () => {
+    // index.ts falls back to 'anon' on this; the decoder just reports it.
+    const msg = decodeClient(raw({ t: 'hello', name: `${NUL}\t ` }));
+    if (msg.t !== 'hello') throw new Error('expected hello');
+    expect(msg.name).toBe('');
+  });
+
+  it('strips bidi overrides, zero-width space and BOM', () => {
+    // A right-to-left override lets a name render as somebody else's;
+    // zero-width padding lets two players appear to share one.
+    const msg = decodeClient(raw({ t: 'hello', name: `${RLO}ja${ZWSP}ck${BOM}` }));
+    if (msg.t !== 'hello') throw new Error('expected hello');
+    expect(msg.name).toBe('jack');
+  });
+
+  it('leaves ordinary unicode and emoji sequences alone', () => {
+    // Stripping must not reach legitimate text: another script, an astral
+    // -plane emoji, or a ZWJ sequence (which would break into two glyphs
+    // if the joiner were removed).
+    const name = `Maïa \u{1F6FB} \u{1F468}${ZWJ}\u{1F469}`;
+    const msg = decodeClient(raw({ t: 'hello', name }));
+    if (msg.t !== 'hello') throw new Error('expected hello');
+    expect(msg.name).toBe(name);
+  });
+
+  it('never leaves a lone surrogate behind when clamping', () => {
+    // The clamp cuts on code units, so an odd-length prefix lands between
+    // the halves of a surrogate pair. A lone surrogate is ill-formed
+    // UTF-16 and msgpack turns it into U+FFFD, so a replacement glyph
+    // would appear on every client's nameplate.
+    for (const prefix of ['', 'x', 'xy']) {
+      const msg = decodeClient(raw({ t: 'hello', name: prefix + '\u{1F6FB}'.repeat(40) }));
+      if (msg.t !== 'hello') throw new Error('expected hello');
+      expect(msg.name.length, prefix).toBeLessThanOrEqual(NAME_MAX_LEN);
+      expect(hasLoneSurrogate(msg.name), `prefix ${JSON.stringify(prefix)}`).toBe(false);
+    }
+  });
+});
+
+/** True if any UTF-16 code unit is a surrogate without its partner. */
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i++;
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
