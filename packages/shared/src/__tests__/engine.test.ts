@@ -78,4 +78,28 @@ describe('gearbox', () => {
     const out = stepEngine(s, 0.5, 0.5, 1.0, dt);
     expect(out.wheelForce).toBeGreaterThan(0);
   });
+
+  it('engine braking scales with chassis speed (downhill coast hold)', () => {
+    // Regression guard for the chassis-speed engine-brake term. In high
+    // gears the rpm term alone is weak (low ratio → low locked RPM even
+    // at a fast cruise), so off-throttle downhill coasting ran away.
+    // The speed-based term closes that gap: faster chassis = more brake
+    // regardless of gear. Same gear + same wheel rpm, only vehicleAngVel
+    // (chassis speed) differs → the faster case must brake harder.
+    const slow = createEngineState();
+    slow.gearIndex = ENGINE.firstGear + 1; // 2nd
+    const fast = createEngineState();
+    fast.gearIndex = ENGINE.firstGear + 1;
+    const slowOut = stepEngine(slow, 5, 5, 0, dt);
+    const fastOut = stepEngine(fast, 5, 50, 0, dt); // 10x chassis speed
+    expect(fastOut.wheelForce).toBeLessThan(slowOut.wheelForce);
+    expect(fastOut.wheelForce).toBeLessThan(0); // actually braking, not just less drive
+  });
+
+  it('produces no engine braking in neutral (coasts freely)', () => {
+    const s = createEngineState();
+    s.gearIndex = ENGINE.neutralGear;
+    const out = stepEngine(s, 30, 30, 0, dt);
+    expect(out.wheelForce).toBeCloseTo(0, 1);
+  });
 });

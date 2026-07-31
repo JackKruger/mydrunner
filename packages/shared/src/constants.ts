@@ -97,6 +97,15 @@ export const ENGINE = {
   // Minimum ticks between automatic RPM-triggered shifts (~1.5 s at 60 Hz).
   // Prevents hunting when vehicle speed oscillates near a shift threshold.
   shiftHoldTicks: 90,
+  // Chassis-speed component of engine braking. The RPM-based component
+  // (engineBrakeCoef) models compression braking through the locked
+  // drivetrain, but in high gears (low ratio) chassis speed maps to a
+  // low engine RPM even at a fast cruise — so a steep downhill coast in
+  // overdrive barely raises RPM and the truck runs away. This term adds
+  // a brake force proportional to |vehicleAngVel| (chassis speed /
+  // wheelRadius) so faster coasting = more drag regardless of gear.
+  // Only applies off-throttle and in-gear (see engine.ts).
+  engineBrakeSpeedCoef: 6.0,
 } as const;
 
 // Mud / surface friction. Multipliers in [0, 1] applied on top of
@@ -182,14 +191,33 @@ export const AXLE = {
   },
 } as const;
 
-// Lateral tyre-grip parameters used by the solid-axle model. Lateral
-// force = -clamp(stiffness * latSlipSpeed, +/- longGripMax * longRatio).
-// stiffness governs how fast the tyre develops cornering force; longRatio
-// caps it as a fraction of the longitudinal grip available so the tyre
-// stays inside the friction circle.
+// Lateral tyre-grip parameters used by the solid-axle model. The base
+// lateral force is linear in lateral slip SPEED (N per m/s) — that gives
+// responsive turn-in but never lets grip fall off, so the tail never
+// comes out. The slip-angle curve below (peak/falloff/floor) shapes that
+// force: full cornering stiffness up to slipAnglePeak, then exponential
+// decay toward slipAngleFloor. Past the peak the tyre is sliding and the
+// reduced lateral force is what makes under/oversteer readable and lets
+// "drifting in mud" be a thing. The friction-circle clamp (in
+// solidAxleVehicle.ts) still couples long+lat, so power-oversteer
+// (throttle stealing lateral grip) works on top of this curve.
 export const TIRE_LATERAL = {
   stiffness: 14_000,
   longRatio: 0.95,
+  // Slip angle (rad) at which lateral grip peaks. ~8 deg. Below this the
+  // tyre is in its linear cornering region (full stiffness); past it the
+  // grip decays. Real tyres peak ~6-10 deg.
+  slipAnglePeak: 0.14,
+  // Sharpness of the falloff past peak (higher = more sudden breakaway).
+  slipAngleFalloff: 5.0,
+  // Minimum lateral grip retained once fully sliding — keeps a sliding
+  // tyre recoverable instead of zero-grip (you can counter-steer out).
+  slipAngleFloor: 0.35,
+  // Velocity floor (m/s) for the slip-angle denominator. Below this the
+  // angle is computed against a fixed reference rather than the actual
+  // (tiny) forward speed, so low-speed manoeuvres don't register as full
+  // slip and kill slow-speed steering. Mirrors tire.ts SLIP_VEL_FLOOR.
+  slipAngleVelFloor: 2.5,
 } as const;
 
 // Effective longitudinal friction coefficient for the solid-axle model.

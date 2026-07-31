@@ -41,7 +41,10 @@ import { Surface, sampleSurface } from './terrain.js';
 import { createEngineState, stepEngine, type EngineState } from './engine.js';
 // slipRatio / gripFromSlip kept in tire.ts for tests; not used here since
 // the impulse-clamped integrator below replaced the Pacejka groundTq path.
+// slipAngle / lateralGripFromSlipAngle ARE used to shape the lateral
+// force so the tyre breaks loose past its slip-angle peak.
 import { rotateVecByQuat } from './util.js';
+import { slipAngle, lateralGripFromSlipAngle } from './tire.js';
 import { geomFor, type VehicleGeom } from './vehicleGeom.js';
 import {
   applyAxleSnap,
@@ -519,7 +522,18 @@ export class SolidAxleVehicle implements VehicleLike {
       const groundAngVel = longV / this.geom.wheelRadius;
       const neededTq = (groundAngVel - w.angVel) * WHEEL.inertia / dt;
       const rawLongForce = -neededTq / this.geom.wheelRadius;
-      const rawLatForce = -TUNING.tireLatStiffness * latV;
+      // Slip-angle shaping of lateral force. The base lateral force is
+      // linear in lateral slip SPEED (responsive turn-in), but without a
+      // slip-angle curve the tyre never loses lateral grip — the car
+      // can't power-oversteer or drift. lateralGripFromSlipAngle stays
+      // at 1.0 up to slipAnglePeak (linear cornering region, full
+      // stiffness), then decays so a sliding tyre lets the tail step
+      // out. The friction-circle clamp below still couples long+lat, so
+      // wheelspin (high longitudinal force) ALSO steals lateral grip —
+      // the "throttle oversteer in mud" feel.
+      const alpha = slipAngle(latV, longV);
+      const latGripMult = lateralGripFromSlipAngle(alpha);
+      const rawLatForce = -TUNING.tireLatStiffness * latV * latGripMult;
 
       let finalLongForce = 0;
       let finalLatForce = 0;

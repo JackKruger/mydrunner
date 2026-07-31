@@ -157,10 +157,21 @@ export function stepEngine(
   // through the negative ratio - both signs cancel.
   const torqueAtWheels = engineT * activeRatio * ENGINE.finalDrive;
 
-  // Engine braking off-throttle.
+  // Engine braking off-throttle. Two components:
+  //   - rpm-based: compression braking through the locked drivetrain.
+  //     Scales with engine RPM (faster engine = more pump loss).
+  //   - speed-based: scales with chassis speed regardless of gear. In
+  //     high gears (low ratio) chassis speed maps to a low engine RPM
+  //     even at a fast cruise, so the rpm term alone can't hold a
+  //     downhill coast in overdrive — the truck just runs away. The
+  //     speed term closes that gap so off-throttle coasting bleeds
+  //     momentum in every gear, not just low ones.
+  // Both only apply off-throttle and in-gear; neutral coasts freely.
   let brakeT = 0;
-  if (Math.abs(throttle) < 0.05 && rpm > ENGINE.idleRpm + 100) {
-    brakeT = (rpm - ENGINE.idleRpm) * ENGINE.engineBrakeCoef * Math.sign(activeRatio);
+  if (Math.abs(throttle) < 0.05 && Math.abs(activeRatio) > 0) {
+    const rpmBrake = Math.max(0, rpm - ENGINE.idleRpm) * ENGINE.engineBrakeCoef;
+    const speedBrake = Math.abs(vehicleAngVel) * ENGINE.engineBrakeSpeedCoef;
+    brakeT = (rpmBrake + speedBrake) * Math.sign(activeRatio);
   }
 
   return {

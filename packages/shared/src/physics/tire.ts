@@ -12,7 +12,7 @@
 // an impulse-clamped friction-circle instead of a slip curve). It is kept
 // as a tested building block for a future tire model. Reads the TIRE
 // constants directly — there is no runtime-tunable surface for it.
-import { TIRE } from '../constants.js';
+import { TIRE, TIRE_LATERAL } from '../constants.js';
 
 // Velocity floor for the slip-ratio denominator. Below this, slip is
 // computed against a fixed reference rather than the actual (tiny) max
@@ -46,5 +46,32 @@ export function gripFromSlip(slip: number): number {
   }
   const over = a - peak;
   const decay = Math.exp(-over * TIRE.slipFalloff);
+  return floor + (1 - floor) * decay;
+}
+
+// ---- Lateral slip-angle model ----
+// Slip angle = angle between the wheel's heading and the velocity of the
+// contact patch. Sign follows latV (positive alpha = sliding toward
+// chassis-right). The forward-speed denominator is floored so low-speed
+// manoeuvres don't blow the angle up to ±π/2 and kill slow-speed steering.
+// Pure function; tested in tire.test.ts.
+export function slipAngle(latV: number, longV: number): number {
+  const ref = Math.max(Math.abs(longV), TIRE_LATERAL.slipAngleVelFloor);
+  return Math.atan2(latV, ref);
+}
+
+/** Lateral grip multiplier as a function of slip angle. Returns 1.0 in
+ *  the linear cornering region (|alpha| <= slipAnglePeak) so turn-in
+ *  keeps the full cornering stiffness; decays exponentially toward
+ *  slipAngleFloor past the peak so a sliding tyre loses grip (the tail
+ *  comes out) but never to zero (you can still counter-steer to
+ *  recover). Symmetric in sign. */
+export function lateralGripFromSlipAngle(alpha: number): number {
+  const a = Math.abs(alpha);
+  const peak = TIRE_LATERAL.slipAnglePeak;
+  const floor = TIRE_LATERAL.slipAngleFloor;
+  if (a <= peak) return 1.0;
+  const over = a - peak;
+  const decay = Math.exp(-over * TIRE_LATERAL.slipAngleFalloff);
   return floor + (1 - floor) * decay;
 }
