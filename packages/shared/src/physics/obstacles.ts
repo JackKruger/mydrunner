@@ -7,6 +7,11 @@
 // Coordinates are in world space (the map is 320 m square, centred on
 // the origin). Avoid placing obstacles inside the pad rectangle
 // roughly x = -78..-50, z = -2..32, or in the road core z = -8..8.
+//
+// Every obstacle carries a stable `id` naming the pass that made it and
+// its index within that pass. Authored maps record deletions by id, so
+// reordering the pushes inside a pass silently re-points every saved
+// deletion in every map — treat push order as part of the format.
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import { TERRAIN } from '../constants.js';
@@ -30,6 +35,11 @@ function mulberry32(seed: number) {
 export type ObstacleKind = 'rock' | 'tree' | 'pine' | 'ramp' | 'flagpole';
 
 export interface Obstacle {
+  /** Stable identity, deterministic for a given terrain. Authored maps
+   *  record removals by id, so an id must survive regeneration — it is
+   *  derived from the generating pass and the index within it, never from
+   *  the obstacle's position (which shifts when the heightfield changes). */
+  id: string;
   kind: ObstacleKind;
   x: number;
   y: number;
@@ -143,14 +153,19 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
     return d;
   };
 
-  const tryRock = (cx: number, cz: number, size: number, trailClear: number): boolean => {
+  // Ids name the *attempt*, not the push. tryRock rejects placements that
+  // land on road or too near the trail, so a push-order counter would
+  // renumber every later boulder the moment one rejection flipped - and
+  // every deletion an author had saved would silently re-point to a
+  // different rock. The loop coordinates never shift.
+  const tryRock = (id: string, cx: number, cz: number, size: number, trailClear: number): boolean => {
     const idx = worldToTerrainIndex(terrain, cx, cz);
     if (idx < 0) return false;
     const surf = terrain.surfaces[idx];
     if (surf === Surface.Road || surf === Surface.Concrete) return false;
     if (minDistToTrail(cx, cz) < trailClear) return false;
     const cy = sampleHeightBilinear(terrain, cx, cz);
-    out.push({ kind: 'rock', x: cx, y: cy, z: cz, size, height: 0, yaw: rng() * Math.PI });
+    out.push({ id, kind: 'rock', x: cx, y: cy, z: cz, size, height: 0, yaw: rng() * Math.PI });
     return true;
   };
 
@@ -158,7 +173,8 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
   //     (4–7 m vs the old 5.5–9 m), bimodal sizes so large boulders mix with
   //     small pebbles instead of everything being a uniform medium rock.
   //     Large anchors scatter 2–5 satellite pebbles around them.
-  for (const seg of segments) {
+  for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+    const seg = segments[segIdx]!;
     const dx = seg.bx - seg.ax;
     const dz = seg.bz - seg.az;
     const len = Math.hypot(dx, dz);
@@ -180,14 +196,15 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
         const cz = cz0 + pz * side * offset + jz;
         const isLarge = rng() > 0.45;
         const size = isLarge ? 1.6 + rng() * 2.0 : 0.25 + rng() * 0.65;
-        const placed = tryRock(cx, cz, size, HILL_CLIMB_PATH_HALF_WIDTH);
+        const anchor = `hcb-c-${segIdx}-${i}-${side < 0 ? 'w' : 'e'}`;
+        const placed = tryRock(anchor, cx, cz, size, HILL_CLIMB_PATH_HALF_WIDTH);
         if (!placed) continue;
         if (isLarge && rng() > 0.3) {
           const numSat = 2 + Math.floor(rng() * 4);
           for (let s = 0; s < numSat; s++) {
             const angle = rng() * Math.PI * 2;
             const dist = 0.8 + rng() * 2.5;
-            tryRock(cx + Math.cos(angle) * dist, cz + Math.sin(angle) * dist, 0.15 + rng() * 0.55, HILL_CLIMB_PATH_HALF_WIDTH);
+            tryRock(`${anchor}-s${s}`, cx + Math.cos(angle) * dist, cz + Math.sin(angle) * dist, 0.15 + rng() * 0.55, HILL_CLIMB_PATH_HALF_WIDTH);
           }
         }
       }
@@ -219,7 +236,7 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
       const size = roll < 0.35 ? 0.15 + rng() * 0.5   // pebbles
                  : roll < 0.75 ? 0.65 + rng() * 1.4    // mid rocks
                  :               2.2 + rng() * 1.6;    // large boulders
-      out.push({ kind: 'rock', x: cx, y: cy, z: cz, size, height: 0, yaw: rng() * Math.PI });
+      out.push({ id: `hcb-g-${gi}-${gj}`, kind: 'rock', x: cx, y: cy, z: cz, size, height: 0, yaw: rng() * Math.PI });
       if (size > 2.5 && rng() > 0.45) {
         const numSat = 3 + Math.floor(rng() * 5);
         for (let s = 0; s < numSat; s++) {
@@ -232,7 +249,7 @@ function hillClimbBoulders(terrain: TerrainData): Obstacle[] {
           const ssurf = terrain.surfaces[sidx];
           if (ssurf === Surface.Road || ssurf === Surface.Concrete) continue;
           if (minDistToTrail(sx, sz) < HILL_CLIMB_PATH_HALF_WIDTH + 2) continue;
-          out.push({ kind: 'rock', x: sx, y: sampleHeightBilinear(terrain, sx, sz), z: sz, size: 0.15 + rng() * 0.55, height: 0, yaw: rng() * Math.PI });
+          out.push({ id: `hcb-g-${gi}-${gj}-s${s}`, kind: 'rock', x: sx, y: sampleHeightBilinear(terrain, sx, sz), z: sz, size: 0.15 + rng() * 0.55, height: 0, yaw: rng() * Math.PI });
         }
       }
     }
@@ -258,7 +275,7 @@ function mountainRocks(terrain: TerrainData): Obstacle[] {
     if (surf === Surface.Road || surf === Surface.Concrete) continue;
     const cy = sampleHeightBilinear(terrain, cx, cz);
     const radius = 0.4 + rng() * 1.8;
-    out.push({ kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: rng() * Math.PI });
+    out.push({ id: `mrock-${i}`, kind: 'rock', x: cx, y: cy, z: cz, size: radius, height: 0, yaw: rng() * Math.PI });
   }
   return out;
 }
@@ -289,7 +306,7 @@ function mountainTrees(terrain: TerrainData): Obstacle[] {
     }
     if (minTrail < 8) continue;
     const height = 9 + rng() * 8;
-    out.push({ kind: 'pine', x: cx, y: cy, z: cz, size: 0.6 + rng() * 0.5, height, yaw: rng() * Math.PI });
+    out.push({ id: `mtree-${i}`, kind: 'pine', x: cx, y: cy, z: cz, size: 0.6 + rng() * 0.5, height, yaw: rng() * Math.PI });
   }
   return out;
 }
@@ -325,6 +342,7 @@ function perimeterObstacles(terrain: TerrainData): Obstacle[] {
       // boulders. Yaw cycles for visual variety without RNG.
       if (i % 5 === 2) {
         out.push({
+          id: `perim-${side}-${i}`,
           kind: 'pine',
           x: px, y: py, z: pz,
           size: 0.95,
@@ -333,6 +351,7 @@ function perimeterObstacles(terrain: TerrainData): Obstacle[] {
         });
       } else {
         out.push({
+          id: `perim-${side}-${i}`,
           kind: 'rock',
           x: px, y: py, z: pz,
           size: 1.8 + (i % 3) * 0.5,
@@ -345,7 +364,29 @@ function perimeterObstacles(terrain: TerrainData): Obstacle[] {
   return out;
 }
 
-export function generateObstacles(terrain: TerrainData): Obstacle[] {
+export interface ObstacleOptions {
+  /** Generate the built-in hand-authored + procedural set (default true).
+   *  A map that places every object by hand sets this false. */
+  includeProcedural?: boolean;
+  /** Obstacles authored in the level editor, appended after the generated
+   *  set. These bypass the surface filter — an author who drops a rock on
+   *  the road meant to. */
+  added?: readonly Obstacle[];
+  /** Ids of generated obstacles the author deleted. */
+  removed?: readonly string[];
+}
+
+export function generateObstacles(
+  terrain: TerrainData,
+  opts: ObstacleOptions = {},
+): Obstacle[] {
+  const generated = opts.includeProcedural === false ? [] : proceduralObstacles(terrain);
+  const removed = opts.removed?.length ? new Set(opts.removed) : null;
+  const kept = removed ? generated.filter((o) => !removed.has(o.id)) : generated;
+  return opts.added?.length ? [...kept, ...opts.added] : kept;
+}
+
+function proceduralObstacles(terrain: TerrainData): Obstacle[] {
   const out: Obstacle[] = [];
 
   const sampleY = (x: number, z: number): number | null => {
@@ -363,35 +404,37 @@ export function generateObstacles(terrain: TerrainData): Obstacle[] {
     const [x, z, size] = ROCKS_MEDIUM[i]!;
     const y = sampleY(x, z);
     if (y === null) continue;
-    out.push({ kind: 'rock', x, y, z, size, height: 0, yaw: i * 0.37 });
+    out.push({ id: `rock-med-${i}`, kind: 'rock', x, y, z, size, height: 0, yaw: i * 0.37 });
   }
   for (let i = 0; i < ROCKS_SMALL.length; i++) {
     const [x, z, size] = ROCKS_SMALL[i]!;
     const y = sampleY(x, z);
     if (y === null) continue;
-    out.push({ kind: 'rock', x, y, z, size, height: 0, yaw: i * 0.43 });
+    out.push({ id: `rock-small-${i}`, kind: 'rock', x, y, z, size, height: 0, yaw: i * 0.43 });
   }
   for (let i = 0; i < TREES.length; i++) {
     const [x, z, size, height] = TREES[i]!;
     const y = sampleY(x, z);
     if (y === null) continue;
-    out.push({ kind: 'tree', x, y, z, size, height, yaw: i * 0.51 });
+    out.push({ id: `tree-${i}`, kind: 'tree', x, y, z, size, height, yaw: i * 0.51 });
   }
   for (let i = 0; i < FOREST_PINES.length; i++) {
     const [x, z, size, height] = FOREST_PINES[i]!;
     const y = sampleY(x, z);
     if (y === null) continue;
-    out.push({ kind: 'pine', x, y, z, size, height, yaw: i * 0.29 });
+    out.push({ id: `pine-${i}`, kind: 'pine', x, y, z, size, height, yaw: i * 0.29 });
   }
 
   // Flex ramps. Placed unconditionally on the terrain height at their
   // anchor (no surface filter): they're test fixtures, not scatter, so
   // they should always spawn even if the cell happens to be mud or grass.
-  for (const r of FLEX_RAMPS) {
+  for (let i = 0; i < FLEX_RAMPS.length; i++) {
+    const r = FLEX_RAMPS[i]!;
     const idx = worldToTerrainIndex(terrain, r.x, r.z);
     if (idx < 0) continue;
     const y = sampleHeightBilinear(terrain, r.x, r.z);
     out.push({
+      id: `ramp-${i}`,
       kind: 'ramp',
       x: r.x, y, z: r.z,
       size: r.width / 2,
@@ -410,6 +453,7 @@ export function generateObstacles(terrain: TerrainData): Obstacle[] {
   // Summit lookout marker — one flagpole at the peak as a climb destination.
   const summitY = sampleHeightBilinear(terrain, terrain.mountain.x, terrain.mountain.z);
   out.push({
+    id: 'flag-summit',
     kind: 'flagpole',
     x: terrain.mountain.x,
     y: summitY,
@@ -426,10 +470,11 @@ export function generateObstacles(terrain: TerrainData): Obstacle[] {
   // in the road or in the trail itself.
   const trailX = terrain.mountain.x - 15;
   const trailZ = TERRAIN.roadZ + 18;
-  for (const dx of [-5, 5]) {
+  for (const dx of [-5, 5] as const) {
     const px = trailX + dx;
     const pz = trailZ;
     out.push({
+      id: `flag-trailhead-${dx < 0 ? 'w' : 'e'}`,
       kind: 'flagpole',
       x: px,
       y: sampleHeightBilinear(terrain, px, pz),
