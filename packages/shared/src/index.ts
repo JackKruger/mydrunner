@@ -1,4 +1,5 @@
 export * from './constants.js';
+export * from './hash.js';
 export * from './tuning.js';
 export * from './types.js';
 export * as Net from './net/index.js';

@@ -9,7 +9,7 @@
 // the client renderer and the Rapier colliders match by construction.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { type TerrainData, petrolStationPadFor } from './terrain.js';
+import { type TerrainData } from './terrain.js';
 
 export interface PetrolStation {
   /** World-space centre of the concrete pad. */
@@ -25,7 +25,11 @@ export interface Landmarks {
 }
 
 export function landmarksFor(terrain: TerrainData): Landmarks {
-  const pad = petrolStationPadFor(terrain.size);
+  // Read the pad the terrain was actually built with rather than
+  // re-deriving it from size. Re-deriving ignored an authored pad
+  // override, so a relocated station would have kept its old colliders
+  // while the flattened concrete moved out from under it.
+  const pad = terrain.petrolStation;
   // The pad has been flattened to road-level (y = 0) by the terrain
   // generator. Sample the height at the centre as a sanity check;
   // smoothFalloff guarantees the centre is exactly 0 once the pad

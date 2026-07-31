@@ -71,7 +71,7 @@ export interface TerrainData {
   /** Landmark specs exposed for obstacle placement. */
   mountain: MountainSpec;
   petrolStation: PetrolStationPad;
-  bogs: ReadonlyArray<{ x: number; z: number; depth: number; sigma: number }>;
+  bogs: ReadonlyArray<Bog>;
   /** Configurable roads. */
   roads: Road[];
 }
@@ -102,6 +102,14 @@ export function mountainFor(size: number): MountainSpec {
     peak: TERRAIN.mtnPeak,
     sigma: size * TERRAIN.mtnSigmaRatio,
   };
+}
+
+/** A mud bog: a Gaussian depression that mudSurfaceRule then paints. */
+export interface Bog {
+  x: number;
+  z: number;
+  depth: number;
+  sigma: number;
 }
 
 export interface PetrolStationPad {
@@ -193,7 +201,7 @@ export interface TerrainGenContext {
   noiseDetail: (x: number, y: number) => number;
   mountain: MountainSpec;
   pad: PetrolStationPad;
-  bogs: ReadonlyArray<{ x: number; z: number; depth: number; sigma: number }>;
+  bogs: ReadonlyArray<Bog>;
   roads: Road[];
 }
 
@@ -598,6 +606,15 @@ export interface TerrainOptions {
   /** Custom roads (defaults to a single straight road along z = TERRAIN.roadZ
    *  plus a short dirt connector to the mountain trail). */
   roads?: Road[];
+  /** Move or resize the petrol station pad (defaults to
+   *  petrolStationPadFor(size)). The pad both flattens the heightfield and
+   *  places the station, so this is how an authored map relocates it.
+   *
+   *  Singular on purpose: a second station would have to widen
+   *  TerrainData, and ~20 test fixtures build that object literally. */
+  pad?: PetrolStationPad;
+  /** Custom mud bogs (defaults to TERRAIN.bogs). */
+  bogs?: ReadonlyArray<Bog>;
 }
 
 const DEFAULT_HEIGHT_LAYERS: HeightLayer[] = [
@@ -674,8 +691,8 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const surfaces = new Uint8Array(n * n);
 
   const mountain = mountainFor(size);
-  const pad = petrolStationPadFor(size);
-  const bogs = TERRAIN.bogs;
+  const pad = opts.pad ?? petrolStationPadFor(size);
+  const bogs = opts.bogs ?? TERRAIN.bogs;
   const defaultRoads: Road[] = [
     defaultRoad(size),
     mountainTrail(size),
