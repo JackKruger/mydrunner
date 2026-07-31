@@ -357,6 +357,68 @@ export const TERRAIN = {
     { x: 50, z: -95, depth: 1.6, sigma: 8 },
     { x: 50, z: 55, depth: 1.4, sigma: 9 },    // mountain approach: no north-side mud existed
   ] as ReadonlyArray<{ x: number; z: number; depth: number; sigma: number }>,
+
+  // Additional roads. Each is a polyline with surface type and width.
+  // Road surface rules and height flattening use these. The main asphalt
+  // road and mountain-trail connector are built by defaultRoad() /
+  // mountainTrail() in terrain.ts; these add a circuit loop and a south
+  // trail so the map feels like a real course rather than a single strip.
+  extraRoads: [
+    // North loop: a scenic dirt circuit through the open terrain north of
+    // the main road. Branches off at x=-40, sweeps through rolling
+    // hills, and rejoins at x=80. Creates a fun lap loop — the player
+    // can drive circuits instead of just out-and-back.
+    {
+      points: [
+        { x: -40, z: -50 },
+        { x: -60, z: 5 },
+        { x: -35, z: 55 },
+        { x: 20, z: 65 },
+        { x: 65, z: 40 },
+        { x: 80, z: -50 },
+      ],
+      width: 8,
+      surface: 1, // Dirt
+      shoulderWidth: 3,
+    },
+    // South bog trail: a narrow dirt track that branches off the main
+    // road and heads into the boggy lowlands. gradeIntoTerrain keeps it
+    // following the valley floor instead of cutting a flat bench through
+    // the bog depressions.
+    {
+      points: [
+        { x: 10, z: -50 },
+        { x: 5, z: -85 },
+        { x: 30, z: -110 },
+      ],
+      width: 5,
+      surface: 1, // Dirt
+      shoulderWidth: 2,
+      gradeIntoTerrain: true,
+    },
+    // East connector: gravel track from the main road up toward the
+    // mountain trail base, providing an alternate approach to the hill
+    // climb that avoids the steep dirt connector. Follows the valley
+    // wall so it grades naturally into the rising terrain.
+    {
+      points: [
+        { x: 80, z: -50 },
+        { x: 90, z: -10 },
+        { x: 85, z: 30 },
+        { x: 70, z: 55 },
+      ],
+      width: 6,
+      surface: 5, // Gravel
+      shoulderWidth: 2,
+      gradeIntoTerrain: true,
+    },
+  ] as ReadonlyArray<{
+    points: ReadonlyArray<{ x: number; z: number }>;
+    width: number;
+    surface: number;
+    shoulderWidth: number;
+    gradeIntoTerrain?: boolean;
+  }>,
 } as const;
 
 // Hill-climb trail features.

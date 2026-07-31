@@ -628,7 +628,21 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const mountain = mountainFor(size);
   const pad = petrolStationPadFor(size);
   const bogs = TERRAIN.bogs;
-  const roads = opts.roads ?? [defaultRoad(size), mountainTrail(size)];
+  const defaultRoads: Road[] = [
+    defaultRoad(size),
+    mountainTrail(size),
+    // Extra roads from constants (north loop, south bog trail, east connector).
+    // Cast the numeric surface IDs to Surface — constants.ts can't import
+    // the Surface enum (circular), so it stores raw numbers.
+    ...TERRAIN.extraRoads.map((r) => ({
+      points: r.points,
+      width: r.width,
+      surface: r.surface as Surface,
+      shoulderWidth: r.shoulderWidth,
+      gradeIntoTerrain: r.gradeIntoTerrain,
+    })),
+  ];
+  const roads = opts.roads ?? defaultRoads;
 
   const ctx: TerrainGenContext = {
     size,

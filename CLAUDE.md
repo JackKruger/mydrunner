@@ -106,7 +106,7 @@ Shared:
 - `packages/shared/src/physics/engine.ts` — engine + automatic gearbox: torque curve, RPM smoothing, chassis-speed-based shift logic (immune to wheel-slip gear hunting).
 - `packages/shared/src/physics/vehicleGeom.ts` — per-`CarKind` physics identity: axle placement, spring rates, mass/power multipliers, `spawnYAboveGround`, `restWheelPositions`.
 - `packages/shared/src/physics/tire.ts` — slip-curve helpers. NOT used by the live model (which uses the friction circle); kept as a tested building block.
-- `packages/shared/src/physics/terrain.ts` — deterministic FBM-noise heightmap + Surface enum + hill-climb trail layers. Rolling hills, one Gaussian mountain peak, scattered mud bogs, graded switchback trail.
+- `packages/shared/src/physics/terrain.ts` — deterministic FBM-noise heightmap + Surface enum + hill-climb trail layers. Rolling hills, one Gaussian mountain peak, scattered mud bogs, graded switchback trail. Multiple roads: main asphalt strip, north loop (dirt circuit), south bog trail, east gravel connector, plus the mountain-trail dirt connector.
 - `packages/shared/src/physics/obstacles.ts` — deterministic rock + tree placement. Three passes: medium scatter, dense small-rock detail, and a corridor of boulders along the rocky hill climb up the mountain.
 - `packages/shared/src/physics/landmarks.ts` — deterministic landmark spec (petrol station, flagpoles, summit lookout) + colliders.
 - `packages/shared/src/physics/ruts.ts` — `RutBuffer` accumulates per-cell erosion, capped at `RUT_MAX_DEPTH`. Only Mud / DeepMud cells erode. Plumbing is in place but disabled via `RUTS_ENABLED`.
@@ -187,9 +187,9 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - Text chat (T to open; rate-limited + sanitised server-side).
 - Soft-correction client prediction for the local truck.
 - Mountain switchback trail with per-traverse features (whoops, rocky step, mud puddle).
+- Multiple roads: north loop (dirt circuit), south bog trail, east gravel connector.
 
 ### Content
-- More than one road. A real "course" with stretches of dirt, mud, water crossings.
 - Cargo objective: spawn a crate to deliver from A to B; mass affects vehicle handling.
 - Multiple truck loadouts (light, heavy, winch-equipped).
 
