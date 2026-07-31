@@ -1,3 +1,22 @@
+// Protocol / build compatibility.
+//
+// The client and the server deploy on independent triggers (GitHub Pages
+// and Railway respectively), and BOTH of them generate the world and the
+// vehicle locally from the seed the server hands out - using their own
+// compiled-in copy of terrain.ts, obstacles.ts, vehicleGeom.ts and this
+// file. So a client running a different commit than the server builds a
+// DIFFERENT heightmap and a DIFFERENT truck from the same seed. Nothing
+// errors; the soft corrections just fight the local sim forever, which
+// the player experiences as "the game feels broken today".
+//
+// This version is the guard: it rides on `hello` and `welcome`, and a
+// mismatch refuses the join with a reason the player can act on. Bump it
+// whenever a change would make two builds disagree - the wire tuple
+// layout, terrain or obstacle generation, vehicle geometry, or any
+// physics constant the prediction sim reads.
+// 2: dropped the `rut` message and TerrainHandshake.rutVersion.
+export const PROTOCOL_VERSION = 2;
+
 // Tick rates and timing - all simulation runs at fixed step.
 // FIXED_DT must be identical on client (prediction) and server (authoritative).
 export const TICK_RATE = 60;
@@ -310,10 +329,53 @@ export const CAMERA = {
 export const DEFAULT_PORT = 2567;
 export const INTERPOLATION_DELAY_MS = 100;
 
+// Client-side prediction: how hard each snapshot pulls the local sim
+// toward the server. These decide whether the game rubber-bands, so they
+// belong here rather than buried in prediction.ts - which is where they
+// lived, as `private static readonly` fields and two inline literals.
+//
+// NOT mirrored into TUNING: a TUNING field with no debug-panel slider is
+// a knob that silently does nothing. Wire the slider first if you want
+// to twist these live.
+export const PREDICTION = {
+  /** Fraction of the way the body moves toward the server pose on each
+   *  snapshot. Combined with visualOffsetDecay this converges in ~5
+   *  snapshots (~150 ms) after a small divergence. */
+  softCorrectionBlend: 0.12,
+  /** Per-step decay of the rendered-position offset toward zero.
+   *  0.85 ~= 110 ms half-life at 60 Hz, so a single soft correction is
+   *  invisible within a few frames. */
+  visualOffsetDecay: 0.85,
+  /** Beyond this separation (m) the divergence is too big for smoothing
+   *  to absorb without a metres-long visual slide; accept a visible pop
+   *  and converge instantly instead. */
+  hardSnapDistance: 5.0,
+  /** Rotation correction per snapshot. Small enough not to fight the
+   *  predicted yaw on a fresh input, cumulative enough to bound
+   *  long-term drift to <1 degree. */
+  rotationBlend: 0.04,
+  /** Linear + angular velocity blend per snapshot. Keeps a divergent
+   *  velocity from compounding into position drift faster than
+   *  softCorrectionBlend can absorb. */
+  velocityBlend: 0.08,
+  /** Skip the rotation correction below this quaternion dot product
+   *  (~1 degree) so the smooth steady state isn't constantly nudged. */
+  rotationDeadbandDot: 0.99996,
+} as const;
+
 // Terrain generation tunables.
 export const TERRAIN = {
-  // Defaults
-  defaultSize: 200,
+  // Defaults. These ARE the production world - Room constructs its World
+  // with no size/resolution override, so a change here changes the map
+  // players actually drive on.
+  //
+  // They used to read 200/128 while room.ts passed a hardcoded 320/128.
+  // That is worse than it sounds: the mountain, the petrol pad and the map
+  // edges below are all expressed as RATIOS of size, so 200 and 320 are
+  // not the same world at different scales - they are different worlds.
+  // Anything constructed from the defaults (tests, the map dumper) was
+  // validating terrain that never shipped.
+  defaultSize: 320,
   defaultResolution: 128,
   defaultSeed: 1337,
 
@@ -332,8 +394,12 @@ export const TERRAIN = {
   valleySigma: 12,
 
   // Mountain (ratios applied to size).
-  // Peak and sigma are sized so the switchback traverses stay ≤ ~30 % grade
-  // (verified analytically in terrain.ts getHillClimbSegments).
+  // Peak and sigma were chosen targeting ~30 % grade on the switchback
+  // traverses, but that figure was analytic (bare Gaussian, earlier world
+  // size) and the shipped map does not meet it: measured on the generated
+  // 320 m heightmap the trail runs a 39 % median / 87 % p90. It stays
+  // drivable because of INCLINE_ASSIST_MAX. production-world.test.ts pins
+  // the measured numbers, so changing peak/sigma will fail there first.
   // Steeper off-trail face is intentional — you can't shortcut the path.
   mtnPeak: 70,
   mtnSigmaRatio: 0.19,
@@ -477,17 +543,24 @@ export const TRAIL_FEATURES = {
 
 // Rut formation. Each driven wheel in mud carves the heightmap each tick:
 //   delta_y = RUT_RATE * (1 - grip) * |throttle| * wheelInContact
-// Capped to RUT_MAX_DEPTH per cell. Heightfield collider is rebuilt every
-// RUT_REBUILD_INTERVAL_TICKS to keep physics in sync with visuals.
+// Capped to RUT_MAX_DEPTH per cell.
+//
+// Ruts are NOT wired into the game. RutBuffer (physics/ruts.ts) and these
+// two rates survive as the tested building block for a re-implementation;
+// everything that used to carry deltas to the client - the `rut` wire
+// message, World.rebuildTerrain, Scene.applyRuts, TerrainMesh.applyRut,
+// the RUTS_ENABLED flag and Room's flush loop - was deleted, because it
+// sat dead across 13 files for months and read as live surface area.
+//
+// Two problems have to be solved before ruts come back, and the shape of
+// the fix decides what the plumbing should look like, so there was no
+// point preserving the old shape:
+//   1. At 320 m / resolution 128 a heightfield cell is ~2.5 m across,
+//      much wider than a tyre, so a wheel pass sinks a large patch
+//      instead of carving a track. Needs higher resolution, or a
+//      sub-cell visual overlay decoupled from the collider.
+//   2. The client's prediction world runs its own copy of the terrain and
+//      would need the deltas too, or the local sim drives on stale ground
+//      and rubber-bands on mud.
 export const RUT_RATE = 0.0035;        // m per tick at full slip
 export const RUT_MAX_DEPTH = 0.6;      // m below original height
-export const RUT_REBUILD_INTERVAL_TICKS = 30;
-// Disabled for now: at the live world size (320m) / heightfield
-// resolution (128, see Room's constructor), each rut cell is ~2.5m
-// across - much wider than a tire - so wheel passes sink large patches
-// instead of carving tracks. Also causes prediction divergence (the
-// client's prediction world never receives rut deltas), producing
-// periodic rubberbanding on mud. Re-enable once terrain resolution
-// bumps or a sub-cell rut overlay (visuals decoupled from the collider)
-// lands.
-export const RUTS_ENABLED = false;

@@ -15,15 +15,6 @@ import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './join
 import { initChat } from './chat.js';
 import { isDebugUser, initDebugPanel, updateAxleDebug } from './debugPanel.js';
 
-const SURFACE_LABELS: Record<number, string> = {
-  [Physics.Surface.Road]: 'road',
-  [Physics.Surface.Dirt]: 'dirt',
-  [Physics.Surface.Mud]: 'mud',
-  [Physics.Surface.DeepMud]: 'deep mud',
-  [Physics.Surface.Grass]: 'grass',
-  [Physics.Surface.Gravel]: 'gravel',
-  [Physics.Surface.Concrete]: 'concrete',
-};
 import { initInput, sampleInput, clearKeys, isHandbrakeOn } from './input.js';
 import { getTouchState, initTouchInput, onTouchEdge } from './touchInput.js';
 import { NetClient } from './net.js';
@@ -249,14 +240,23 @@ async function start(): Promise<void> {
         }
       }
     },
-    onRut(_version, cells) {
-      scene.applyRuts(cells);
-    },
     onChat(from, fromName, text) {
       chat.push(fromName, text, from === localId);
     },
-    onClose(reason) {
+    onClose(reason, fatal) {
       connected = false;
+      // A fatal close is one retrying cannot fix (protocol-version
+      // mismatch). Leave the reason on screen instead of burying it under
+      // a retry countdown that would never succeed.
+      if (fatal) {
+        if (reconnectTimer !== null) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        hud.textContent = reason;
+        chat.pushSystem(reason);
+        return;
+      }
       if (reconnectTimer !== null) return; // attempt already queued
       const delayS = (reconnectDelayMs / 1000).toFixed(0);
       hud.textContent = `disconnected: ${reason} — reconnecting in ${delayS}s`;
@@ -405,7 +405,7 @@ async function start(): Promise<void> {
       const lp = scene.localPosition();
       if (terrainData && lp) {
         const s = Physics.sampleSurface(terrainData, lp.x, lp.z);
-        surfaceLabel = ` · ${SURFACE_LABELS[s] ?? '?'}`;
+        surfaceLabel = ` · ${Physics.surfaceInfo(s).label}`;
       }
       const gearLabel = lastGear === -1 ? 'R' : lastGear === 0 ? 'N' : String(lastGear);
       const fpsLabel = ` · ${fps} FPS`;

@@ -37,7 +37,7 @@ import {
   type VehicleState,
   type WheelState,
 } from '../types.js';
-import { Surface, sampleSurface } from './terrain.js';
+import { Surface, sampleSurface, surfaceInfo } from './terrain.js';
 import { createEngineState, stepEngine, type EngineState } from './engine.js';
 // slipRatio / gripFromSlip kept in tire.ts for tests; not used here since
 // the impulse-clamped integrator below replaced the Pacejka groundTq path.
@@ -61,11 +61,7 @@ import {
   resetWheelKinematic,
   type WheelKinematic,
 } from './wheelDynamics.js';
-import type {
-  VehicleLike,
-  VehicleSpawn,
-  WheelSample,
-} from './vehicleTypes.js';
+import type { VehicleLike, VehicleSpawn } from './vehicleTypes.js';
 import type { World } from './world.js';
 
 type Vec3 = { x: number; y: number; z: number };
@@ -593,28 +589,6 @@ export class SolidAxleVehicle implements VehicleLike {
     // not noticeable on a moving chassis, dwarfed by camera motion.
   }
 
-  wheelSamples(): WheelSample[] {
-    const t = this.body.translation();
-    const r = this.body.rotation();
-    const throttle = Math.abs(this.input.throttle);
-    const brake = this.input.brake + this.input.handbrake;
-    const passive = 0.15;
-    const slip = Math.min(1, Math.max(passive, throttle, brake));
-    const out: WheelSample[] = [];
-    for (let aIdx = 0; aIdx < 2; aIdx++) {
-      const ag = this.axles[aIdx]!.geom;
-      for (let side = 0; side < 2; side++) {
-        const wIdx = aIdx * 2 + side;
-        const w = this.wheels[wIdx]!;
-        const localX = side === 0 ? -ag.trackHalf : +ag.trackHalf;
-        const local = { x: localX, y: ag.centerLocalY, z: ag.centerLocalZ };
-        const wp = addVec(t, rotateVecByQuat(local, r));
-        out.push({ x: wp.x, z: wp.z, contact: w.contact, slip });
-      }
-    }
-    return out;
-  }
-
   getState(): VehicleState {
     const t = this.body.translation();
     const r = this.body.rotation();
@@ -717,14 +691,8 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 function surfaceGrip(s: number): number {
-  switch (s) {
-    case Surface.Road: return TUNING.surfaceFriction.road;
-    case Surface.Dirt: return TUNING.surfaceFriction.dirt;
-    case Surface.Mud: return TUNING.surfaceFriction.mud;
-    case Surface.DeepMud: return TUNING.surfaceFriction.deepMud;
-    case Surface.Grass: return TUNING.surfaceFriction.grass;
-    case Surface.Gravel: return TUNING.surfaceFriction.gravel;
-    case Surface.Concrete: return TUNING.surfaceFriction.concrete;
-    default: return TUNING.surfaceFriction.dirt;
-  }
+  // TUNING rather than SURFACE_FRICTION: the debug panel mutates the
+  // former in place, and this is the reader that makes those sliders do
+  // something.
+  return TUNING.surfaceFriction[surfaceInfo(s).friction];
 }

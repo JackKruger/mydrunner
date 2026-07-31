@@ -1,6 +1,14 @@
 name: Deploy Client
 # Railway handles the server (auto-deploys via its GitHub integration when
 # this branch lands). This workflow only ships the client to GitHub Pages.
+#
+# This is the ONLY workflow allowed to publish to the github-pages
+# environment. A second one (static.yml, the repo-scaffold default that
+# uploaded `path: '.'`) used to trigger on the same branch: both ran on
+# every push, both reported success, and whichever finished last decided
+# whether the live site was the built client or a raw dump of the source
+# tree. If another Pages workflow is ever added, fold it into this file
+# instead - concurrent deploys to one environment have no defined winner.
 on:
   push:
     branches:
@@ -54,4 +62,4 @@ jobs:
         with:
           path: packages/client/dist
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

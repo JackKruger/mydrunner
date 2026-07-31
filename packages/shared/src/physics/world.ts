@@ -33,8 +33,11 @@ export class World {
   readonly terrain: TerrainData;
   readonly obstacles: Obstacle[];
   readonly landmarks: Landmarks;
-  private terrainBody: RAPIER.RigidBody;
-  private terrainCollider: RAPIER.Collider;
+  /** The static heightfield. Readonly now that ruts are gone - the
+   *  terrain collider is built once and never swapped, which is what
+   *  lets every consumer cache terrain-derived data for the session. */
+  readonly terrainBody: RAPIER.RigidBody;
+  readonly terrainCollider: RAPIER.Collider;
   private obstacleBodies: RAPIER.RigidBody[] = [];
   private landmarkBodies: RAPIER.RigidBody[] = [];
 
@@ -75,16 +78,6 @@ export class World {
     const body = this.world.createRigidBody(bodyDesc);
     const collider = this.world.createCollider(colliderDesc, body);
     return { body, collider };
-  }
-
-  /** Replace the heightfield in place (used by deformable ruts). Existing
-   *  vehicles stay attached to the world; only the static terrain swaps. */
-  rebuildTerrain(): void {
-    this.world.removeCollider(this.terrainCollider, true);
-    this.world.removeRigidBody(this.terrainBody);
-    const built = this.buildTerrain(this.terrain);
-    this.terrainBody = built.body;
-    this.terrainCollider = built.collider;
   }
 
   spawnVehicle(id: string, spawn: VehicleSpawn, kind: CarKind = 'patrol'): VehicleLike {

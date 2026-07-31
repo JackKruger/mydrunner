@@ -3,7 +3,11 @@ import type { CarKind, PlayerId, PlayerInput, PlayerSnapshot, VehicleState, Whee
 
 // Client -> Server
 export type ClientMessage =
-  | { t: 'hello'; name: string; carKind?: CarKind }
+  /** `v` is the sender's PROTOCOL_VERSION. Absent means a build from
+   *  before the handshake existed, which is by definition incompatible;
+   *  decodeClient reports it as 0 so the server can refuse it with a
+   *  reason rather than admitting a client that would rubber-band. */
+  | { t: 'hello'; name: string; carKind?: CarKind; v: number }
   | { t: 'input'; input: PlayerInput }
   | { t: 'ping'; clientTimeMs: number }
   | { t: 'chat'; text: string };
@@ -12,8 +16,6 @@ export interface TerrainHandshake {
   seed: number;
   size: number;
   resolution: number;
-  /** Optional rut deltas applied since terrain was generated (for late-joiners). */
-  rutVersion?: number;
 }
 
 export interface SpawnHandshake {
@@ -30,11 +32,13 @@ export type ServerMessage =
       serverTimeMs: number;
       terrain: TerrainHandshake;
       spawn: SpawnHandshake;
+      /** Server's PROTOCOL_VERSION. The server already refused the join
+       *  on a mismatch, so this is informational - it lets the client log
+       *  which build it is actually talking to. */
+      protocolVersion: number;
     }
   | { t: 'snapshot'; snap: WorldSnapshot }
   | { t: 'pong'; clientTimeMs: number; serverTimeMs: number }
-  /** Broadcast when the heightmap mutates (ruts deepen). Coalesced by version. */
-  | { t: 'rut'; version: number; cells: { i: number; dy: number }[] }
   /** Chat relay - includes the sender's id and display name plus the
    *  server's monotonic time so clients can show "X seconds ago". */
   | { t: 'chat'; from: PlayerId; fromName: string; text: string; serverTimeMs: number }
@@ -175,10 +179,15 @@ function unpackPlayer(arr: unknown[]): PlayerSnapshot {
   return { id, name, carKind, vehicle, lastAckSeq };
 }
 
+/** Per-player tuple layout version. Bump whenever packPlayer's field
+ *  order or count changes; unpackPlayer reads by position, so a stale
+ *  decoder would silently misread every field as its neighbour. */
+export const SNAPSHOT_SCHEMA = 2;
+
 function packSnapshot(snap: WorldSnapshot): unknown {
   return {
     t: 'snapshot',
-    s: 2, // schema version - bump if the per-player tuple changes
+    s: SNAPSHOT_SCHEMA,
     T: snap.tick | 0,
     M: snap.serverTimeMs | 0,
     P: snap.players.map(packPlayer),
@@ -281,7 +290,13 @@ export function decodeClient(raw: Wire): ClientMessage {
     case 'hello': {
       if (typeof m.name !== 'string') throw new Error('hello: name must be a string');
       const carKind = typeof m.carKind === 'string' ? (m.carKind as CarKind) : undefined;
-      return { t: 'hello', name: sanitiseUserText(m.name, NAME_MAX_LEN), carKind };
+      // A mismatched version is NOT thrown here. Throwing lands in the ws
+      // handler's catch, which returns silently - the player would sit on
+      // a connected socket that never sends a welcome, with nothing on
+      // screen explaining why. Pass the value through instead and let the
+      // caller answer with a `bye` the client can display.
+      const v = Number.isSafeInteger(m.v) ? (m.v as number) : 0;
+      return { t: 'hello', name: sanitiseUserText(m.name, NAME_MAX_LEN), carKind, v };
     }
     case 'input': {
       const i = m.input as Record<string, unknown> | null | undefined;
@@ -325,6 +340,13 @@ export function decodeClient(raw: Wire): ClientMessage {
 export function decodeServer(raw: Wire): ServerMessage {
   const decoded = msgpackDecode(toBytes(raw)) as { t: string } & Record<string, unknown>;
   if (decoded.t === 'snapshot' && Array.isArray(decoded.P)) {
+    // The tuple is read by position, so decoding a schema we don't know
+    // would not fail - it would quietly assign every field to whatever
+    // now sits at that index and drive the truck from garbage. Refuse it
+    // instead; the caller drops the frame.
+    if (decoded.s !== SNAPSHOT_SCHEMA) {
+      throw new Error(`snapshot: unsupported schema ${String(decoded.s)}`);
+    }
     return { t: 'snapshot', snap: unpackSnapshot(decoded as unknown as { T: number; M: number; P: unknown[][] }) };
   }
   return decoded as unknown as ServerMessage;

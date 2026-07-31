@@ -2,7 +2,7 @@
 // seed (or the raw arrays) and reconstructs the same terrain bit-for-bit.
 
 import { createNoise2D } from 'simplex-noise';
-import { TERRAIN, TRAIL_FEATURES } from '../constants.js';
+import { SURFACE_FRICTION, TERRAIN, TRAIL_FEATURES } from '../constants.js';
 
 export const Surface = {
   Road: 0,
@@ -14,6 +14,48 @@ export const Surface = {
   Concrete: 6,
 } as const;
 export type Surface = (typeof Surface)[keyof typeof Surface];
+
+/** Everything the rest of the codebase needs to know about a surface,
+ *  in one place.
+ *
+ *  These three facts used to live in three separate lookups keyed on the
+ *  same enum - a switch in solidAxleVehicle.ts, SURFACE_LABELS in the
+ *  client's main.ts, and SURFACE_COLORS in minimap.ts - so adding a
+ *  surface meant three edits in three packages and nothing failed if you
+ *  made only two. As a Record over the Surface union, TypeScript now
+ *  refuses to compile a new enum member until every field is filled in.
+ *
+ *  The terrain shader is deliberately NOT folded in here: its per-surface
+ *  branches are procedural texture generators (noise octaves, pebble
+ *  thresholds, expansion joints), not colours, and flattening them into a
+ *  table would throw the detail away. `minimapColor` is the flat
+ *  approximation of each, which is all a 168 px canvas can show. */
+export interface SurfaceInfo {
+  /** Shown in the HUD. */
+  label: string;
+  /** Key into SURFACE_FRICTION / TUNING.surfaceFriction. Physics reads
+   *  the TUNING copy so the debug panel's sliders keep working. */
+  friction: keyof typeof SURFACE_FRICTION;
+  /** Flat RGB approximation of the shader's palette, for the minimap. */
+  minimapColor: readonly [number, number, number];
+}
+
+export const SURFACE_INFO: Record<Surface, SurfaceInfo> = {
+  [Surface.Road]: { label: 'road', friction: 'road', minimapColor: [128, 121, 112] },
+  [Surface.Dirt]: { label: 'dirt', friction: 'dirt', minimapColor: [138, 107, 66] },
+  [Surface.Mud]: { label: 'mud', friction: 'mud', minimapColor: [74, 48, 24] },
+  [Surface.DeepMud]: { label: 'deep mud', friction: 'deepMud', minimapColor: [32, 18, 9] },
+  [Surface.Grass]: { label: 'grass', friction: 'grass', minimapColor: [63, 92, 42] },
+  [Surface.Gravel]: { label: 'gravel', friction: 'gravel', minimapColor: [119, 113, 107] },
+  [Surface.Concrete]: { label: 'concrete', friction: 'concrete', minimapColor: [68, 68, 68] },
+};
+
+/** SURFACE_INFO for `s`, falling back to Dirt for an out-of-range value.
+ *  Dirt is the neutral middle: an unknown surface should drive like
+ *  ordinary ground rather than ice or tarmac. */
+export function surfaceInfo(s: number): SurfaceInfo {
+  return SURFACE_INFO[s as Surface] ?? SURFACE_INFO[Surface.Dirt];
+}
 
 export interface TerrainData {
   /** World-space size on each axis (square). */
@@ -187,9 +229,15 @@ export const HILL_CLIMB_PATH_HALF_WIDTH = 3.5;
 /** Returns the switchback segments for the hill-climb trail.
  *  Exported so the ASCII map visualiser and obstacle placer can use them.
  *
- *  Design: 4 long traverses + 1 final approach.  Each traverse grade was
- *  verified ≤ 30 % (≈ 17°) against a Gaussian mountain with the constants
- *  in TERRAIN.mtnPeak / mtnSigmaRatio / mtnZRatio.  Traverses alternate
+ *  Design: 4 long traverses + 1 final approach.  The per-traverse grades
+ *  noted below were derived analytically against a bare Gaussian at an
+ *  earlier world size; they are NOT what the shipped 320 m heightmap
+ *  delivers.  Measured against the generated terrain (which has the
+ *  bench cut, trail features and base noise layered on top) the trail
+ *  runs a 39 % median and 87 % p90 - climbable only because of
+ *  INCLINE_ASSIST_MAX.  See production-world.test.ts, which pins the
+ *  measured shape.  Treat the percentages below as the original intent,
+ *  not a guarantee.  Traverses alternate
  *  east and west so the trail zigzags up the southern face like a real
  *  mountain road.  The switchback turn-arounds are implicit — the vehicle
  *  just brakes and reverses direction at each segment endpoint. */

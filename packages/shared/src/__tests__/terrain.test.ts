@@ -9,9 +9,12 @@ import {
   generateTerrain,
   mountainFor,
   petrolStationPadFor,
+  Surface,
+  SURFACE_INFO,
+  surfaceInfo,
   type TerrainData,
 } from '../physics/terrain.js';
-import { TERRAIN } from '../constants.js';
+import { SURFACE_FRICTION, TERRAIN } from '../constants.js';
 
 function makeTerrain(resolution: number, size: number, heights: number[]): TerrainData {
   return {
@@ -130,5 +133,42 @@ describe('generateTerrain road properties', () => {
     const hRoad = Math.abs(sampleHeightBilinear(t, 0, rz));
     const hFar = Math.abs(sampleHeightBilinear(t, 0, rz + 45));
     expect(hFar).toBeGreaterThan(hRoad + 0.5);
+  });
+});
+
+// SURFACE_INFO replaced three hand-maintained lookups keyed on the same
+// enum (physics friction switch, HUD labels, minimap colours). The Record
+// type makes a missing entry a compile error; these cover what the type
+// can't see.
+describe('SURFACE_INFO', () => {
+  it('covers every Surface enum member', () => {
+    for (const [name, id] of Object.entries(Surface)) {
+      expect(SURFACE_INFO[id], `Surface.${name} (${id})`).toBeDefined();
+    }
+    expect(Object.keys(SURFACE_INFO)).toHaveLength(Object.keys(Surface).length);
+  });
+
+  it('names a real SURFACE_FRICTION key for every surface', () => {
+    // A typo here would not fail to compile if the friction table ever
+    // widened to an index signature, and the symptom would be an
+    // undefined grip multiplier silently NaN-ing the tyre forces.
+    for (const info of Object.values(SURFACE_INFO)) {
+      expect(SURFACE_FRICTION[info.friction], info.friction).toBeTypeOf('number');
+    }
+  });
+
+  it('gives each surface a distinct label and minimap colour', () => {
+    const labels = Object.values(SURFACE_INFO).map((i) => i.label);
+    expect(new Set(labels).size, labels.join(',')).toBe(labels.length);
+    const colours = Object.values(SURFACE_INFO).map((i) => i.minimapColor.join(','));
+    expect(new Set(colours).size, colours.join(' | ')).toBe(colours.length);
+  });
+
+  it('falls back to dirt for an out-of-range surface id', () => {
+    // sampleSurface reads a Uint8Array, so a corrupt or future id can
+    // reach the lookup. Dirt is the neutral middle - an unknown surface
+    // should drive like ground, not like ice or tarmac.
+    expect(surfaceInfo(99)).toBe(SURFACE_INFO[Surface.Dirt]);
+    expect(surfaceInfo(-1)).toBe(SURFACE_INFO[Surface.Dirt]);
   });
 });

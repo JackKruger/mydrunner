@@ -11,13 +11,6 @@ export interface VehicleSpawn {
   yaw?: number;
 }
 
-export interface WheelSample {
-  x: number;
-  z: number;
-  contact: boolean;
-  slip: number;
-}
-
 export interface VehicleLike {
   readonly id: string;
   readonly body: RAPIER.RigidBody;
@@ -26,7 +19,6 @@ export interface VehicleLike {
   preStep(): void;
   postStep(): void;
   getState(): VehicleState;
-  wheelSamples(): WheelSample[];
   dispose(): void;
   /** Axle DOF state (rideY/rollAngle). The prediction sim snaps these to
    *  the server's values on each snapshot because they're terrain-contact

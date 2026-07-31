@@ -20,10 +20,10 @@ export class TerrainMesh {
   private material: THREE.ShaderMaterial;
 
   constructor(terrain: Physics.TerrainData) {
-    // Shares the TerrainData instance generated once in main.ts. Note
-    // applyRut mutates terrain.heights in place - every consumer of the
-    // shared instance (HUD surface lookup, minimap, prediction world's
-    // source data) sees rut deltas without a second copy.
+    // Shares the TerrainData instance generated once in main.ts. Nothing
+    // mutates it after generation, so the HUD surface lookup, the minimap
+    // and the prediction world can all read the same copy for the whole
+    // session.
     this.terrain = terrain;
     const { size, resolution } = terrain;
     const n = resolution;
@@ -43,25 +43,6 @@ export class TerrainMesh {
     this.mesh = new THREE.Mesh(geo, this.material);
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = false;
-  }
-
-  /** Apply a rut delta: lower the height at cell index `i` by `dy`. Visual
-   *  only; surface remains the same. Currently unused (ruts disabled). */
-  applyRut(i: number, dy: number): void {
-    const n = this.terrain.resolution;
-    const r = Math.floor(i / n);
-    const c = i % n;
-    if (r < 0 || r >= n || c < 0 || c >= n) return;
-    const cur = this.terrain.heights[i] ?? 0;
-    const next = cur - dy;
-    this.terrain.heights[i] = next;
-    this.positions[i * 3 + 1] = next;
-    (this.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
-  }
-
-  /** Call after a batch of applyRut() calls to recompute lighting. */
-  flush(): void {
-    this.geometry.computeVertexNormals();
   }
 
   /** Free geometry, material AND the surface-ID DataTexture.
@@ -133,35 +114,42 @@ float fbm(vec2 p) {
 }
 
 vec3 surfaceColor(int s, vec2 p) {
+  // Branch IDs are interpolated from Physics.Surface rather than written
+  // as literals: this function is the one surface lookup that CAN'T fold
+  // into SURFACE_INFO (each branch is a procedural texture, not a
+  // colour), so the enum values are injected instead. Renumbering the
+  // enum then repaints correctly rather than silently painting grass on
+  // the road.
+  //
   // Each surface mixes a low-frequency colour variation (broad patches)
   // with a high-frequency detail (grain / pebbles / blades).
-  if (s == 0) {
+  if (s == ${Physics.Surface.Road}) {
     // Road: compacted gravel-dirt with streaks along the +X axis.
     float n = fbm(vec2(p.x * 0.4, p.y * 1.6));
     float pebble = step(0.78, vnoise(p * 9.0));
     vec3 base = mix(vec3(0.42, 0.40, 0.38), vec3(0.60, 0.56, 0.50), n);
     return mix(base, vec3(0.30, 0.28, 0.25), pebble * 0.5);
   }
-  if (s == 1) {
+  if (s == ${Physics.Surface.Dirt}) {
     // Dirt: tan with brown variation.
     float n = vnoise(p * 0.6);
     float g = vnoise(p * 7.0);
     vec3 base = mix(vec3(0.42, 0.30, 0.16), vec3(0.66, 0.52, 0.32), n);
     return base * (0.85 + g * 0.30);
   }
-  if (s == 2) {
+  if (s == ${Physics.Surface.Mud}) {
     // Mud: dark wet brown with broad streaks.
     float n = vnoise(p * 0.45);
     float wet = vnoise(p * 1.7 + 13.0);
     vec3 base = mix(vec3(0.18, 0.12, 0.07), vec3(0.36, 0.24, 0.14), n);
     return base * (0.85 + wet * 0.40);
   }
-  if (s == 3) {
+  if (s == ${Physics.Surface.DeepMud}) {
     // Deep mud: nearly black with slick variation.
     float n = vnoise(p * 0.5 + 7.0);
     return mix(vec3(0.05, 0.03, 0.02), vec3(0.18, 0.11, 0.06), n);
   }
-  if (s == 4) {
+  if (s == ${Physics.Surface.Grass}) {
     // Grass: green with darker patches and the occasional yellow blade.
     float macro = vnoise(p * 0.5);
     float blade = vnoise(p * 14.0);
@@ -170,14 +158,14 @@ vec3 surfaceColor(int s, vec2 p) {
     base = mix(base, vec3(0.55, 0.50, 0.20), yellow * 0.35);
     return base * (0.78 + blade * 0.34);
   }
-  if (s == 5) {
+  if (s == ${Physics.Surface.Gravel}) {
     // Gravel: cool gray-brown with high-contrast pebble noise.
     float pebble = vnoise(p * 9.0);
     float macro = vnoise(p * 0.7);
     vec3 base = mix(vec3(0.34, 0.32, 0.30), vec3(0.58, 0.52, 0.48), macro);
     return base * (0.50 + pebble * 0.95);
   }
-  if (s == 6) {
+  if (s == ${Physics.Surface.Concrete}) {
     // Concrete: dark asphalt-ish grey with very fine grain + slight
     // patch variation and a thin "expansion joint" line every few
     // metres so the eye reads it as paving rather than flat colour.

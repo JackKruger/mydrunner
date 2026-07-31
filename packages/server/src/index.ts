@@ -3,7 +3,14 @@
 import { WebSocketServer, type WebSocket } from 'ws';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_PORT, DEFAULT_CAR_KIND, normalizeCarKind, Net, Physics } from '@mydrunner/shared';
+import {
+  DEFAULT_PORT,
+  DEFAULT_CAR_KIND,
+  PROTOCOL_VERSION,
+  normalizeCarKind,
+  Net,
+  Physics,
+} from '@mydrunner/shared';
 import { Room, type PlayerHandle } from './room.js';
 
 async function main(): Promise<void> {
@@ -78,8 +85,28 @@ async function main(): Promise<void> {
         return;
       }
       switch (msg.t) {
-        case 'hello':
+        case 'hello': {
           if (joined) return;
+          // Version gate. Client and server ship on separate triggers, and
+          // both build the world + vehicle from their own compiled-in
+          // generators (see PROTOCOL_VERSION in shared/constants.ts), so a
+          // mismatched pair diverges silently instead of failing. Refuse
+          // the join and say why - the client turns this into a HUD
+          // message telling the player to reload, which fetches the new
+          // bundle from Pages.
+          if (msg.v !== PROTOCOL_VERSION) {
+            console.log(
+              `[mydrunner-server] refusing join: client protocol ${msg.v}, server ${PROTOCOL_VERSION}`,
+            );
+            handle.send(
+              Net.encode({
+                t: 'bye',
+                reason: `version mismatch (client ${msg.v}, server ${PROTOCOL_VERSION}) - reload the page`,
+              }),
+            );
+            ws.close();
+            return;
+          }
           // decodeClient already sanitised + length-capped the name; all
           // that's left is the empty-after-stripping case.
           handle.name = msg.name || 'anon';
@@ -87,6 +114,7 @@ async function main(): Promise<void> {
           room.addPlayer(handle);
           joined = true;
           break;
+        }
         case 'input':
           if (!joined) return;
           room.applyInput(id, msg.input);
