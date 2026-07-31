@@ -209,17 +209,63 @@ export const NAME_MAX_LEN = 32;
 /** Max length of a chat message after sanitisation. */
 export const CHAT_MAX_LEN = 200;
 
-/** Strip control characters and clamp length on any free-text field a
+/** Characters no display name or chat line has a legitimate use for:
+ *   - C0 controls + DEL, and C1 controls: newlines and friends break the
+ *     nameplate layout and the chat log.
+ *   - Bidi embeddings / overrides / isolates (U+202A-202E, U+2066-2069):
+ *     the classic display-spoofing vector - they let a name render as
+ *     somebody else's.
+ *   - Zero-width space and BOM: invisible padding, so two players can
+ *     appear to share a name.
+ *
+ *  Deliberately NOT stripped: ZWJ / ZWNJ (U+200C-200D), which real emoji
+ *  sequences and Arabic / Indic scripts need, and LRM / RLM (U+200E-200F),
+ *  which mixed-direction names legitimately use. */
+//  Expressed as codepoint ranges rather than a regex character class so
+//  this file stays plain ASCII - writing the characters as literals makes
+//  git treat the source as a binary blob, and escape sequences for them
+//  are easy to mangle silently.
+const UNSAFE_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x00, 0x1f],     // C0 controls
+  [0x7f, 0x9f],     // DEL + C1 controls
+  [0x200b, 0x200b], // zero-width space
+  [0x202a, 0x202e], // bidi embeddings + overrides
+  [0x2066, 0x2069], // bidi isolates
+  [0xfeff, 0xfeff], // BOM / zero-width no-break space
+];
+
+function isUnsafeChar(code: number): boolean {
+  for (const [lo, hi] of UNSAFE_RANGES) {
+    if (code >= lo && code <= hi) return true;
+  }
+  return false;
+}
+
+/** Strip unsafe characters and clamp length on any free-text field a
  *  client can send. Applied at decode time (below) rather than at each
  *  consumer: player names used to skip this entirely while chat text got
- *  it in Room.broadcastChat, so newlines / RTL overrides / zero-width
- *  characters in a name reached every client's nameplate and chat log. */
+ *  a weaker version of it in Room.broadcastChat, so a crafted name
+ *  reached every client's nameplate and chat log.
+ *
+ *  Length is clamped in code units, matching the previous slice(0, max)
+ *  behaviour. A name of astral-plane characters therefore holds fewer
+ *  than maxLen glyphs - the cap exists to bound what goes on the wire,
+ *  not to promise an exact glyph count. */
 export function sanitiseUserText(raw: string, maxLen: number): string {
-  return raw
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x1f\x7f]/g, '')
-    .trim()
-    .slice(0, maxLen);
+  let out = '';
+  // Iterating the string yields whole code points, so a surrogate pair is
+  // one `chr` and can never be half-stripped into a lone surrogate.
+  for (const chr of raw) {
+    if (!isUnsafeChar(chr.codePointAt(0)!)) out += chr;
+  }
+  out = out.trim().slice(0, maxLen);
+  // The slice above cuts on code units, so it can land between the halves
+  // of a surrogate pair (e.g. one ASCII char followed by emoji). A lone
+  // high surrogate is ill-formed UTF-16 and msgpack encodes it as U+FFFD,
+  // putting a replacement glyph on every client's nameplate. Drop it.
+  const last = out.charCodeAt(out.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) out = out.slice(0, -1);
+  return out;
 }
 
 /** Decode + validate a client->server message. Throws on malformed bytes

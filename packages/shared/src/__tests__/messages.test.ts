@@ -70,6 +70,10 @@ const ch = (code: number): string => String.fromCharCode(code);
 const NUL = ch(0x00);
 const BEL = ch(0x07);
 const DEL = ch(0x7f);
+const RLO = ch(0x202e); // right-to-left override - the name-spoofing vector
+const ZWSP = ch(0x200b);
+const BOM = ch(0xfeff);
+const ZWJ = ch(0x200d); // must SURVIVE: real emoji sequences need it
 
 describe('decodeClient free-text sanitisation', () => {
   it('strips control characters from a hello name', () => {
@@ -101,11 +105,49 @@ describe('decodeClient free-text sanitisation', () => {
     expect(msg.name).toBe('');
   });
 
-  it('leaves ordinary unicode alone', () => {
-    // Stripping is control-characters-only; a name in another script or
-    // with an emoji must survive intact.
-    const msg = decodeClient(raw({ t: 'hello', name: 'Maïa \u{1F6FB}' }));
+  it('strips bidi overrides, zero-width space and BOM', () => {
+    // A right-to-left override lets a name render as somebody else's;
+    // zero-width padding lets two players appear to share one.
+    const msg = decodeClient(raw({ t: 'hello', name: `${RLO}ja${ZWSP}ck${BOM}` }));
     if (msg.t !== 'hello') throw new Error('expected hello');
-    expect(msg.name).toBe('Maïa \u{1F6FB}');
+    expect(msg.name).toBe('jack');
+  });
+
+  it('leaves ordinary unicode and emoji sequences alone', () => {
+    // Stripping must not reach legitimate text: another script, an astral
+    // -plane emoji, or a ZWJ sequence (which would break into two glyphs
+    // if the joiner were removed).
+    const name = `Maïa \u{1F6FB} \u{1F468}${ZWJ}\u{1F469}`;
+    const msg = decodeClient(raw({ t: 'hello', name }));
+    if (msg.t !== 'hello') throw new Error('expected hello');
+    expect(msg.name).toBe(name);
+  });
+
+  it('never leaves a lone surrogate behind when clamping', () => {
+    // The clamp cuts on code units, so an odd-length prefix lands between
+    // the halves of a surrogate pair. A lone surrogate is ill-formed
+    // UTF-16 and msgpack turns it into U+FFFD, so a replacement glyph
+    // would appear on every client's nameplate.
+    for (const prefix of ['', 'x', 'xy']) {
+      const msg = decodeClient(raw({ t: 'hello', name: prefix + '\u{1F6FB}'.repeat(40) }));
+      if (msg.t !== 'hello') throw new Error('expected hello');
+      expect(msg.name.length, prefix).toBeLessThanOrEqual(NAME_MAX_LEN);
+      expect(hasLoneSurrogate(msg.name), `prefix ${JSON.stringify(prefix)}`).toBe(false);
+    }
   });
 });
+
+/** True if any UTF-16 code unit is a surrogate without its partner. */
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i++;
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
