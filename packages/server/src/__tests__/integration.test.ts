@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { Net, EMPTY_INPUT, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
+import { Net, EMPTY_INPUT, PROTOCOL_VERSION, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 // We start the server in-process via the same code path. Easier and faster.
@@ -61,7 +61,7 @@ describe('server integration', () => {
       if (msg.t === 'snapshot') snaps.push(msg.snap);
     });
 
-    client.send(Net.encode({ t: 'hello', name: 'tester' }));
+    client.send(Net.encode({ t: 'hello', name: 'tester', v: PROTOCOL_VERSION }));
 
     // Wait for at least 3 snapshots.
     const start = Date.now();

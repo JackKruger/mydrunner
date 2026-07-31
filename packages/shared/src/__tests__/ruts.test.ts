@@ -10,7 +10,15 @@
 import { describe, expect, it } from 'vitest';
 import { RutBuffer } from '../physics/ruts.js';
 import { Surface, mountainFor, petrolStationPadFor, type TerrainData } from '../physics/terrain.js';
-import { RUT_MAX_DEPTH, RUT_REBUILD_INTERVAL_TICKS } from '../constants.js';
+import { RUT_MAX_DEPTH } from '../constants.js';
+
+/** Ticks per flush batch. Room used to flush the buffer every 30 ticks
+ *  (0.5 s at 60 Hz) and RUT_RATE was tuned against that cadence, so the
+ *  rate-vs-cap assertion below is only meaningful in those units. It
+ *  lives here rather than in constants.ts because nothing schedules a
+ *  flush any more - whoever re-wires ruts picks the cadence, and will
+ *  need to re-check this test against it. */
+const FLUSH_INTERVAL_TICKS = 30;
 
 function makeMudTerrain(): TerrainData {
   const n = 32;
@@ -34,7 +42,7 @@ describe('RutBuffer', () => {
   it('carves a fraction of the depth cap over one flush interval at full slip', () => {
     const terrain = makeMudTerrain();
     const buf = new RutBuffer(terrain);
-    for (let i = 0; i < RUT_REBUILD_INTERVAL_TICKS; i++) {
+    for (let i = 0; i < FLUSH_INTERVAL_TICKS; i++) {
       buf.recordWheel(0, 0, 1, true);
     }
     const deltas = buf.flush();
@@ -54,7 +62,7 @@ describe('RutBuffer', () => {
     const startH = 0; // makeMudTerrain starts flat
     // Hammer one cell far past the cap.
     for (let batch = 0; batch < 400; batch++) {
-      for (let i = 0; i < RUT_REBUILD_INTERVAL_TICKS; i++) {
+      for (let i = 0; i < FLUSH_INTERVAL_TICKS; i++) {
         buf.recordWheel(0, 0, 1, true);
       }
       buf.flush();

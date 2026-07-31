@@ -21,10 +21,15 @@
 //   - Local body responds to input within one tick (~16 ms).
 //   - No replay = constant cost per snapshot (~0.2 ms), no spiral.
 //   - Soft corrections converge toward server over many snapshots.
-//   - Big divergences (>5 m) hard-snap and accept a visible pop.
+//   - Big divergences hard-snap and accept a visible pop.
+//
+// The blend rates, decay and snap threshold live in PREDICTION
+// (shared/constants.ts) - they decide whether the game rubber-bands, so
+// they are tunables, not implementation details.
 
 import {
   FIXED_DT,
+  PREDICTION,
   Physics,
   type CarKind,
   type PlayerInput,
@@ -46,19 +51,6 @@ export class Prediction {
   /** Position offset captured by soft corrections; decays each step
    *  so the rendered pose smoothly converges to the corrected body. */
   private posOffset = { x: 0, y: 0, z: 0 };
-  /** Per-snapshot soft correction strength. 0.12 means the body moves
-   *  12 % of the way toward the server pose on each snapshot received.
-   *  Combined with the per-step visual offset decay this converges in
-   *  ~5 snapshots (~150 ms) after a small divergence. */
-  private static readonly SOFT_CORRECTION_BLEND = 0.12;
-  /** Per-step decay of posOffset toward zero. 0.85 ≈ 110 ms half-life
-   *  at 60 Hz, so a single soft correction is invisible within a few
-   *  frames. */
-  private static readonly OFFSET_DECAY = 0.85;
-  /** Hard-snap threshold. Beyond this the divergence is too big for
-   *  smoothing to absorb without a meters-long visual slide; better to
-   *  accept a visible pop and converge instantly. */
-  private static readonly HARD_SNAP_DIST = 5.0;
   /** Pre-allocated state buffer to avoid per-frame GC pressure. */
   private _state: PredictionState = {
     position: { x: 0, y: 0, z: 0 },
@@ -108,9 +100,9 @@ export class Prediction {
     this.world.step();
     this.lastSteppedSeq = input.seq;
     // Decay visual offset toward zero - prior soft corrections fade out.
-    this.posOffset.x *= Prediction.OFFSET_DECAY;
-    this.posOffset.y *= Prediction.OFFSET_DECAY;
-    this.posOffset.z *= Prediction.OFFSET_DECAY;
+    this.posOffset.x *= PREDICTION.visualOffsetDecay;
+    this.posOffset.y *= PREDICTION.visualOffsetDecay;
+    this.posOffset.z *= PREDICTION.visualOffsetDecay;
   }
 
   /** Apply a server snapshot as a soft correction. Never replays inputs;
@@ -137,10 +129,10 @@ export class Prediction {
     const dz = sz - local.z;
     const dist = Math.hypot(dx, dy, dz);
 
-    if (dist > Prediction.HARD_SNAP_DIST) {
+    if (dist > PREDICTION.hardSnapDistance) {
       // Hard snap. Body teleports to server's extrapolated pose; rendered
-      // pose snaps too (no visual offset) because trying to slide 5 m
-      // smoothly would look worse than the snap.
+      // pose snaps too (no visual offset) because sliding a gap this
+      // large smoothly would look worse than the snap.
       this.vehicle.body.setTranslation({ x: sx, y: sy, z: sz }, true);
       this.vehicle.body.setRotation(v.rotation, true);
       this.vehicle.body.setLinvel(v.linVel, true);
@@ -149,7 +141,7 @@ export class Prediction {
     } else {
       // Soft correction: nudge body a fraction of the way toward server,
       // and stash the rest as a visual offset that decays out invisibly.
-      const blend = Prediction.SOFT_CORRECTION_BLEND;
+      const blend = PREDICTION.softCorrectionBlend;
       this.vehicle.body.setTranslation(
         {
           x: local.x + dx * blend,
@@ -171,11 +163,11 @@ export class Prediction {
     // converge - but tiny floating-point differences accumulate, and
     // without ANY correction the local rotation slowly drifts off from
     // the server (visible as the truck "driving sideways" after a few
-    // minutes). Pulling local toward the server-extrapolated rotation
-    // by 4 % per snapshot is small enough not to fight the predicted
-    // yaw on a fresh input (the local sim's rotation lead is preserved
-    // because we extrapolate the server's rotation forward by dtAhead),
-    // but cumulative enough to bound long-term drift to <1°.
+    // minutes). Pulling local toward the server-extrapolated rotation by
+    // PREDICTION.rotationBlend per snapshot is small enough not to fight
+    // the predicted yaw on a fresh input (the local sim's rotation lead
+    // is preserved because we extrapolate the server's rotation forward
+    // by dtAhead), but cumulative enough to bound long-term drift.
     const wAng = v.angVel;
     const q = v.rotation;
     let serverNowQx = q.x + 0.5 * dtAhead * ( wAng.x * q.w + wAng.y * q.z - wAng.z * q.y);
@@ -190,8 +182,8 @@ export class Prediction {
     if (dot < 0) { bx = -bx; by = -by; bz = -bz; bw = -bw; dot = -dot; }
     // dot ≈ cos(angle/2). Skip correction for very small angles (<1°)
     // so the smooth steady-state isn't constantly nudged.
-    if (dot < 0.99996) {
-      const tRot = 0.04;
+    if (dot < PREDICTION.rotationDeadbandDot) {
+      const tRot = PREDICTION.rotationBlend;
       let nx = lr.x + (bx - lr.x) * tRot;
       let ny = lr.y + (by - lr.y) * tRot;
       let nz = lr.z + (bz - lr.z) * tRot;
@@ -199,12 +191,13 @@ export class Prediction {
       const rLen = Math.hypot(nx, ny, nz, nw) || 1;
       this.vehicle.body.setRotation({ x: nx / rLen, y: ny / rLen, z: nz / rLen, w: nw / rLen }, true);
     }
-    // Velocity: light blend toward server (8 %) so divergent linVel/
-    // angVel doesn't compound into a position drift faster than the
-    // 12 % position correction can absorb.
+    // Velocity: light blend toward server so divergent linVel / angVel
+    // doesn't compound into a position drift faster than the position
+    // correction can absorb. Keep velocityBlend below
+    // softCorrectionBlend or the two fight each other.
     const llv = this.vehicle.body.linvel();
     const lav = this.vehicle.body.angvel();
-    const tVel = 0.08;
+    const tVel = PREDICTION.velocityBlend;
     this.vehicle.body.setLinvel(
       { x: llv.x + (v.linVel.x - llv.x) * tVel, y: llv.y + (v.linVel.y - llv.y) * tVel, z: llv.z + (v.linVel.z - llv.z) * tVel },
       true,

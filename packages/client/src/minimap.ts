@@ -7,17 +7,6 @@ import { Physics } from '@mydrunner/shared';
 
 const SIZE_PX = 168;
 
-// Flat approximations of the terrain shader's per-surface palettes.
-const SURFACE_COLORS: Record<number, [number, number, number]> = {
-  [Physics.Surface.Road]: [128, 121, 112],
-  [Physics.Surface.Dirt]: [138, 107, 66],
-  [Physics.Surface.Mud]: [74, 48, 24],
-  [Physics.Surface.DeepMud]: [32, 18, 9],
-  [Physics.Surface.Grass]: [63, 92, 42],
-  [Physics.Surface.Gravel]: [119, 113, 107],
-  [Physics.Surface.Concrete]: [68, 68, 68],
-};
-
 const STYLE = `
 #minimap {
   position: fixed;
@@ -63,8 +52,8 @@ export class Minimap {
     this.ctx = this.canvas.getContext('2d')!;
   }
 
-  /** Paint the static base map from terrain data. Call once per welcome
-   *  (terrain is immutable while ruts are disabled). */
+  /** Paint the static base map from terrain data. Call once per welcome -
+   *  terrain never changes within a session. */
   setTerrain(t: Physics.TerrainData): void {
     this.worldSize = t.size;
     const n = t.resolution;
@@ -72,7 +61,7 @@ export class Minimap {
     for (let r = 0; r < n; r++) {
       for (let c = 0; c < n; c++) {
         const i = r * n + c;
-        const [cr, cg, cb] = SURFACE_COLORS[t.surfaces[i] ?? 1] ?? [255, 0, 255];
+        const [cr, cg, cb] = Physics.surfaceInfo(t.surfaces[i] ?? Physics.Surface.Dirt).minimapColor;
         // Cheap hillshade: brightness from the west-east height gradient,
         // matching the scene's sun sitting roughly to the east.
         const h = t.heights[i] ?? 0;

@@ -225,12 +225,6 @@ export class Scene {
     this.scene.add(this.landmarks.group);
   }
 
-  applyRuts(cells: { i: number; dy: number }[]): void {
-    if (!this.terrain) return;
-    for (const c of cells) this.terrain.applyRut(c.i, c.dy);
-    this.terrain.flush();
-  }
-
   cycleCameraMode(): void {
     this.cam.cycleMode();
   }

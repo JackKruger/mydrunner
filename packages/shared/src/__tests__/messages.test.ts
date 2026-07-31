@@ -5,14 +5,40 @@
 
 import { describe, expect, it } from 'vitest';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
-import { CHAT_MAX_LEN, NAME_MAX_LEN, decodeClient, encode } from '../net/messages.js';
+import {
+  CHAT_MAX_LEN,
+  NAME_MAX_LEN,
+  SNAPSHOT_SCHEMA,
+  decodeClient,
+  decodeServer,
+  encode,
+} from '../net/messages.js';
+import { PROTOCOL_VERSION } from '../constants.js';
 
 const raw = (obj: unknown): Uint8Array => msgpackEncode(obj);
 
 describe('decodeClient validation', () => {
   it('round-trips a valid hello', () => {
-    const msg = decodeClient(encode({ t: 'hello', name: 'jack', carKind: 'hilux' }));
-    expect(msg).toEqual({ t: 'hello', name: 'jack', carKind: 'hilux' });
+    const msg = decodeClient(
+      encode({ t: 'hello', name: 'jack', carKind: 'hilux', v: PROTOCOL_VERSION }),
+    );
+    expect(msg).toEqual({ t: 'hello', name: 'jack', carKind: 'hilux', v: PROTOCOL_VERSION });
+  });
+
+  it('reports a missing or malformed hello version as 0 rather than throwing', () => {
+    // A build from before the handshake existed sends no `v`. It must
+    // still decode: the server needs a well-formed message to answer with
+    // a `bye` explaining the mismatch. Throwing here would drop the
+    // message and leave that client connected to nothing.
+    for (const hello of [
+      { t: 'hello', name: 'jack' },
+      { t: 'hello', name: 'jack', v: 'two' },
+      { t: 'hello', name: 'jack', v: 1.5 },
+    ]) {
+      const msg = decodeClient(raw(hello));
+      if (msg.t !== 'hello') throw new Error('expected hello');
+      expect(msg.v).toBe(0);
+    }
   });
 
   it('round-trips a valid input', () => {
@@ -55,6 +81,58 @@ describe('decodeClient validation', () => {
     const msg = decodeClient(raw({ t: 'input', input }));
     if (msg.t !== 'input') throw new Error('expected input');
     expect(msg.input.buttons).toBe(0);
+  });
+});
+
+// The per-player snapshot tuple is decoded BY POSITION, so a decoder that
+// doesn't know the schema it's reading won't fail - it reads every field
+// as whatever now sits at that index and drives the truck from garbage.
+describe('decodeServer schema guard', () => {
+  const snap = {
+    tick: 7,
+    serverTimeMs: 1234,
+    players: [
+      {
+        id: 'p1',
+        name: 'jack',
+        carKind: 'patrol' as const,
+        lastAckSeq: 3,
+        vehicle: {
+          position: { x: 1, y: 2, z: 3 },
+          rotation: { x: 0, y: 0, z: 0, w: 1 },
+          linVel: { x: 0, y: 0, z: 0 },
+          angVel: { x: 0, y: 0, z: 0 },
+          rpm: 900,
+          gear: 2,
+          throttle: 0.5,
+          wheels: Array.from({ length: 4 }, () => ({
+            steer: 0,
+            spin: 0,
+            contact: true,
+            suspensionLength: 0.3,
+            angVel: 0,
+          })),
+          axles: [
+            { rideY: 0, rollAngle: 0 },
+            { rideY: 0, rollAngle: 0 },
+          ] as [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
+        },
+      },
+    ],
+  };
+
+  it('round-trips a snapshot at the current schema', () => {
+    const out = decodeServer(encode({ t: 'snapshot', snap }));
+    if (out.t !== 'snapshot') throw new Error('expected snapshot');
+    expect(out.snap.tick).toBe(7);
+    expect(out.snap.players[0]!.vehicle.position.x).toBeCloseTo(1, 2);
+  });
+
+  it('rejects a snapshot from an unknown schema version', () => {
+    const packed = msgpackEncode({ t: 'snapshot', s: SNAPSHOT_SCHEMA + 1, T: 1, M: 1, P: [[]] });
+    expect(() => decodeServer(packed)).toThrow(/schema/);
+    const legacy = msgpackEncode({ t: 'snapshot', T: 1, M: 1, P: [[]] });
+    expect(() => decodeServer(legacy)).toThrow(/schema/);
   });
 });
 

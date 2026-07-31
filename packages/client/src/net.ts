@@ -1,14 +1,18 @@
 // Tiny client wrapper around the shared message protocol.
 
-import { Net, INTERPOLATION_DELAY_MS, type CarKind, type WorldSnapshot, type PlayerInput, type PlayerId } from '@mydrunner/shared';
+import { Net, INTERPOLATION_DELAY_MS, PROTOCOL_VERSION, type CarKind, type WorldSnapshot, type PlayerInput, type PlayerId } from '@mydrunner/shared';
 import type { TerrainHandshake, SpawnHandshake } from '@mydrunner/shared/net';
 
 export interface NetEvents {
   onWelcome(id: PlayerId, serverTimeMs: number, terrain: TerrainHandshake, spawn: SpawnHandshake): void;
   onSnapshot(snap: WorldSnapshot, recvAtMs: number): void;
-  onRut(version: number, cells: { i: number; dy: number }[]): void;
   onChat(from: PlayerId, fromName: string, text: string, serverTimeMs: number): void;
-  onClose(reason: string): void;
+  /** `fatal` marks a close that retrying cannot fix - currently only a
+   *  server `bye`, which it sends for a protocol-version mismatch. The
+   *  caller must stop reconnecting: every attempt would be refused
+   *  identically, and the backoff would hide the reason behind a
+   *  "reconnecting..." message forever. */
+  onClose(reason: string, fatal: boolean): void;
   onOpen(): void;
 }
 
@@ -18,6 +22,11 @@ export class NetClient {
   private url: string;
   private name: string;
   private carKind: CarKind;
+  /** Set once a `bye` arrives. The server closes the socket right after
+   *  sending one, so the 'close' listener below fires immediately after -
+   *  without this it would report a second, non-fatal close and undo the
+   *  fatal one, putting the client straight back into the retry loop. */
+  private fatal = false;
 
   constructor(url: string, name: string, carKind: CarKind, events: NetEvents) {
     this.url = url;
@@ -27,6 +36,7 @@ export class NetClient {
   }
 
   connect(): void {
+    this.fatal = false;
     const ws = new WebSocket(this.url);
     // Wire format is MessagePack binary; default 'blob' would force an
     // async FileReader hop on every snapshot. ArrayBuffer is sync.
@@ -34,7 +44,9 @@ export class NetClient {
     this.ws = ws;
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return;
-      ws.send(Net.encode({ t: 'hello', name: this.name, carKind: this.carKind }));
+      ws.send(
+        Net.encode({ t: 'hello', name: this.name, carKind: this.carKind, v: PROTOCOL_VERSION }),
+      );
       this.events.onOpen();
     });
     ws.addEventListener('message', (ev) => {
@@ -52,14 +64,12 @@ export class NetClient {
         case 'snapshot':
           this.events.onSnapshot(msg.snap, performance.now());
           break;
-        case 'rut':
-          this.events.onRut(msg.version, msg.cells);
-          break;
         case 'chat':
           this.events.onChat(msg.from, msg.fromName, msg.text, msg.serverTimeMs);
           break;
         case 'bye':
-          this.events.onClose(msg.reason);
+          this.fatal = true;
+          this.events.onClose(msg.reason, true);
           break;
       }
     });
@@ -67,7 +77,9 @@ export class NetClient {
     // (auto-reconnect) while an old socket is still winding down, and its
     // late 'close' must not report the NEW connection as dead.
     ws.addEventListener('close', () => {
-      if (this.ws === ws) this.events.onClose('socket closed');
+      if (this.ws !== ws) return;
+      if (this.fatal) return; // already reported with its real reason
+      this.events.onClose('socket closed', false);
     });
     ws.addEventListener('error', () => {/* surfaced via close */});
   }

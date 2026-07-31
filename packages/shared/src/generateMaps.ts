@@ -8,8 +8,10 @@ import { dirname, join } from 'path';
 import { writeFileSync, mkdirSync } from 'fs';
 import { generateTerrain, asciiSurfaceMap, asciiHeightMap } from './physics/terrain.js';
 
-// Match the authoritative server world: room.ts uses size=320, resolution=128, seed=1337.
-const terrain = generateTerrain({ size: 320, resolution: 128, seed: 1337 });
+// No overrides: the TERRAIN defaults ARE the authoritative server world
+// (Room constructs its World the same way), so this dump can never drift
+// from the map players drive on.
+const terrain = generateTerrain();
 
 // step = size / 160 gives ~160 chars per axis, fine for a text file.
 const step = Math.max(1.5, terrain.size / 160);
