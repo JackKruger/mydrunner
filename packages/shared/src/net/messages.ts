@@ -204,6 +204,24 @@ function isFiniteNum(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
+/** Max length of a player display name after sanitisation. */
+export const NAME_MAX_LEN = 32;
+/** Max length of a chat message after sanitisation. */
+export const CHAT_MAX_LEN = 200;
+
+/** Strip control characters and clamp length on any free-text field a
+ *  client can send. Applied at decode time (below) rather than at each
+ *  consumer: player names used to skip this entirely while chat text got
+ *  it in Room.broadcastChat, so newlines / RTL overrides / zero-width
+ *  characters in a name reached every client's nameplate and chat log. */
+export function sanitiseUserText(raw: string, maxLen: number): string {
+  return raw
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .trim()
+    .slice(0, maxLen);
+}
+
 /** Decode + validate a client->server message. Throws on malformed bytes
  *  AND on wrong-shaped-but-valid msgpack: this is the trust boundary for
  *  everything a client can send, and a thrown TypeError further in (e.g.
@@ -217,7 +235,7 @@ export function decodeClient(raw: Wire): ClientMessage {
     case 'hello': {
       if (typeof m.name !== 'string') throw new Error('hello: name must be a string');
       const carKind = typeof m.carKind === 'string' ? (m.carKind as CarKind) : undefined;
-      return { t: 'hello', name: m.name, carKind };
+      return { t: 'hello', name: sanitiseUserText(m.name, NAME_MAX_LEN), carKind };
     }
     case 'input': {
       const i = m.input as Record<string, unknown> | null | undefined;
@@ -251,7 +269,7 @@ export function decodeClient(raw: Wire): ClientMessage {
     }
     case 'chat': {
       if (typeof m.text !== 'string') throw new Error('chat: text must be a string');
-      return { t: 'chat', text: m.text };
+      return { t: 'chat', text: sanitiseUserText(m.text, CHAT_MAX_LEN) };
     }
     default:
       throw new Error('client message: unknown type');

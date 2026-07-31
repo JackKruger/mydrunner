@@ -10,8 +10,30 @@ const KEYS = new Set<string>();
  *  is currently on / off". */
 let handbrakeOn = false;
 
+/** True when a key event is destined for a text field, so game bindings
+ *  must keep their hands off it.
+ *
+ *  Without this the window-level handler below preventDefault()s W/A/S/D/R
+ *  and Space for EVERY keydown, including ones targeting the join screen's
+ *  driver-name input - cancelling keydown cancels the text insertion, so
+ *  those six characters silently never appeared. Space was worse: it also
+ *  flipped the handbrake toggle, so a name with a space in it spawned you
+ *  with the handbrake on.
+ *
+ *  Checks tagName rather than `instanceof HTMLInputElement` so it still
+ *  works for targets from another realm (iframe / portal), where
+ *  instanceof against this window's constructors is false. */
+function isTextEntry(target: EventTarget | null): boolean {
+  const el = target as (HTMLElement & { tagName?: unknown }) | null;
+  if (!el || typeof el.tagName !== 'string') return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName.toUpperCase();
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
+
 export function initInput(): void {
   window.addEventListener('keydown', (e) => {
+    if (isTextEntry(e.target)) return;
     KEYS.add(e.code);
     if (e.code === 'Space' && !e.repeat) handbrakeOn = !handbrakeOn;
     // Prevent page scroll for game keys.
@@ -23,6 +45,9 @@ export function initInput(): void {
       e.preventDefault();
     }
   });
+  // No isTextEntry guard on keyup: a key pressed on the canvas and
+  // released after focus moved into a text field must still be cleared,
+  // or it sticks down forever.
   window.addEventListener('keyup', (e) => KEYS.delete(e.code));
   window.addEventListener('blur', () => {
     KEYS.clear();

@@ -167,11 +167,22 @@ export function stepEngine(
   //     speed term closes that gap so off-throttle coasting bleeds
   //     momentum in every gear, not just low ones.
   // Both only apply off-throttle and in-gear; neutral coasts freely.
+  //
+  // The sign must follow the DIRECTION OF TRAVEL, not the gear. Both
+  // components above are magnitudes, so keying the sign off the gear
+  // ratio meant that rolling backward in a forward gear (losing momentum
+  // partway up a switchback, off the throttle) produced a negative wheel
+  // torque - engine "braking" that accelerated the rollback instead of
+  // holding it. Mirrored in reverse gear when rolling forward. Below
+  // ~0 wheel speed both terms are already ~0, so falling back to the gear
+  // sign there keeps standstill behaviour identical.
   let brakeT = 0;
   if (Math.abs(throttle) < 0.05 && Math.abs(activeRatio) > 0) {
     const rpmBrake = Math.max(0, rpm - ENGINE.idleRpm) * ENGINE.engineBrakeCoef;
     const speedBrake = Math.abs(vehicleAngVel) * ENGINE.engineBrakeSpeedCoef;
-    brakeT = (rpmBrake + speedBrake) * Math.sign(activeRatio);
+    const travelDir =
+      Math.abs(wheelAngVel) > 1e-3 ? Math.sign(wheelAngVel) : Math.sign(activeRatio);
+    brakeT = (rpmBrake + speedBrake) * travelDir;
   }
 
   return {

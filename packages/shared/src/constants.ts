@@ -109,8 +109,9 @@ export const ENGINE = {
 } as const;
 
 // Mud / surface friction. Multipliers in [0, 1] applied on top of
-// TIRE_BASE_GRIP. Higher = more grip. Spread is intentionally wide so
-// the player feels the surface change clearly when leaving the road.
+// TIRE_LONG_FRICTION in the friction circle (see solidAxleVehicle.ts).
+// Higher = more grip. Spread is intentionally wide so the player feels
+// the surface change clearly when leaving the road.
 //   road    1.00 - tarmac, planted
 //   dirt    0.78 - off-road but driveable, mild slip
 //   mud     0.32 - clearly slippy, throttle wants to overrun grip
@@ -126,11 +127,6 @@ export const SURFACE_FRICTION = {
   gravel: 0.62,
   concrete: 1.05, // tarmac/concrete pad - the most planted surface
 } as const;
-
-// Base Rapier wheel friction-slip before surface / axle / slip-curve
-// modifiers. Higher = more grip overall. 2.8 keeps the road feeling
-// planted while leaving headroom for surfaceMult to bite hard on mud.
-export const TIRE_BASE_GRIP = 2.8;
 
 // Per-axle geometry + spring rates for the solid-axle vehicle model
 // (see physics/solidAxleVehicle.ts). Each axle is a software state with
@@ -230,15 +226,27 @@ export const TIRE_LONG_FRICTION = 1.15;
 
 // Wheel spin physics for the solid-axle model. inertia governs how fast
 // a wheel spins up under torque (kg*m^2 of a tyre + rim + brake disc).
-// rollingResistance is a small proportional drag torque that bleeds spin
-// when the throttle is off, so the truck doesn't coast forever. The
-// rollingMult* factors scale it on soft surfaces - mud drags far more
-// than hardpack. minNormalLoad floors the friction-circle load so an
-// unweighted tire keeps a sliver of grip instead of a zero-grip
-// singularity (the car can still slide when unweighted).
+// rollingResistance is a viscous drag torque (N*m per rad/s of wheel
+// speed) that bleeds spin when the throttle is off, so the truck doesn't
+// coast forever. The rollingMult* factors scale it on soft surfaces -
+// mud drags far more than hardpack. minNormalLoad floors the
+// friction-circle load so an unweighted tire keeps a sliver of grip
+// instead of a zero-grip singularity (the car can still slide when
+// unweighted).
+//
+// rollingResistance was 0.010, which at a 10 m/s cruise is ~0.2 N*m
+// against per-wheel drive torques in the thousands - so it did nothing
+// and the rollingMult* factors scaled nothing. Coasting off-throttle
+// from 10 m/s for 3 s, road / mud / deep mud all landed within 0.03 m/s
+// of each other. At 1.2 the same test gives 7.13 / 6.51 / 5.50 m/s: road
+// feel is essentially unchanged (7.34 before) while a bog now visibly
+// drags the truck down. Calibrated against
+// shared/__tests__/rollingResistance.test.ts; the binding constraint on
+// raising it further is braking.test.ts / handbrake.test.ts, which
+// require the brakes to beat coasting by a clear margin.
 export const WHEEL = {
   inertia: 1.6,
-  rollingResistance: 0.010,
+  rollingResistance: 1.2,
   rollingMultMud: 4.0,
   rollingMultDeepMud: 12.0,
   minNormalLoad: 500,
@@ -409,8 +417,8 @@ export const TRAIL_FEATURES = {
 //   delta_y = RUT_RATE * (1 - grip) * |throttle| * wheelInContact
 // Capped to RUT_MAX_DEPTH per cell. Heightfield collider is rebuilt every
 // RUT_REBUILD_INTERVAL_TICKS to keep physics in sync with visuals.
-export const RUT_RATE = 0.3035;        // m per tick at full slip  0.0035;
-export const RUT_MAX_DEPTH = 0.9;      // m below original height 0.6;    
+export const RUT_RATE = 0.0035;        // m per tick at full slip
+export const RUT_MAX_DEPTH = 0.6;      // m below original height
 export const RUT_REBUILD_INTERVAL_TICKS = 30;
 // Disabled for now: at the live world size (320m) / heightfield
 // resolution (128, see Room's constructor), each rut cell is ~2.5m

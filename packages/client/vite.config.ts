@@ -28,4 +28,12 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@dimforge/rapier3d-compat'],
   },
+  // Client unit tests cover the DOM-facing glue (input handling, key
+  // routing) that has no server-side equivalent, so they need a document.
+  // Three.js / WebGL modules stay out of scope here - those are covered by
+  // the Playwright suite against a real browser.
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/__tests__/**/*.test.ts'],
+  },
 });

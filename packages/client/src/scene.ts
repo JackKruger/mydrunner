@@ -33,9 +33,24 @@ function disposeObject3D(root: THREE.Object3D): void {
     const mesh = obj as THREE.Mesh;
     if (mesh.geometry) mesh.geometry.dispose();
     const mat = (mesh as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
-    if (Array.isArray(mat)) for (const m of mat) m.dispose();
-    else if (mat) mat.dispose();
+    if (Array.isArray(mat)) for (const m of mat) disposeMaterial(m);
+    else if (mat) disposeMaterial(mat);
   });
+}
+
+/** Material.dispose() does NOT free the textures a material references,
+ *  so a material-only dispose leaks every map it points at - notably the
+ *  canvas texture behind each nameplate sprite. */
+function disposeMaterial(mat: THREE.Material): void {
+  const m = mat as THREE.Material & {
+    map?: THREE.Texture | null;
+    normalMap?: THREE.Texture | null;
+    emissiveMap?: THREE.Texture | null;
+  };
+  m.map?.dispose();
+  m.normalMap?.dispose();
+  m.emissiveMap?.dispose();
+  mat.dispose();
 }
 
 interface SnapshotEntry {
@@ -76,7 +91,7 @@ export class Scene {
   private _lastParticleSnapMs = 0;
   private _minimapBuf: MinimapPlayer[] = [];
   // Pre-allocated render-loop scratch buffers — avoids per-frame GC pressure.
-  private _bMap = new Map<PlayerId, PlayerSnapshot>();
+  private _aMap = new Map<PlayerId, PlayerSnapshot>();
   private _qa = new THREE.Quaternion();
   private _qb = new THREE.Quaternion();
   private _axleBuf: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] = [
@@ -190,8 +205,7 @@ export class Scene {
     }
     if (this.terrain) {
       this.scene.remove(this.terrain.mesh);
-      this.terrain.mesh.geometry.dispose();
-      (this.terrain.mesh.material as THREE.Material).dispose();
+      this.terrain.dispose();
     }
     this.terrain = new TerrainMesh(terrain);
     this.scene.add(this.terrain.mesh);
@@ -440,14 +454,24 @@ export class Scene {
 
     if (pair) {
       const { a, b, t } = pair;
-      this._bMap.clear();
-      for (const p of b.snap.players) this._bMap.set(p.id, p);
-      for (const pa of a.snap.players) {
-        const pb = this._bMap.get(pa.id) ?? pa;
-        present.add(pa.id);
-        const isLocal = pa.id === this.localId;
-        const vis = this.ensureVehicle(pa.id, isLocal, pa.carKind);
-        this.setNameplate(vis, pa.name, isLocal);
+      // Iterate the NEWER snapshot and look the older one up, not the
+      // other way round. Membership has to come from `b`: a player who
+      // appears in `b` but not `a` was never created at all under the old
+      // ordering, and since `present` fed removeMissing() from `a` they
+      // stayed invisible - normally for one snapshot (~33 ms), but for the
+      // whole stall in pickPair's clamp branch, where the buffer stops
+      // advancing. A player in `a` but not `b` has left, and now correctly
+      // stops rendering instead of freezing at their last pose.
+      this._aMap.clear();
+      for (const p of a.snap.players) this._aMap.set(p.id, p);
+      for (const pb of b.snap.players) {
+        // No `a` entry means this player just joined: interpolate from
+        // their own `b` pose, i.e. render them there.
+        const pa = this._aMap.get(pb.id) ?? pb;
+        present.add(pb.id);
+        const isLocal = pb.id === this.localId;
+        const vis = this.ensureVehicle(pb.id, isLocal, pb.carKind);
+        this.setNameplate(vis, pb.name, isLocal);
 
         // Snapshot interpolation pass: every vehicle is first posed from
         // the snapshot pair at RENDER_DELAY_MS in the past. For remote

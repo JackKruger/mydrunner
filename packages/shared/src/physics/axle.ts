@@ -90,6 +90,12 @@ export interface StepAxleInputs {
    *  world space, used to damp chassis bounce on the ride spring. */
   chassisVertVelAtAnchor: number;
   dt: number;
+  /** Runtime scalars on the geom's roll spring and articulation cap
+   *  (TUNING.axleFront / axleRear). Passed in rather than imported so
+   *  this module stays free of shared mutable state and the axle tests
+   *  can exercise a scale factor directly. Default 1 = use geom as-is. */
+  rollStiffnessMult?: number;
+  maxArticulationMult?: number;
 }
 
 /** Advance an AxleState one fixed timestep. Kinematic: rideY tracks
@@ -144,10 +150,11 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   // rollAngle tracks terrain slope across the wheels, clamped at the
   // articulation cap. Anything past the cap dumps surplus into the
   // chassis as a torque - that's the body-lean-over-a-rock behaviour.
+  const maxArticulation = g.maxArticulation * (input.maxArticulationMult ?? 1);
   const targetRoll = Math.atan2(rc - lc, 2 * g.trackHalf);
   let clampedRoll = targetRoll;
-  if (clampedRoll > g.maxArticulation) clampedRoll = g.maxArticulation;
-  else if (clampedRoll < -g.maxArticulation) clampedRoll = -g.maxArticulation;
+  if (clampedRoll > maxArticulation) clampedRoll = maxArticulation;
+  else if (clampedRoll < -maxArticulation) clampedRoll = -maxArticulation;
   const prevRoll = s.rollAngle;
   s.rollAngle = clampedRoll;
   s.rollVel = input.dt > 0 ? (s.rollAngle - prevRoll) / input.dt : 0;
@@ -167,9 +174,9 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
       : 0;
 
   let chassisRollTorque = 0;
-  if (Math.abs(targetRoll) > g.maxArticulation) {
+  if (Math.abs(targetRoll) > maxArticulation) {
     const surplus = targetRoll - clampedRoll;
-    chassisRollTorque = g.rollStiffness * surplus;
+    chassisRollTorque = g.rollStiffness * (input.rollStiffnessMult ?? 1) * surplus;
   }
 
   return { chassisRideForce, chassisRollTorque };

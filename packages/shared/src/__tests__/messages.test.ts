@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { encode as msgpackEncode } from '@msgpack/msgpack';
-import { decodeClient, encode } from '../net/messages.js';
+import { CHAT_MAX_LEN, NAME_MAX_LEN, decodeClient, encode } from '../net/messages.js';
 
 const raw = (obj: unknown): Uint8Array => msgpackEncode(obj);
 
@@ -55,5 +55,57 @@ describe('decodeClient validation', () => {
     const msg = decodeClient(raw({ t: 'input', input }));
     if (msg.t !== 'input') throw new Error('expected input');
     expect(msg.input.buttons).toBe(0);
+  });
+});
+
+// Names used to skip sanitisation entirely (index.ts only length-capped
+// them) while chat text got stripped in Room.broadcastChat. A name is
+// broadcast in every snapshot and drawn into every other player's
+// nameplate, so control characters in one reached everyone.
+//
+// Control characters are built with fromCharCode rather than written as
+// literals so this file stays plain ASCII - a raw NUL in the source makes
+// git treat it as a binary blob and the diff becomes unreviewable.
+const ch = (code: number): string => String.fromCharCode(code);
+const NUL = ch(0x00);
+const BEL = ch(0x07);
+const DEL = ch(0x7f);
+
+describe('decodeClient free-text sanitisation', () => {
+  it('strips control characters from a hello name', () => {
+    const msg = decodeClient(raw({ t: 'hello', name: `ja${NUL}ck${BEL}` }));
+    if (msg.t !== 'hello') throw new Error('expected hello');
+    expect(msg.name).toBe('jack');
+  });
+
+  it('strips newlines, tabs and DEL from chat text', () => {
+    const msg = decodeClient(raw({ t: 'chat', text: `hi\r\nthe\tre${DEL}` }));
+    if (msg.t !== 'chat') throw new Error('expected chat');
+    expect(msg.text).toBe('hithere');
+  });
+
+  it('clamps an over-long name and over-long chat text', () => {
+    const name = decodeClient(raw({ t: 'hello', name: 'x'.repeat(500) }));
+    if (name.t !== 'hello') throw new Error('expected hello');
+    expect(name.name).toHaveLength(NAME_MAX_LEN);
+
+    const chat = decodeClient(raw({ t: 'chat', text: 'y'.repeat(500) }));
+    if (chat.t !== 'chat') throw new Error('expected chat');
+    expect(chat.text).toHaveLength(CHAT_MAX_LEN);
+  });
+
+  it('leaves a name that is nothing but control characters empty', () => {
+    // index.ts falls back to 'anon' on this; the decoder just reports it.
+    const msg = decodeClient(raw({ t: 'hello', name: `${NUL}\t ` }));
+    if (msg.t !== 'hello') throw new Error('expected hello');
+    expect(msg.name).toBe('');
+  });
+
+  it('leaves ordinary unicode alone', () => {
+    // Stripping is control-characters-only; a name in another script or
+    // with an emoji must survive intact.
+    const msg = decodeClient(raw({ t: 'hello', name: 'Maïa \u{1F6FB}' }));
+    if (msg.t !== 'hello') throw new Error('expected hello');
+    expect(msg.name).toBe('Maïa \u{1F6FB}');
   });
 });

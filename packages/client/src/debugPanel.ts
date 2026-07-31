@@ -9,7 +9,7 @@
 // "Copy settings" serialises TUNING as a TypeScript snippet so the
 // values can be pasted into constants.ts as new defaults.
 
-import { TUNING } from '@mydrunner/shared';
+import { AXLE, TUNING } from '@mydrunner/shared';
 
 interface Slider {
   label: string;
@@ -24,7 +24,6 @@ interface Slider {
 
 const SLIDERS: Slider[] = [
   // Tyre-grip headline numbers.
-  { label: 'tireBaseGrip', min: 0.5, max: 6, step: 0.05, get: () => TUNING.tireBaseGrip, set: (v) => (TUNING.tireBaseGrip = v) },
   { label: 'inclineAssistMax', min: 0, max: 3, step: 0.05, get: () => TUNING.inclineAssistMax, set: (v) => (TUNING.inclineAssistMax = v) },
   { label: 'frontGripMult', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.frontGripMult, set: (v) => (TUNING.frontGripMult = v) },
   { label: 'rearGripMult', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.rearGripMult, set: (v) => (TUNING.rearGripMult = v) },
@@ -35,15 +34,18 @@ const SLIDERS: Slider[] = [
   { label: 'surf.deepMud', min: 0, max: 2, step: 0.02, get: () => TUNING.surfaceFriction.deepMud, set: (v) => (TUNING.surfaceFriction.deepMud = v) },
   { label: 'surf.grass', min: 0, max: 2, step: 0.02, get: () => TUNING.surfaceFriction.grass, set: (v) => (TUNING.surfaceFriction.grass = v) },
   { label: 'surf.gravel', min: 0, max: 2, step: 0.02, get: () => TUNING.surfaceFriction.gravel, set: (v) => (TUNING.surfaceFriction.gravel = v) },
-  // Suspension feel — solid-axle per-axle knobs.
-  { label: 'axleF.rideStiff', min: 20000, max: 200000, step: 1000, get: () => TUNING.axleFront.rideStiffness, set: (v) => (TUNING.axleFront.rideStiffness = v) },
-  { label: 'axleF.rideDamp', min: 2000, max: 40000, step: 500, get: () => TUNING.axleFront.rideDamping, set: (v) => (TUNING.axleFront.rideDamping = v) },
-  { label: 'axleF.rollStiff', min: 5000, max: 80000, step: 1000, get: () => TUNING.axleFront.rollStiffness, set: (v) => (TUNING.axleFront.rollStiffness = v) },
-  { label: 'axleF.maxArtic', min: 0.1, max: 1.0, step: 0.02, get: () => TUNING.axleFront.maxArticulation, set: (v) => (TUNING.axleFront.maxArticulation = v) },
-  { label: 'axleR.rideStiff', min: 20000, max: 200000, step: 1000, get: () => TUNING.axleRear.rideStiffness, set: (v) => (TUNING.axleRear.rideStiffness = v) },
-  { label: 'axleR.rideDamp', min: 2000, max: 40000, step: 500, get: () => TUNING.axleRear.rideDamping, set: (v) => (TUNING.axleRear.rideDamping = v) },
-  { label: 'axleR.rollStiff', min: 5000, max: 80000, step: 1000, get: () => TUNING.axleRear.rollStiffness, set: (v) => (TUNING.axleRear.rollStiffness = v) },
-  { label: 'axleR.maxArtic', min: 0.1, max: 1.0, step: 0.02, get: () => TUNING.axleRear.maxArticulation, set: (v) => (TUNING.axleRear.maxArticulation = v) },
+  { label: 'surf.concrete', min: 0, max: 2, step: 0.02, get: () => TUNING.surfaceFriction.concrete, set: (v) => (TUNING.surfaceFriction.concrete = v) },
+  // Suspension feel — per-axle SCALARS on the compile-time rates in
+  // AXLE / vehicleGeom. 1.0 = the constants as shipped. They scale rather
+  // than replace so per-kind geometry (the Hilux's softer rear) survives.
+  { label: 'axleF.rideStiff×', min: 0.25, max: 3, step: 0.05, get: () => TUNING.axleFront.rideStiffnessMult, set: (v) => (TUNING.axleFront.rideStiffnessMult = v) },
+  { label: 'axleF.rideDamp×', min: 0.25, max: 3, step: 0.05, get: () => TUNING.axleFront.rideDampingMult, set: (v) => (TUNING.axleFront.rideDampingMult = v) },
+  { label: 'axleF.rollStiff×', min: 0.25, max: 3, step: 0.05, get: () => TUNING.axleFront.rollStiffnessMult, set: (v) => (TUNING.axleFront.rollStiffnessMult = v) },
+  { label: 'axleF.maxArtic×', min: 0.25, max: 3, step: 0.05, get: () => TUNING.axleFront.maxArticulationMult, set: (v) => (TUNING.axleFront.maxArticulationMult = v) },
+  { label: 'axleR.rideStiff×', min: 0.25, max: 3, step: 0.05, get: () => TUNING.axleRear.rideStiffnessMult, set: (v) => (TUNING.axleRear.rideStiffnessMult = v) },
+  { label: 'axleR.rideDamp×', min: 0.25, max: 3, step: 0.05, get: () => TUNING.axleRear.rideDampingMult, set: (v) => (TUNING.axleRear.rideDampingMult = v) },
+  { label: 'axleR.rollStiff×', min: 0.25, max: 3, step: 0.05, get: () => TUNING.axleRear.rollStiffnessMult, set: (v) => (TUNING.axleRear.rollStiffnessMult = v) },
+  { label: 'axleR.maxArtic×', min: 0.25, max: 3, step: 0.05, get: () => TUNING.axleRear.maxArticulationMult, set: (v) => (TUNING.axleRear.maxArticulationMult = v) },
   { label: 'latStiff', min: 2000, max: 40000, step: 500, get: () => TUNING.tireLatStiffness, set: (v) => (TUNING.tireLatStiffness = v) },
   // Drivetrain.
   { label: 'brakeForce', min: 500, max: 6000, step: 50, get: () => TUNING.brakeForce, set: (v) => (TUNING.brakeForce = v) },
@@ -196,8 +198,12 @@ function formatValue(v: number, step: number): string {
 function serialiseTuning(): string {
   const t = TUNING;
   const f = (n: number, d = 3): string => Number(n.toFixed(d)).toString();
+  // The axle sliders are multipliers, so resolve them against the shipped
+  // constants: what you paste into AXLE has to be an absolute rate. These
+  // are the PATROL numbers (AXLE.front / AXLE.rear); other kinds derive
+  // their own rates in vehicleGeom.ts and scale by the same factor.
+  const ax = (base: number, mult: number, d = 0): string => f(base * mult, d);
   return `// Paste into shared/src/constants.ts as new defaults.
-export const TIRE_BASE_GRIP = ${f(t.tireBaseGrip)};
 export const INCLINE_ASSIST_MAX = ${f(t.inclineAssistMax)};
 export const SURFACE_FRICTION = {
   road: ${f(t.surfaceFriction.road)},
@@ -206,21 +212,22 @@ export const SURFACE_FRICTION = {
   deepMud: ${f(t.surfaceFriction.deepMud)},
   grass: ${f(t.surfaceFriction.grass)},
   gravel: ${f(t.surfaceFriction.gravel)},
+  concrete: ${f(t.surfaceFriction.concrete)},
 } as const;
-// AXLE.* (solid-axle per-axle suspension):
+// AXLE.* (solid-axle per-axle suspension), resolved for Patrol:
 //   front: {
-//     rideStiffness: ${f(t.axleFront.rideStiffness, 0)},
-//     rideDamping: ${f(t.axleFront.rideDamping, 0)},
-//     rollStiffness: ${f(t.axleFront.rollStiffness, 0)},
-//     maxArticulation: ${f(t.axleFront.maxArticulation, 2)},
+//     rideStiffness: ${ax(AXLE.front.rideStiffness, t.axleFront.rideStiffnessMult)},   // x${f(t.axleFront.rideStiffnessMult, 2)}
+//     rideDamping: ${ax(AXLE.front.rideDamping, t.axleFront.rideDampingMult)},     // x${f(t.axleFront.rideDampingMult, 2)}
+//     rollStiffness: ${ax(AXLE.front.rollStiffness, t.axleFront.rollStiffnessMult)},   // x${f(t.axleFront.rollStiffnessMult, 2)}
+//     maxArticulation: ${ax(AXLE.front.maxArticulation, t.axleFront.maxArticulationMult, 2)}, // x${f(t.axleFront.maxArticulationMult, 2)}
 //   },
 //   rear: {
-//     rideStiffness: ${f(t.axleRear.rideStiffness, 0)},
-//     rideDamping: ${f(t.axleRear.rideDamping, 0)},
-//     rollStiffness: ${f(t.axleRear.rollStiffness, 0)},
-//     maxArticulation: ${f(t.axleRear.maxArticulation, 2)},
+//     rideStiffness: ${ax(AXLE.rear.rideStiffness, t.axleRear.rideStiffnessMult)},   // x${f(t.axleRear.rideStiffnessMult, 2)}
+//     rideDamping: ${ax(AXLE.rear.rideDamping, t.axleRear.rideDampingMult)},     // x${f(t.axleRear.rideDampingMult, 2)}
+//     rollStiffness: ${ax(AXLE.rear.rollStiffness, t.axleRear.rollStiffnessMult)},   // x${f(t.axleRear.rollStiffnessMult, 2)}
+//     maxArticulation: ${ax(AXLE.rear.maxArticulation, t.axleRear.maxArticulationMult, 2)}, // x${f(t.axleRear.maxArticulationMult, 2)}
 //   },
-//   tireLatStiffness: ${f(t.tireLatStiffness, 0)},
+// TIRE_LATERAL.stiffness: ${f(t.tireLatStiffness, 0)},
 // VEHICLE.* (drive feel):
 //   brakeForce: ${f(t.brakeForce, 0)},
 //   maxSteer: ${f(t.maxSteer, 2)},
