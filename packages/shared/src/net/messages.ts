@@ -12,10 +12,19 @@ export type ClientMessage =
   | { t: 'ping'; clientTimeMs: number }
   | { t: 'chat'; text: string };
 
-export interface TerrainHandshake {
-  seed: number;
-  size: number;
-  resolution: number;
+/** Which world to build. Both sides compile the map registry in, so the
+ *  wire carries an identity rather than the map: a baked document is
+ *  ~65 KB against a 4 KiB message cap (server/src/index.ts).
+ *
+ *  `rev` is the document's content hash in the SERVER's build. The client
+ *  compares it against its own copy of the same map, which is the only
+ *  thing that catches half a deploy — Pages and Railway ship separately,
+ *  and two builds of "procedural" that disagree would otherwise put the
+ *  players on quietly different ground. PROTOCOL_VERSION cannot cover it:
+ *  editing a map changes no code either side compiles. */
+export interface MapHandshake {
+  id: string;
+  rev: number;
 }
 
 export interface SpawnHandshake {
@@ -30,7 +39,7 @@ export type ServerMessage =
       you: PlayerId;
       tick: number;
       serverTimeMs: number;
-      terrain: TerrainHandshake;
+      map: MapHandshake;
       spawn: SpawnHandshake;
       /** Server's PROTOCOL_VERSION. The server already refused the join
        *  on a mismatch, so this is informational - it lets the client log

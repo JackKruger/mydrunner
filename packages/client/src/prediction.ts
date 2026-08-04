@@ -30,6 +30,7 @@
 import {
   FIXED_DT,
   PREDICTION,
+  Maps,
   Physics,
   type CarKind,
   type PlayerInput,
@@ -68,14 +69,16 @@ export class Prediction {
   };
 
   constructor(
-    terrain: Physics.TerrainData,
+    map: Maps.MapWorld,
     spawn: { position: { x: number; y: number; z: number }; yaw?: number },
     carKind: CarKind = 'patrol',
   ) {
-    // Terrain is generated once in main.ts and shared with the scene;
-    // the Rapier collider copies the heights on construction, so scene-
-    // side visual mutations can't desync the local sim mid-session.
-    this.world = new Physics.World({ terrain });
+    // The map is composed once in main.ts and shared with the scene; the
+    // Rapier collider copies the heights on construction, so scene-side
+    // visual mutations can't desync the local sim mid-session. Passing
+    // the whole map rather than its terrain is what puts the local sim's
+    // obstacle colliders where the server's are on an authored map.
+    this.world = new Physics.World({ map });
     this.spawn = { position: spawn.position, yaw: spawn.yaw ?? 0 };
     // Must match the kind the server spawned for us (Room.addPlayer uses
     // handle.carKind) - a kind mismatch means different mass/power/geometry

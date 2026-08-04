@@ -1,10 +1,10 @@
 // Tiny client wrapper around the shared message protocol.
 
 import { Net, INTERPOLATION_DELAY_MS, PROTOCOL_VERSION, type CarKind, type WorldSnapshot, type PlayerInput, type PlayerId } from '@mydrunner/shared';
-import type { TerrainHandshake, SpawnHandshake } from '@mydrunner/shared/net';
+import type { MapHandshake, SpawnHandshake } from '@mydrunner/shared/net';
 
 export interface NetEvents {
-  onWelcome(id: PlayerId, serverTimeMs: number, terrain: TerrainHandshake, spawn: SpawnHandshake): void;
+  onWelcome(id: PlayerId, serverTimeMs: number, map: MapHandshake, spawn: SpawnHandshake): void;
   onSnapshot(snap: WorldSnapshot, recvAtMs: number): void;
   onChat(from: PlayerId, fromName: string, text: string, serverTimeMs: number): void;
   /** `fatal` marks a close that retrying cannot fix - currently only a
@@ -59,7 +59,7 @@ export class NetClient {
       }
       switch (msg.t) {
         case 'welcome':
-          this.events.onWelcome(msg.you, msg.serverTimeMs, msg.terrain, msg.spawn);
+          this.events.onWelcome(msg.you, msg.serverTimeMs, msg.map, msg.spawn);
           break;
         case 'snapshot':
           this.events.onSnapshot(msg.snap, performance.now());
@@ -82,6 +82,20 @@ export class NetClient {
       this.events.onClose('socket closed', false);
     });
     ws.addEventListener('error', () => {/* surfaced via close */});
+  }
+
+  /** Give up on this connection for a reason retrying cannot fix.
+   *
+   *  The `bye` path covers what the SERVER can detect; this covers what
+   *  only the client can — a welcome naming a map this build does not
+   *  have, or has at a different revision. Marks the close fatal before
+   *  closing the socket so the socket's own 'close' event doesn't report
+   *  a second, retryable one on top and restart the backoff loop. */
+  abort(reason: string): void {
+    if (this.fatal) return;
+    this.fatal = true;
+    this.ws?.close();
+    this.events.onClose(reason, true);
   }
 
   sendInput(input: PlayerInput): void {

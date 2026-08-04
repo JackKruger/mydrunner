@@ -9,6 +9,7 @@ import {
   EMPTY_INPUT,
   VEHICLE,
   TERRAIN,
+  Maps,
   Net,
   Physics,
   type PlayerId,
@@ -56,6 +57,10 @@ interface SteerTrace {
 
 export class Room {
   readonly world: Physics.World;
+  readonly map: Maps.MapWorld;
+  /** Content hash of the loaded document in THIS build. Rides on the
+   *  welcome so the client can catch the two bundles disagreeing. */
+  readonly mapRev: number;
   private readonly players = new Map<PlayerId, InternalPlayer>();
   private tick = 0;
   private startedAtMs = Date.now();
@@ -71,11 +76,24 @@ export class Room {
   private perf: PerfBucket = newPerfBucket();
   private lastTickStartMs = 0;
 
-  constructor(seed = TERRAIN.defaultSeed) {
-    // Size and resolution come from TERRAIN so there is exactly one
-    // definition of the production world; passing literals here is how
-    // the constants and the shipped map drifted apart before.
-    this.world = new Physics.World({ generate: { seed } });
+  /** @param map an id in the compiled-in registry, or a document
+   *  directly. The default is the generated world, which composes
+   *  byte-for-byte identically to the generator call this used to make.
+   *  Taking a document as well as an id is what lets a test — or a
+   *  future load-from-file path — run a room on a map that was never
+   *  committed to the registry. */
+  constructor(map: string | Maps.MapDoc = Maps.PROCEDURAL_MAP_ID) {
+    const doc = typeof map === 'string' ? Maps.getMap(map) : map;
+    if (!doc) throw new Error(`Room: unknown map "${String(map)}"`);
+    // Default 'throw' on base drift: a map whose height edits were cut
+    // against ground the generator has since moved means something
+    // different from what was authored, and a server that silently
+    // serves it is worse than one that refuses to boot.
+    this.map = Maps.applyMapDoc(doc);
+    // Hashed once here rather than per join: it canonical-stringifies
+    // the whole document, which for a baked map is ~65 KB.
+    this.mapRev = Maps.mapDocRev(doc);
+    this.world = new Physics.World({ map: this.map });
   }
 
   start(): void {
@@ -119,14 +137,34 @@ export class Room {
     return Date.now() - this.startedAtMs;
   }
 
-  /** Spawn at the start of the road (the -X end of the world), facing
-   *  along +X so pressing W drives toward the petrol station and then
-   *  the mountain. Y sits at the kind's suspension equilibrium
+  /** Where the next joiner starts.
+   *
+   *  An authored map's spawn points win when it has any; the road grid
+   *  below is the fallback, and is what the procedural map (which
+   *  authors no spawns) still uses. Slots cycle the authored list, so a
+   *  map with one spawn point stacks players on it — that is the
+   *  author's call to fix by placing more, not something to second-guess
+   *  by scattering trucks somewhere they did not choose.
+   *
+   *  Y always sits at the kind's suspension equilibrium
    *  (spawnYAboveGround) so there is no free-fall or settle bounce. */
   private nextSpawn(
     kind: CarKind,
   ): { position: { x: number; y: number; z: number }; yaw: number; slot: number } {
     const slot = this.takeSpawnSlot();
+    const authored = this.map.spawns;
+    const { x, z, yaw } = authored.length > 0
+      ? authored[slot % authored.length]!
+      : this.gridSpawn(slot);
+    const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);
+    const ground = idx >= 0 ? (this.world.terrain.heights[idx] ?? 0) : 0;
+    return { position: { x, y: ground + Physics.spawnYAboveGround(kind), z }, yaw, slot };
+  }
+
+  /** The default: a grid at the start of the road (the -X end of the
+   *  world), facing along +X so pressing W drives toward the petrol
+   *  station and then the mountain. */
+  private gridSpawn(slot: number): { x: number; z: number; yaw: number } {
     const col = slot % 8;
     const row = Math.floor(slot / 8);
     const startX = -this.world.terrain.size / 2 + 24; // 24m in from the world edge
@@ -134,13 +172,12 @@ export class Room {
     // means two players in adjacent slots spawn overlapping each other,
     // which can push one through the heightfield and trip the off-map
     // ejector. 5m gives about 1m of clearance.
-    const x = startX + col * 5;
-    const z = TERRAIN.roadZ + (row === 0 ? -1.2 : 1.2); // two lanes on the main road
-    // yaw = pi/2 rotates local +Z (vehicle forward) to world +X.
-    const yaw = Math.PI / 2;
-    const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);
-    const ground = idx >= 0 ? (this.world.terrain.heights[idx] ?? 0) : 0;
-    return { position: { x, y: ground + Physics.spawnYAboveGround(kind), z }, yaw, slot };
+    return {
+      x: startX + col * 5,
+      z: TERRAIN.roadZ + (row === 0 ? -1.2 : 1.2), // two lanes on the main road
+      // yaw = pi/2 rotates local +Z (vehicle forward) to world +X.
+      yaw: Math.PI / 2,
+    };
   }
 
   /** Lowest slot in the spawn grid not held by a live player.
@@ -184,11 +221,7 @@ export class Room {
         tick: this.tick,
         serverTimeMs: this.nowMs(),
         protocolVersion: PROTOCOL_VERSION,
-        terrain: {
-          seed: this.world.terrain.seed,
-          size: this.world.terrain.size,
-          resolution: this.world.terrain.resolution,
-        },
+        map: { id: this.map.doc.id, rev: this.mapRev },
         spawn: { position: spawn.position, yaw: spawn.yaw },
       }),
     );

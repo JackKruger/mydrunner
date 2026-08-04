@@ -15,7 +15,10 @@
 // layout, terrain or obstacle generation, vehicle geometry, or any
 // physics constant the prediction sim reads.
 // 2: dropped the `rut` message and TerrainHandshake.rutVersion.
-export const PROTOCOL_VERSION = 2;
+// 3: welcome carries a MapHandshake { id, rev } instead of the seed
+//    triple. The world is a map document now, and its seed/size/
+//    resolution live in the document both sides compile in.
+export const PROTOCOL_VERSION = 3;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // FIXED_DT must be identical on client (prediction) and server (authoritative).

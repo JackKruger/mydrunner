@@ -8,7 +8,7 @@
 // responds within one tick; each snapshot nudges it toward the server
 // pose instead of snap-and-replay reconciliation.
 
-import { Physics, FIXED_DT, normalizeCarKind, type PlayerId } from '@mydrunner/shared';
+import { Maps, Physics, FIXED_DT, normalizeCarKind, type PlayerId } from '@mydrunner/shared';
 
 import { EngineAudio } from './engineAudio.js';
 import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './joinScreen.js';
@@ -17,6 +17,7 @@ import { isDebugUser, initDebugPanel, updateAxleDebug } from './debugPanel.js';
 
 import { initInput, sampleInput, clearKeys, isHandbrakeOn } from './input.js';
 import { getTouchState, initTouchInput, onTouchEdge } from './touchInput.js';
+import { resolveHandshakeMap } from './mapLoad.js';
 import { NetClient } from './net.js';
 import { Scene } from './scene.js';
 import { Prediction } from './prediction.js';
@@ -154,7 +155,7 @@ let lastSpeed = 0;
 let lastRpm = 0;
 let lastGear = 0;
 let lastFrameTimeMs = performance.now();
-let terrainData: Physics.TerrainData | null = null;
+let mapWorld: Maps.MapWorld | null = null;
 let prediction: Prediction | null = null;
 
 async function start(): Promise<void> {
@@ -200,24 +201,28 @@ async function start(): Promise<void> {
       reconnectDelayMs = 1000;
       chat.pushSystem('connected — press T to chat');
     },
-    onWelcome(id, _serverTimeMs, terrain, spawn) {
+    onWelcome(id, _serverTimeMs, map, spawn) {
+      // The server names a map; this build supplies it. A map it does not
+      // have, or has at a different revision, means the two bundles
+      // disagree about the ground — refuse rather than drive on it.
+      const resolved = resolveHandshakeMap(map);
+      if (!resolved.ok) {
+        net.abort(resolved.reason);
+        return;
+      }
       localId = id;
       scene.setLocalPlayer(id, choice.carKind);
-      // Generate the deterministic TerrainData ONCE per welcome and share
-      // it everywhere it's needed: the terrain mesh, obstacles, landmarks,
-      // the surface-name HUD lookup, and the prediction sim. It used to be
-      // regenerated five times from the same seed at every (re)connect.
-      terrainData = Physics.generateTerrain({
-        seed: terrain.seed,
-        size: terrain.size,
-        resolution: terrain.resolution,
-      });
-      scene.setTerrain(terrainData);
-      // Build the local prediction world. Same terrain + spawn as server,
+      // Compose the map ONCE per welcome and share it everywhere it's
+      // needed: the terrain mesh, obstacles, landmarks, the surface-name
+      // HUD lookup, and the prediction sim. It used to be regenerated
+      // five times from the same seed at every (re)connect.
+      mapWorld = Maps.applyMapDoc(resolved.doc);
+      scene.setWorld(mapWorld);
+      // Build the local prediction world. Same map + spawn as the server,
       // so the local Rapier sim is integrating against an identical
-      // heightmap and starts at the same pose.
+      // heightmap and obstacle set, and starts at the same pose.
       prediction?.dispose();
-      prediction = new Prediction(terrainData, spawn, choice.carKind);
+      prediction = new Prediction(mapWorld, spawn, choice.carKind);
       if (import.meta.env.DEV) {
         (window as unknown as { __prediction: unknown }).__prediction = prediction;
       }
@@ -403,8 +408,8 @@ async function start(): Promise<void> {
       const kmh = (lastSpeed * 3.6).toFixed(0);
       let surfaceLabel = '';
       const lp = scene.localPosition();
-      if (terrainData && lp) {
-        const s = Physics.sampleSurface(terrainData, lp.x, lp.z);
+      if (mapWorld && lp) {
+        const s = Physics.sampleSurface(mapWorld.terrain, lp.x, lp.z);
         surfaceLabel = ` · ${Physics.surfaceInfo(s).label}`;
       }
       const gearLabel = lastGear === -1 ? 'R' : lastGear === 0 ? 'N' : String(lastGear);
