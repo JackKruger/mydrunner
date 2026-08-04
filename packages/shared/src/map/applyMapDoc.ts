@@ -87,7 +87,12 @@ export function applyMapDoc(doc: MapDoc, opts: ApplyOptions = {}): MapWorld {
     // A baked map replaces the generated grids outright. base.seed/size
     // still matter: mountain and pad specs drive obstacle placement and
     // the hill-climb trail helpers.
-    terrain.heights.set(decodeInt16Grid(doc.bake.heights).map((cm) => cm / HEIGHT_DELTA_SCALE));
+    // Written as a loop, not `.map(cm => cm / SCALE)`: TypedArray.map
+    // returns the SAME typed array kind, so the division would be
+    // truncated straight back to an integer and every baked map would
+    // load with its heights rounded to whole metres.
+    const cm = decodeInt16Grid(doc.bake.heights);
+    for (let i = 0; i < cm.length; i++) terrain.heights[i] = cm[i]! / HEIGHT_DELTA_SCALE;
     terrain.surfaces.set(decodeUint8Grid(doc.bake.surfaces, 0));
   } else {
     for (let i = 0; i < n * n; i++) {

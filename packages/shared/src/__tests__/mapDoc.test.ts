@@ -190,6 +190,25 @@ describe('base drift', () => {
     expect(world.terrain.surfaces[0]).toBe(Surface.Gravel);
   });
 
+  it('restores baked heights at centimetre precision, not whole metres', () => {
+    // The case above bakes exactly 3 m, which survives a truncating
+    // divide unchanged — so it passed while every fractional height in a
+    // baked map was being floored. TypedArray.map returns the same typed
+    // array kind, which is what did the flooring. Pick heights whose
+    // centimetre part matters.
+    const doc = driftedDoc();
+    const heights = new Int16Array(RES * RES);
+    for (let i = 0; i < heights.length; i++) heights[i] = 250 + (i % 7); // 2.50 - 2.56 m
+    doc.bake = {
+      heights: encodeInt16Grid(heights, RES),
+      surfaces: encodeUint8Grid(new Uint8Array(RES * RES).fill(Surface.Dirt), RES, 0),
+    };
+    const world = applyMapDoc(doc);
+    expect(world.terrain.heights[0]).toBeCloseTo(2.5, 6);
+    expect(world.terrain.heights[3]).toBeCloseTo(2.53, 6);
+    expect(world.terrain.heights[6]).toBeCloseTo(2.56, 6);
+  });
+
   it('records a checksum that matches the base it was built from', () => {
     const doc = proceduralDoc();
     expect(doc.baseChecksum).toBe(baseChecksumOf(generateTerrain()));

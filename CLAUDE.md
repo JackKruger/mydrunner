@@ -140,6 +140,15 @@ Client:
 - `packages/client/src/terrain.ts` — `TerrainMesh`: geometry only. Heights go straight into the vertex Y component, row-major and **not** transposed (unlike the Rapier collider — Rapier wants column-major). `updateHeights(rect)` / `updateSurfaces(rect)` push a dirty region without rebuilding, which is what makes editor brushes viable; the game never calls them and treats `TerrainData` as immutable for the session.
 - `packages/client/src/terrainShader.ts` — the GLSL and `makeTerrainMaterial`. The per-surface branches are procedural textures, not colours, so they stay in GLSL rather than folding into `SURFACE_INFO` — but the branch IDs are interpolated from `Physics.Surface` so renumbering the enum can't desync them. Sun direction and fog range are duplicated from `WorldView`'s light and fog on purpose: this is a raw `ShaderMaterial`, so scene lights never reach it. Retune one, retune the other.
 - `packages/client/src/obstacles.ts` / `landmarks.ts` / `sky.ts` (procedural sky dome: gradient + clouds + sun) / `particles.ts` / `nameplate.ts` / `minimap.ts` — world + HUD visuals, all deterministic from the terrain handshake. `Obstacles` takes the composed `Obstacle[]` rather than generating its own, and derives colour/scale variation by hashing `Obstacle.id` — `Math.random()` there meant the scenery reshuffled on every rebuild and no two clients saw the same forest.
+Level editor (`packages/client/src/editor/`) — a second Vite page at `/editor.html`, listed explicitly in `vite.config.ts` because the default single-entry build would drop it from the deploy. It renders through `WorldView`, so the ground you sculpt is lit and textured exactly as the game will show it, and it never calls `initRapier`: it edits a document, it does not simulate one.
+
+- `editor/editSession.ts` — the map being edited. The authoritative state is the **centimetre delta**, and metre heights are derived from it, so what you sculpt is exactly what reloads; deriving the other way on save would requantise every cell. Undo snapshots the whole edit state per action (~48 KB at 128², 60 steps) rather than journalling touched cells. `toDoc()` re-stamps `baseChecksum` from the base the session composed against, which is what makes saving a drifted map a rebase.
+- `editor/brush.ts` — pure brush geometry (which cells, what weight). `cellCenter` must stay the inverse of `worldToTerrainIndex` or every stroke lands off to one side.
+- `editor/tools.ts` — tool ids, defaults, keyboard bindings. The paint palette derives from `SURFACE_INFO`, so a new surface appears without anyone remembering to add it.
+- `editor/flyCamera.ts` / `pick.ts` / `gizmos.ts` / `ui.ts` / `main.ts` — camera, raycasting, brush ring + spawn markers, the panel, and the wiring. Brush strokes are applied **from the render loop**, not from `pointermove`: a brush is a rate, so applying per event made strength depend on the pointer's report rate and holding still did nothing.
+
+Authored maps are committed as `.ts` modules and added to `AUTHORED` in `map/registry.ts` — the editor's "Copy .ts" button emits exactly that module. "Save .json" is the interchange format for round-tripping a work in progress.
+
 - `packages/client/src/joinScreen.ts` — first-load name + car picker. Persists name + carKind to localStorage; subsequent visits pre-fill the picker. `?auto=1` URL bypass for e2e (`?car=` accepts any `CarKind`).
 - `packages/client/src/chat.ts` — text chat UI (T to open); server relays with rate-limiting + sanitisation in `Room.broadcastChat`.
 - `packages/client/src/engineAudio.ts` — RPM-driven engine sound via `AudioContext`.
@@ -208,6 +217,8 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - Single Pages deploy workflow (the scaffold `static.yml` raced it and shipped the raw repo).
 - `SURFACE_INFO`: one table replacing three parallel per-surface lookups.
 - Production-world test coverage at the shipped 320 m / res-128 geometry.
+- Map documents: the level format, loaded by the server, the client and the prediction sim alike, with a map-revision handshake refusing mismatched bundles.
+- Level editor at `/editor.html`: sculpt / smooth / flatten / paint brushes, object and spawn placement, undo, and JSON / `.ts`-module export.
 
 ### Content
 - Cargo objective: spawn a crate to deliver from A to B; mass affects vehicle handling.
