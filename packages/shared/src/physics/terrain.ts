@@ -104,6 +104,34 @@ export function mountainFor(size: number): MountainSpec {
   };
 }
 
+/** A rectangular block of terrain cells, in grid coordinates.
+ *
+ *  Rows index Z, columns index X, matching heights[r * n + c]. Editors
+ *  report the region a brush touched so only that block is re-uploaded to
+ *  the GPU; `rows`/`cols` are counts, not end indices, and consumers clamp
+ *  to the grid rather than assuming the rect is already in bounds. */
+export interface GridRect {
+  r0: number;
+  c0: number;
+  rows: number;
+  cols: number;
+}
+
+/** The whole grid as a rect — the "everything changed" case. */
+export function fullGridRect(t: Pick<TerrainData, 'resolution'>): GridRect {
+  return { r0: 0, c0: 0, rows: t.resolution, cols: t.resolution };
+}
+
+/** Smallest rect covering both inputs. Brush strokes union per-move rects
+ *  so one flush covers the whole drag. */
+export function unionGridRect(a: GridRect, b: GridRect): GridRect {
+  const r0 = Math.min(a.r0, b.r0);
+  const c0 = Math.min(a.c0, b.c0);
+  const r1 = Math.max(a.r0 + a.rows, b.r0 + b.rows);
+  const c1 = Math.max(a.c0 + a.cols, b.c0 + b.cols);
+  return { r0, c0, rows: r1 - r0, cols: c1 - c0 };
+}
+
 /** A mud bog: a Gaussian depression that mudSurfaceRule then paints. */
 export interface Bog {
   x: number;

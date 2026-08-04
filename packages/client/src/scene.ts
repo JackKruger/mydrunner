@@ -13,45 +13,15 @@ import {
   type PlayerId,
 } from '@mydrunner/shared';
 import { RENDER_DELAY_MS } from './net.js';
-import { TerrainMesh } from './terrain.js';
 import { buildCarMesh, colorHash } from './carMesh.js';
 import { createNameplate, disposeNameplate } from './nameplate.js';
 import { ParticleSystem } from './particles.js';
-import { Obstacles } from './obstacles.js';
-import { LandmarkMeshes } from './landmarks.js';
 import { ChaseCamera } from './camera.js';
-import { Sky } from './sky.js';
 import { Minimap, type MinimapPlayer } from './minimap.js';
+import { WorldView } from './worldView.js';
+import { disposeObject3D } from './three/dispose.js';
 
 const TWO_PI = Math.PI * 2;
-
-/** Recursively free the GPU resources under an Object3D. Three.js never
- *  disposes geometries/materials on scene.remove() - without this every
- *  departed player leaked their car mesh's buffers for the tab's life. */
-function disposeObject3D(root: THREE.Object3D): void {
-  root.traverse((obj) => {
-    const mesh = obj as THREE.Mesh;
-    if (mesh.geometry) mesh.geometry.dispose();
-    const mat = (mesh as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
-    if (Array.isArray(mat)) for (const m of mat) disposeMaterial(m);
-    else if (mat) disposeMaterial(mat);
-  });
-}
-
-/** Material.dispose() does NOT free the textures a material references,
- *  so a material-only dispose leaks every map it points at - notably the
- *  canvas texture behind each nameplate sprite. */
-function disposeMaterial(mat: THREE.Material): void {
-  const m = mat as THREE.Material & {
-    map?: THREE.Texture | null;
-    normalMap?: THREE.Texture | null;
-    emissiveMap?: THREE.Texture | null;
-  };
-  m.map?.dispose();
-  m.normalMap?.dispose();
-  m.emissiveMap?.dispose();
-  mat.dispose();
-}
 
 interface SnapshotEntry {
   recvAtMs: number;
@@ -72,20 +42,16 @@ interface VehicleVisual {
 }
 
 export class Scene {
+  readonly view: WorldView;
   readonly renderer: THREE.WebGLRenderer;
-  readonly scene = new THREE.Scene();
+  readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
   private cam: ChaseCamera;
   private buffer: SnapshotEntry[] = [];
   private vehicles = new Map<PlayerId, VehicleVisual>();
   private localId: PlayerId | null = null;
   private localCarKind: CarKind = DEFAULT_CAR_KIND;
-  private terrain: TerrainMesh | null = null;
-  private terrainPlaceholder: THREE.Mesh | null = null;
-  private obstacles: Obstacles | null = null;
-  private landmarks: LandmarkMeshes | null = null;
   private particles: ParticleSystem;
-  private sky: Sky;
   private minimap = new Minimap();
   private lastFrameTimeMs = 0;
   private _lastParticleSnapMs = 0;
@@ -120,64 +86,21 @@ export class Scene {
   private _present = new Set<PlayerId>();
 
   constructor(canvasParent: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    // Cap pixel ratio. Uncapped on a 2x or 3x display the GPU pays 4-9x
-    // the fragment cost - the difference between 60 FPS and 20 FPS on
-    // mid-tier mobile + integrated GPUs. 1.5 is a good compromise: still
-    // crisper than CSS pixels, well under the cliff. Higher-end devices
-    // can override at runtime if needed.
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true;
-    // PCFSoft is the default and is several samples per fragment on the
-    // shadow-casting pass. PCF (basic) halves that with barely visible
-    // quality loss at our shadow map resolution.
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    canvasParent.appendChild(this.renderer.domElement);
-
-    // Procedural sky dome replaces the flat background colour. Fog still
-    // matches the horizon tint so distant terrain melts into the sky.
-    this.scene.fog = new THREE.Fog(0xd6e2ec, 180, 480);
-    this.sky = new Sky();
-    this.scene.add(this.sky.mesh);
+    // Renderer, lighting, sky, terrain, obstacles and landmarks all live
+    // in WorldView so the level editor renders the same world this does.
+    this.view = new WorldView(canvasParent);
+    this.renderer = this.view.renderer;
+    this.scene = this.view.scene;
 
     this.cam = new ChaseCamera(window.innerWidth / window.innerHeight);
     this.camera = this.cam.camera;
-
-    const sun = new THREE.DirectionalLight(0xfff4dd, 1.4);
-    sun.position.set(50, 80, 30);
-    sun.castShadow = true;
-    // 1024² instead of 2048². Shadows still readable on a 200 m × 200 m
-    // shadow camera frustum (~20 cm per shadow texel) and the GPU pays
-    // a quarter of the depth-pass fragment cost. The map-size drop is
-    // pure win on integrated and mobile GPUs.
-    sun.shadow.mapSize.set(1024, 1024);
-    sun.shadow.camera.left = -100;
-    sun.shadow.camera.right = 100;
-    sun.shadow.camera.top = 100;
-    sun.shadow.camera.bottom = -100;
-    // Bigger shadow bias - PCFShadowMap can produce light "acne" near
-    // edges with the larger texel pitch.
-    sun.shadow.bias = -0.0008;
-    this.scene.add(sun);
-    this.scene.add(new THREE.HemisphereLight(0xb8d0e2, 0x66553c, 0.6));
-
-    // Placeholder ground until terrain handshake arrives. Replaced in setTerrain().
-    const placeholder = new THREE.Mesh(
-      new THREE.PlaneGeometry(200, 200),
-      new THREE.MeshStandardMaterial({ color: 0x556b2f }),
-    );
-    placeholder.rotation.x = -Math.PI / 2;
-    placeholder.receiveShadow = true;
-    this.scene.add(placeholder);
-    this.terrainPlaceholder = placeholder;
 
     this.particles = new ParticleSystem();
     this.scene.add(this.particles.group);
 
     window.addEventListener('resize', () => {
       this.cam.setAspect(window.innerWidth / window.innerHeight);
-      this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.view.setSize(window.innerWidth, window.innerHeight);
     });
   }
 
@@ -197,32 +120,13 @@ export class Scene {
    *  main.ts (obstacles + landmarks derive deterministically from it, so
    *  nothing but the seed ever crosses the wire). */
   setTerrain(terrain: Physics.TerrainData): void {
-    if (this.terrainPlaceholder) {
-      this.scene.remove(this.terrainPlaceholder);
-      (this.terrainPlaceholder.material as THREE.Material).dispose();
-      this.terrainPlaceholder.geometry.dispose();
-      this.terrainPlaceholder = null;
-    }
-    if (this.terrain) {
-      this.scene.remove(this.terrain.mesh);
-      this.terrain.dispose();
-    }
-    this.terrain = new TerrainMesh(terrain);
-    this.scene.add(this.terrain.mesh);
-    this.minimap.setTerrain(this.terrain.terrain);
-    this.cam.setTerrain({ heightAt: (x, z) => this.terrainHeightAt(x, z) });
-    if (this.obstacles) {
-      this.scene.remove(this.obstacles.group);
-      disposeObject3D(this.obstacles.group);
-    }
-    this.obstacles = new Obstacles(terrain);
-    this.scene.add(this.obstacles.group);
-    if (this.landmarks) {
-      this.scene.remove(this.landmarks.group);
-      disposeObject3D(this.landmarks.group);
-    }
-    this.landmarks = new LandmarkMeshes(Physics.landmarksFor(terrain));
-    this.scene.add(this.landmarks.group);
+    this.view.setWorld({
+      terrain,
+      obstacles: Physics.generateObstacles(terrain),
+      landmarks: Physics.landmarksFor(terrain),
+    });
+    this.minimap.setTerrain(terrain);
+    this.cam.setTerrain({ heightAt: (x, z) => this.view.heightAt(x, z) });
   }
 
   cycleCameraMode(): void {
@@ -605,12 +509,11 @@ export class Scene {
     this.lastFrameTimeMs = nowMs;
     // Gate on snapshot arrival, not frame rate - otherwise a 120 Hz
     // client would emit 4x the particles of a 30 Hz one.
-    if (pair && this.terrain && pair.b.recvAtMs !== this._lastParticleSnapMs) {
+    if (pair && this.terrainData && pair.b.recvAtMs !== this._lastParticleSnapMs) {
       this._lastParticleSnapMs = pair.b.recvAtMs;
       this.spawnMudParticles(pair.b.snap);
     }
     this.particles.update(frameDt);
-    this.sky.update(this.camera);
 
     // Minimap dots come from the posed visuals, so they show exactly what
     // the player sees (prediction for the local truck, interp for remotes).
@@ -632,11 +535,11 @@ export class Scene {
     this._minimapBuf.length = mi;
     this.minimap.update(this._minimapBuf);
 
-    this.renderer.render(this.scene, this.camera);
+    this.view.render(this.camera);
   }
 
   private spawnMudParticles(snap: WorldSnapshot): void {
-    const terrainData = this.terrain!.terrain;
+    const terrainData = this.terrainData!;
     for (const p of snap.players) {
       const vis = this.vehicles.get(p.id);
       if (!vis) continue;
@@ -681,13 +584,13 @@ export class Scene {
    *  matching the rigid coupling. Pure visual; chassis still rides at
    *  its physics-determined height. Returns 0 on road / dirt. */
   private axleSinkAt(group: THREE.Group, anchor: { centerLocalY: number; centerLocalZ: number }): number {
-    if (!this.terrain) return 0;
+    if (!this.terrainData) return 0;
     const q = group.quaternion;
     // Sample at the axle centre - in chassis-local that's (0, anchor.centerLocalY, anchor.centerLocalZ).
     const local = { x: 0, y: anchor.centerLocalY, z: anchor.centerLocalZ };
     const w = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
     const surf = Physics.sampleSurface(
-      this.terrain.terrain,
+      this.terrainData,
       group.position.x + w.x,
       group.position.z + w.z,
     );
@@ -696,17 +599,9 @@ export class Scene {
     return 0;
   }
 
-  /** Sample terrain height at world (x, z). Used by the camera so it
-   *  doesn't bury under hills. */
-  private terrainHeightAt(x: number, z: number): number {
-    if (!this.terrain) return 0;
-    const t = this.terrain.terrain;
-    const n = t.resolution;
-    const u = (x / t.size + 0.5) * (n - 1);
-    const v = (z / t.size + 0.5) * (n - 1);
-    if (u < 0 || u > n - 1 || v < 0 || v > n - 1) return 0;
-    const c = Math.round(u);
-    const r = Math.round(v);
-    return t.heights[r * n + c] ?? 0;
+  /** The TerrainData the world was built from, or null before the
+   *  handshake. Surface lookups for particles and axle sink read it. */
+  private get terrainData(): Physics.TerrainData | null {
+    return this.view.terrainMesh?.terrain ?? null;
   }
 }
