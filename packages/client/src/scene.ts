@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import {
   VEHICLE,
+  Maps,
   Physics,
   DEFAULT_CAR_KIND,
   type CarKind,
@@ -116,14 +117,18 @@ export class Scene {
     this.localCarKind = carKind;
   }
 
-  /** Install the world visuals from the TerrainData generated once in
-   *  main.ts (obstacles + landmarks derive deterministically from it, so
-   *  nothing but the seed ever crosses the wire). */
-  setTerrain(terrain: Physics.TerrainData): void {
+  /** Install the world visuals from the map composed once in main.ts.
+   *
+   *  Takes the composed obstacles rather than regenerating them from the
+   *  terrain: on an authored map that would drop the placed objects and
+   *  bring back the deleted ones, and the truck would collide with rocks
+   *  nobody could see. */
+  setWorld(map: Maps.MapWorld): void {
+    const terrain = map.terrain;
     this.view.setWorld({
       terrain,
-      obstacles: Physics.generateObstacles(terrain),
-      landmarks: Physics.landmarksFor(terrain),
+      obstacles: map.obstacles,
+      landmarks: map.landmarks,
     });
     this.minimap.setTerrain(terrain);
     this.cam.setTerrain({ heightAt: (x, z) => this.view.heightAt(x, z) });

@@ -1,4 +1,8 @@
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // On GitHub Pages, assets live at /<repo>/ unless a custom domain is set.
 // Configurable via env so a custom-domain deploy can use base=/.
@@ -21,6 +25,15 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: true,
+    // Two pages: the game and the level editor. Listed explicitly because
+    // Vite's default single-entry build would drop editor.html from the
+    // deploy, and the editor is only reachable at /editor.html.
+    rollupOptions: {
+      input: {
+        index: resolve(__dirname, 'index.html'),
+        editor: resolve(__dirname, 'editor.html'),
+      },
+    },
   },
   // Rapier ships ESM + WASM. Vite handles WASM via ?init or default fetch;
   // @dimforge/rapier3d-compat bundles WASM as base64 inside the JS so it

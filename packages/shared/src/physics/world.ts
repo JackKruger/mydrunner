@@ -12,6 +12,9 @@ import type { VehicleLike, VehicleSpawn } from './vehicleTypes.js';
 import { generateTerrain, type TerrainData, type TerrainOptions } from './terrain.js';
 import { generateObstacles, spawnObstacleColliders, type Obstacle } from './obstacles.js';
 import { landmarksFor, spawnLandmarkColliders, type Landmarks } from './landmarks.js';
+// Type-only: the map layer composes terrain from physics, so a value
+// import here would close the cycle.
+import type { MapWorld } from '../map/applyMapDoc.js';
 
 let rapierReady: Promise<void> | null = null;
 export function initRapier(): Promise<void> {
@@ -20,8 +23,15 @@ export function initRapier(): Promise<void> {
 }
 
 export interface WorldOptions {
+  /** A composed map document. Preferred over the two below: it carries
+   *  the authored obstacles as well as the terrain, and regenerating
+   *  obstacles from the terrain would silently drop the author's
+   *  additions and resurrect their deletions. */
+  map?: MapWorld;
   /** Either pre-built terrain data (e.g. received from the server) or
-   *  generation options - the constructor will generate if needed. */
+   *  generation options - the constructor will generate if needed.
+   *  Both regenerate obstacles procedurally, so they describe the
+   *  procedural world only. Kept for tests and fixtures. */
   terrain?: TerrainData;
   generate?: TerrainOptions;
 }
@@ -44,15 +54,16 @@ export class World {
   constructor(opts: WorldOptions = {}) {
     this.rapier = RAPIER;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y, z: 0 });
-    this.terrain = opts.terrain ?? generateTerrain(opts.generate);
+    this.terrain = opts.map?.terrain ?? opts.terrain ?? generateTerrain(opts.generate);
     const built = this.buildTerrain(this.terrain);
     this.terrainBody = built.body;
     this.terrainCollider = built.collider;
-    // Obstacles are deterministic from the same seed - both client and
-    // server generate identical lists, no network sync needed.
-    this.obstacles = generateObstacles(this.terrain);
+    // Without a map the obstacles are deterministic from the terrain, so
+    // every consumer reaches the same list from the seed alone. With one
+    // they are whatever the author left, and only the document knows.
+    this.obstacles = opts.map?.obstacles ?? generateObstacles(this.terrain);
     this.obstacleBodies = spawnObstacleColliders(this.world, this.obstacles);
-    this.landmarks = landmarksFor(this.terrain);
+    this.landmarks = opts.map?.landmarks ?? landmarksFor(this.terrain);
     this.landmarkBodies = spawnLandmarkColliders(this.world, this.landmarks);
   }
 
