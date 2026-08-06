@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 import { TerrainMesh } from './terrain.js';
-import { Obstacles } from './obstacles.js';
+import { Obstacles } from './obstacles/index.js';
 import { LandmarkMeshes } from './landmarks.js';
 import { Sky } from './sky.js';
 import { disposeObject3D } from './three/dispose.js';

@@ -13,7 +13,7 @@
 // once a map is finished, freeze the composed grids into the document and
 // the generator stops mattering to it forever.
 
-import type { ObstacleKind } from '../physics/obstacles.js';
+import { isObstacleKind, type ObstacleKind } from '../physics/objectCatalog.js';
 import type { Bog, PetrolStationPad, Road, Surface } from '../physics/terrain.js';
 import { canonicalStringify, fnv1a32 } from '../hash.js';
 import type { TileGrid } from './tileGrid.js';
@@ -69,7 +69,10 @@ export interface PlacedObject {
   size: number;
   height: number;
   yaw: number;
-  /** Ramp only: full length along the driving direction. */
+  /** Run along the object's local +X, before yaw. Meaningful only for kinds
+   *  whose `OBJECT_INFO[kind].dims.length` is set — a rock has no run, and
+   *  the editor omits the field rather than writing a number that means
+   *  nothing but still changes the document's revision hash. */
   length?: number;
   /** Metres above the composed ground. Default 0 = sits on terrain. */
   yOffset?: number;
@@ -256,12 +259,14 @@ function decodePad(v: unknown, path: string): PetrolStationPad {
   };
 }
 
-const OBSTACLE_KINDS: readonly ObstacleKind[] = ['rock', 'tree', 'pine', 'ramp', 'flagpole'];
-
 function decodePlaced(v: unknown, path: string): PlacedObject {
   const o = obj(v, path);
-  const kind = str(o.kind, `${path}.kind`) as ObstacleKind;
-  if (!OBSTACLE_KINDS.includes(kind)) fail(`${path}.kind`, `is not a known obstacle kind`);
+  // Validated against the catalog, not a list kept here. The copy that
+  // used to live at this line had no compile-time link to the kind union,
+  // so a new kind decoded as "not a known obstacle kind" until someone
+  // remembered this file existed.
+  const kind = str(o.kind, `${path}.kind`);
+  if (!isObstacleKind(kind)) fail(`${path}.kind`, `is not a known obstacle kind`);
   return {
     id: str(o.id, `${path}.id`),
     kind,

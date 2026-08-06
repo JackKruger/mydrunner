@@ -15,6 +15,7 @@
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import { TERRAIN } from '../constants.js';
+import { resolveColliders, type Obstacle } from './objectCatalog.js';
 import {
   Surface, type TerrainData, worldToTerrainIndex, sampleHeightBilinear,
   getHillClimbSegments, pointToSegmentDist, HILL_CLIMB_PATH_HALF_WIDTH,
@@ -32,28 +33,12 @@ function mulberry32(seed: number) {
   };
 }
 
-export type ObstacleKind = 'rock' | 'tree' | 'pine' | 'ramp' | 'flagpole';
-
-export interface Obstacle {
-  /** Stable identity, deterministic for a given terrain. Authored maps
-   *  record removals by id, so an id must survive regeneration — it is
-   *  derived from the generating pass and the index within it, never from
-   *  the obstacle's position (which shifts when the heightfield changes). */
-  id: string;
-  kind: ObstacleKind;
-  x: number;
-  y: number;
-  z: number;
-  // Per-kind meaning: rock = radius; tree/pine = trunk radius;
-  //                   ramp = half-width (perpendicular to driving dir).
-  size: number;
-  // Per-kind meaning: tree/pine = total height; ramp = rise of the
-  //                   high edge above the low edge; rocks ignore.
-  height: number;
-  yaw: number;
-  // Ramp only: full length along the driving direction (pre-yaw, local X).
-  length?: number;
-}
+// Obstacle, ObstacleKind and rampTransform now live in objectCatalog.ts —
+// the table has to name them, and this file has to read the table, so the
+// types had to sit on the far side of that edge. Re-exported here because
+// every existing importer reaches for them at this path.
+export type { Obstacle, ObstacleKind } from './objectCatalog.js';
+export { rampTransform } from './objectCatalog.js';
 
 // Compact tuple format to keep the data tables readable.
 type RockSpec = readonly [x: number, z: number, size: number];
@@ -488,67 +473,50 @@ function proceduralObstacles(terrain: TerrainData): Obstacle[] {
   return out;
 }
 
-// Geometry for a flex ramp: tilted cuboid placed so the low long edge
-// rests on the ground at `groundY` and the opposite long edge sits
-// `rise` metres above. Returns the centroid + orientation quaternion
-// the renderer also needs, so client visuals stay aligned with the
-// collider without re-deriving the math.
-const RAMP_HALF_THICK = 0.06;
-export function rampTransform(o: Obstacle): {
-  cx: number; cy: number; cz: number;
-  qx: number; qy: number; qz: number; qw: number;
-  halfLength: number; halfWidth: number; halfThick: number;
-  tilt: number;
-} {
-  const halfLength = (o.length ?? 3) / 2;
-  const halfWidth = o.size;
-  const halfThick = RAMP_HALF_THICK;
-  const tilt = Math.atan2(o.height, halfWidth * 2);
-  // Lift centroid so the low edge rests on the ground after tilt:
-  // bottom-most corner Y = cy - halfWidth*sin(tilt) - halfThick*cos(tilt).
-  const cy = o.y + halfWidth * Math.sin(tilt) + halfThick * Math.cos(tilt);
-  // Composite quat: yaw (around world Y) then tilt (around local X).
-  // Pre-multiplied form: q = q_yaw * q_tilt.
-  const sty = Math.sin(o.yaw / 2), cty = Math.cos(o.yaw / 2);
-  const sta = Math.sin(tilt / 2), cta = Math.cos(tilt / 2);
-  return {
-    cx: o.x, cy, cz: o.z,
-    qx: cty * sta,
-    qy: sty * cta,
-    qz: -sty * sta,
-    qw: cty * cta,
-    halfLength, halfWidth, halfThick, tilt,
-  };
-}
-
 /** Spawn the obstacles into a Rapier world as static colliders. Returns
- *  the bodies so they can be cleaned up later. */
+ *  the bodies so they can be cleaned up later.
+ *
+ *  One fixed body per obstacle, however many collider parts its kind
+ *  resolves to — a sign is a post and a panel, and both have to move
+ *  together. The one-body-per-obstacle shape is what World's teardown loop
+ *  expects, so multi-part kinds did not change it.
+ *
+ *  The body is left at the origin and each collider carries the full world
+ *  transform, rather than the body sitting at the obstacle anchor with
+ *  local offsets hung off it. That looks backwards and is deliberate:
+ *  Rapier stores both as f32, so anchor-plus-offset rounds twice and moved
+ *  a dozen rocks by 0.1 mm against the pre-table behaviour. Sub-millimetre
+ *  is physically nothing, but "nothing moved" is the whole claim this
+ *  refactor rests on, and it is free to keep it exactly true. Nothing reads
+ *  an obstacle body's translation; contact resolution sees the colliders. */
 export function spawnObstacleColliders(
   world: RAPIER.World,
   obstacles: Obstacle[],
 ): RAPIER.RigidBody[] {
   const bodies: RAPIER.RigidBody[] = [];
   for (const o of obstacles) {
-    const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(o.x, o.y, o.z);
-    const body = world.createRigidBody(bodyDesc);
-    let colDesc: RAPIER.ColliderDesc;
-    if (o.kind === 'rock') {
-      colDesc = RAPIER.ColliderDesc.ball(o.size).setFriction(0.9);
-      body.setTranslation({ x: o.x, y: o.y + o.size * 0.6, z: o.z }, true);
-    } else if (o.kind === 'ramp') {
-      const t = rampTransform(o);
-      body.setTranslation({ x: t.cx, y: t.cy, z: t.cz }, true);
-      body.setRotation({ x: t.qx, y: t.qy, z: t.qz, w: t.qw }, true);
-      colDesc = RAPIER.ColliderDesc.cuboid(t.halfLength, t.halfThick, t.halfWidth).setFriction(1.0);
-    } else {
-      const halfHeight = Math.max(0.1, (o.height - 2 * o.size) / 2);
-      colDesc = RAPIER.ColliderDesc.capsule(halfHeight, o.size).setFriction(0.6);
-      body.setTranslation(
-        { x: o.x, y: o.y + halfHeight + o.size, z: o.z },
-        true,
-      );
+    const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    for (const c of resolveColliders(o)) {
+      let desc: RAPIER.ColliderDesc;
+      switch (c.shape) {
+        case 'ball':
+          desc = RAPIER.ColliderDesc.ball(c.args[0]!);
+          break;
+        case 'capsule':
+          desc = RAPIER.ColliderDesc.capsule(c.args[0]!, c.args[1]!);
+          break;
+        case 'cuboid':
+          desc = RAPIER.ColliderDesc.cuboid(c.args[0]!, c.args[1]!, c.args[2]!);
+          break;
+        case 'cylinder':
+          desc = RAPIER.ColliderDesc.cylinder(c.args[0]!, c.args[1]!);
+          break;
+      }
+      desc.setFriction(c.friction)
+        .setTranslation(c.pos.x, c.pos.y, c.pos.z)
+        .setRotation(c.rot);
+      world.createCollider(desc, body);
     }
-    world.createCollider(colDesc, body);
     bodies.push(body);
   }
   return bodies;

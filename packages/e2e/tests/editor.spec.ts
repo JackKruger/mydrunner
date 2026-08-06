@@ -58,6 +58,36 @@ function maxRise(before: number[], after: number[]): number {
   return m;
 }
 
+/** Where the placement ghost is sitting, out of the editor's dev hook. */
+async function ghostState(page: Page): Promise<{
+  visible: boolean; x: number; z: number; yaw: number; children: number;
+}> {
+  return page.evaluate(() => {
+    const w = window as unknown as {
+      __editor: {
+        ghost: {
+          group: {
+            visible: boolean;
+            position: { x: number; z: number };
+            rotation: { y: number };
+            children: unknown[];
+          };
+        };
+      };
+    };
+    const g = w.__editor.ghost.group;
+    return {
+      visible: g.visible,
+      x: g.position.x,
+      z: g.position.z,
+      yaw: g.rotation.y,
+      // One child group holding the built meshes; zero means the ghost is
+      // showing an empty box rather than the object.
+      children: g.children.length,
+    };
+  });
+}
+
 async function openEditor(page: Page): Promise<string[]> {
   const errors: string[] = [];
   page.on('pageerror', (err) => errors.push(err.message));
@@ -127,6 +157,81 @@ test('the placed object survives a save and reload of the document', async ({ pa
   expect(survived).toBe(1);
 });
 
+test('a ghost of the object appears under the cursor and follows it', async ({ page }) => {
+  const errors = await openEditor(page);
+  const box = (await page.locator('#app canvas').boundingBox())!;
+  const cx = box.x + box.width * 0.4;
+  const cy = box.y + box.height * 0.72;
+
+  // Nothing showing until the object tool is up.
+  await page.mouse.move(cx, cy);
+  expect(await ghostState(page)).toMatchObject({ visible: false });
+
+  await page.keyboard.press('Digit6');
+  await page.mouse.move(cx, cy);
+  // The ghost is seated from the render loop, not the pointer event.
+  await page.waitForFunction(() => {
+    const w = window as unknown as { __editor: { ghost: { group: { visible: boolean } } } };
+    return w.__editor.ghost.group.visible;
+  });
+  const first = await ghostState(page);
+  expect(first.children).toBeGreaterThan(0);
+
+  await page.mouse.move(cx + 120, cy + 30);
+  await page.waitForTimeout(120);
+  const moved = await ghostState(page);
+  expect(Math.hypot(moved.x - first.x, moved.z - first.z)).toBeGreaterThan(1);
+
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
+test('the ghost aims with the bracket keys, and the object lands at that yaw', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('Digit6');
+  const box = (await page.locator('#app canvas').boundingBox())!;
+  const cx = box.x + box.width * 0.4;
+  const cy = box.y + box.height * 0.72;
+  await page.mouse.move(cx, cy);
+
+  for (let i = 0; i < 3; i++) await page.keyboard.press('BracketRight');
+  const aimed = await page.evaluate(() => {
+    const w = window as unknown as { __editor: { tools: { objectYaw: number } } };
+    return w.__editor.tools.objectYaw;
+  });
+  expect(aimed).toBeGreaterThan(0);
+  expect((await ghostState(page)).yaw).toBeCloseTo(aimed, 5);
+
+  await page.mouse.click(cx, cy);
+  // Placement used to write Math.random(), so the ghost could not have
+  // been telling the truth about what you were about to get.
+  const placed = await page.evaluate(() => {
+    const w = window as unknown as { __editor: { doc(): unknown } };
+    const doc = w.__editor.doc() as { objects: { added: Array<{ yaw: number }> } };
+    return doc.objects.added[0]!.yaw;
+  });
+  expect(placed).toBeCloseTo(aimed, 5);
+});
+
+test('picking a kind reseeds its own dimensions and previews that kind', async ({ page }) => {
+  await openEditor(page);
+  await page.locator('.ed-section', { hasText: 'Object' }).locator('select')
+    .selectOption('shippingContainer');
+  const box = (await page.locator('#app canvas').boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.72);
+  await page.waitForTimeout(150);
+
+  const state = await page.evaluate(() => {
+    const w = window as unknown as {
+      __editor: { tools: { objectKind: string; objectSize: number; objectLength: number } };
+    };
+    return { ...w.__editor.tools };
+  });
+  // The container's own defaults, not the rock's 1.6 / 2.
+  expect(state.objectKind).toBe('shippingContainer');
+  expect(state.objectLength).toBeGreaterThan(4);
+  expect((await ghostState(page)).visible).toBe(true);
+});
+
 test('the paint tool writes a surface the document carries', async ({ page }) => {
   await openEditor(page);
   await page.keyboard.press('Digit5');
@@ -182,4 +287,24 @@ test('@editor-shots capture', async ({ page }) => {
   await stroke(page, { x: cx, y: cy + 40 }, { x: cx + 70, y: cy + 40 });
   await page.waitForTimeout(300);
   await page.screenshot({ path: `${SHOT_DIR}/03-painted.png` });
+
+  // The placement ghost: a translucent copy of the object about to be
+  // placed, seated on the ground under the cursor. Worth a frame of its
+  // own because it is the whole point of the object tool now — and because
+  // "is the ghost the same shape as what lands" is a question only a
+  // picture answers.
+  await page.locator('.ed-section', { hasText: 'Object' }).locator('select')
+    .selectOption('shippingContainer');
+  // Clear of the crater the sculpt above dug, and far enough up the frame
+  // that the whole object and its brush ring fit in shot.
+  await page.mouse.move(box.x + box.width * 0.62, box.y + box.height * 0.62);
+  for (let i = 0; i < 4; i++) await page.keyboard.press('BracketRight');
+  await page.waitForTimeout(300);
+  await expect
+    .poll(async () => page.evaluate(() => {
+      const w = window as unknown as { __editor: { ghost: { group: { visible: boolean } } } };
+      return w.__editor.ghost.group.visible;
+    }))
+    .toBe(true);
+  await page.screenshot({ path: `${SHOT_DIR}/04-object-ghost.png` });
 });

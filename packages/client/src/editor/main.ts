@@ -20,12 +20,16 @@ import {
 } from './documentIo.js';
 import { EditSession } from './editSession.js';
 import { FlyCamera } from './flyCamera.js';
+import { ObjectGhost } from './ghost.js';
 import { BrushCursor, SpawnMarkers } from './gizmos.js';
 import { Picker } from './pick.js';
 import {
-  defaultToolState, isContinuous, isSculpt, TOOL_KEYS, type ToolId,
+  applyKindDefaults, defaultToolState, isContinuous, isSculpt, stepYaw,
+  TOOL_KEYS, type ToolId,
 } from './tools.js';
 import { EditorUi } from './ui.js';
+import { writePreview } from '../previewHandoff.js';
+import { loadSavedJoin } from '../joinScreen.js';
 
 const app = document.getElementById('app')!;
 const panelHost = document.getElementById('panel')!;
@@ -35,8 +39,10 @@ const camera = new FlyCamera(window.innerWidth / window.innerHeight, { x: 0, y: 
 const picker = new Picker();
 const cursor = new BrushCursor();
 const spawnMarkers = new SpawnMarkers();
+const ghost = new ObjectGhost();
 view.scene.add(cursor.object);
 view.scene.add(spawnMarkers.group);
+view.scene.add(ghost.group);
 
 const tools = defaultToolState();
 let session: EditSession;
@@ -51,6 +57,12 @@ const ui = new EditorUi(panelHost, tools, {
   onOpenFile: openFile,
   onSaveJson: saveJson,
   onCopyModule: copyModule,
+  onPreview: previewInGame,
+  onObjectKindChange: (kind) => {
+    applyKindDefaults(tools, kind);
+    ui.syncObject();
+    setTool('object');
+  },
   onBakeChange: (v) => { bakeOnSave = v; },
   onUndo: () => applyHistory(session.undo(), 'undo'),
   onRedo: () => applyHistory(session.redo(), 'redo'),
@@ -105,6 +117,32 @@ async function copyModule(): Promise<void> {
   );
 }
 
+/** Hand the live document to the game page and open it in a new tab.
+ *
+ *  Baked, not raw. applyMapDoc refuses a document whose base has drifted
+ *  under its edits, and the editor is precisely where drifted maps live —
+ *  an unbaked handoff would refuse to preview the map you are repairing.
+ *  A baked document also composes independently of the generator, so what
+ *  you drive is exactly the ground you were just looking at.
+ *
+ *  A new tab, not a navigation: the editor has no autosave and the session
+ *  lives only in memory, so navigating away would bin the user's work. */
+function previewInGame(): void {
+  const doc = session.toDoc(openedDoc, { bake: true });
+  const written = writePreview(doc, loadSavedJoin()?.carKind ?? 'patrol');
+  if (!written.ok) {
+    ui.status(written.reason, 'error');
+    return;
+  }
+  // No `noopener`: it would give the new tab a blank sessionStorage and the
+  // document would never arrive.
+  const tab = window.open('./index.html?preview=1', '_blank');
+  ui.status(
+    tab ? 'previewing in a new tab' : 'popup blocked — allow popups for this site',
+    tab ? 'info' : 'error',
+  );
+}
+
 function applyHistory(changed: boolean, what: string): void {
   if (!changed) {
     ui.status(`nothing to ${what}`);
@@ -131,19 +169,34 @@ function refreshSpawnMarkers(): void {
 function setTool(tool: ToolId): void {
   tools.tool = tool;
   ui.syncTool();
+  if (tool !== 'object') ghost.hide();
   ui.status(`tool: ${tool}`);
 }
 
 const canvas = view.renderer.domElement;
 let painting = false;
 let lastPointer: { x: number; y: number } | null = null;
-/** Ground point under the cursor, refreshed on move. The stroke is
- *  applied from the render loop rather than from the pointermove
- *  handler: a brush is a rate, so it has to advance with elapsed time.
- *  Applying per event instead made the strength depend on how fast the
- *  mouse reported — a 120 Hz pointer sculpted twice as hard as a 60 Hz
- *  one — and holding the button still did nothing at all. */
+/** Ground point under the cursor. The stroke is applied from the render
+ *  loop rather than from the pointermove handler: a brush is a rate, so it
+ *  has to advance with elapsed time. Applying per event instead made the
+ *  strength depend on how fast the mouse reported — a 120 Hz pointer
+ *  sculpted twice as hard as a 60 Hz one — and holding the button still
+ *  did nothing at all. */
 let hoverHit: { x: number; y: number; z: number } | null = null;
+/** Last pointer pixel over the canvas, kept until the pointer leaves.
+ *
+ *  Separate from `lastPointer`, which only exists to give the look-drag its
+ *  delta and is cleared on pointerup. The gizmos need the pixel to survive
+ *  that, because they are re-raycast from the render loop: they used to
+ *  update only on pointermove, so flying the camera left the brush ring
+ *  sitting where the ground *used* to be — and a placement ghost with that
+ *  bug hangs visibly in mid-air. */
+let hoverPx: { x: number; y: number } | null = null;
+/** Re-raycasting the 128² terrain mesh is not free, so it only happens when
+ *  the pointer or the camera actually moved. */
+let gizmosDirty = true;
+const lastCamPos = new THREE.Vector3();
+const lastCamQuat = new THREE.Quaternion();
 
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -157,6 +210,7 @@ canvas.addEventListener('pointerdown', (e) => {
   const hit = groundAt(e);
   if (!hit) return;
   hoverHit = hit;
+  hoverPx = { x: e.clientX, y: e.clientY };
   if (isContinuous(tools.tool)) {
     session.beginStroke();
     painting = true;
@@ -172,13 +226,27 @@ canvas.addEventListener('pointermove', (e) => {
     return;
   }
   lastPointer = { x: e.clientX, y: e.clientY };
-  hoverHit = groundAt(e);
-  if (!hoverHit) {
-    cursor.hide();
-    return;
-  }
-  cursor.update(hoverHit.x, hoverHit.z, tools.radius, (x, z) => view.heightAt(x, z));
+  hoverPx = { x: e.clientX, y: e.clientY };
+  gizmosDirty = true;
 });
+
+canvas.addEventListener('pointerleave', () => {
+  hoverPx = null;
+  hoverHit = null;
+  cursor.hide();
+  ghost.hide();
+});
+
+// Wheel aims the object about to be placed. The fly camera is keyboard-only
+// so there is nothing to steal the gesture from, and preventDefault keeps
+// the page from scrolling under the canvas.
+canvas.addEventListener('wheel', (e) => {
+  if (tools.tool !== 'object') return;
+  e.preventDefault();
+  tools.objectYaw = stepYaw(tools.objectYaw, e.deltaY > 0 ? 1 : -1);
+  ui.syncObject();
+  gizmosDirty = true;
+}, { passive: false });
 
 const endPointer = (e: PointerEvent): void => {
   if (e.button === 2 || camera.isLooking) camera.endLook();
@@ -195,14 +263,43 @@ const endPointer = (e: PointerEvent): void => {
     }
   }
   lastPointer = null;
+  gizmosDirty = true;
 };
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 
-function groundAt(e: PointerEvent): { x: number; y: number; z: number } | null {
+function groundAt(e: { clientX: number; clientY: number }): { x: number; y: number; z: number } | null {
   const mesh = view.terrainMesh;
   if (!mesh) return null;
   return picker.ground(canvas, camera.camera, mesh.mesh, e.clientX, e.clientY);
+}
+
+/** Re-seat the brush ring and the placement ghost under the cursor.
+ *  Driven from the render loop, so they track a moving camera. */
+function updateGizmos(): void {
+  if (!hoverPx) return;
+  hoverHit = groundAt({ clientX: hoverPx.x, clientY: hoverPx.y });
+  if (!hoverHit) {
+    cursor.hide();
+    ghost.hide();
+    return;
+  }
+  cursor.update(hoverHit.x, hoverHit.z, tools.radius, (x, z) => view.heightAt(x, z));
+  if (tools.tool === 'object') {
+    const info = Physics.objectInfo(tools.objectKind);
+    ghost.show(
+      {
+        id: session.previewId(),
+        kind: tools.objectKind,
+        size: tools.objectSize,
+        height: tools.objectHeight,
+        ...(info.dims.length !== undefined ? { length: tools.objectLength } : {}),
+      },
+      hoverHit.x, hoverHit.y, hoverHit.z, tools.objectYaw,
+    );
+  } else {
+    ghost.hide();
+  }
 }
 
 function applyStroke(hit: { x: number; z: number }, dt: number): void {
@@ -223,19 +320,32 @@ function applyStroke(hit: { x: number; z: number }, dt: number): void {
   }
 }
 
+/** The object the tool state currently describes, at (x, z).
+ *
+ *  `length` is written only for kinds that have a run: a rock carrying a
+ *  meaningless length would still change the document's revision hash, and
+ *  a ramp *without* one silently fell back to rampTransform's 3 m default —
+ *  which is why editor-placed ramps ignored the length you dialled in. */
+function placedFromTools(x: number, z: number): Omit<Maps.PlacedObject, 'id'> {
+  const info = Physics.objectInfo(tools.objectKind);
+  return {
+    kind: tools.objectKind,
+    x,
+    z,
+    size: tools.objectSize,
+    height: tools.objectHeight,
+    yaw: tools.objectYaw,
+    ...(info.dims.length !== undefined ? { length: tools.objectLength } : {}),
+  };
+}
+
 function applyClick(hit: { x: number; z: number }, e: PointerEvent): void {
   switch (tools.tool) {
     case 'object': {
-      session.addObject({
-        kind: tools.objectKind,
-        x: hit.x,
-        z: hit.z,
-        size: tools.objectSize,
-        height: tools.objectHeight,
-        yaw: Math.random() * Math.PI * 2,
-      });
+      session.addObject(placedFromTools(hit.x, hit.z));
       view.refreshObstacles(session.world.obstacles);
-      ui.status(`placed ${tools.objectKind}`);
+      ghost.invalidate();
+      ui.status(`placed ${Physics.objectInfo(tools.objectKind).label}`);
       break;
     }
     case 'spawn': {
@@ -273,6 +383,12 @@ window.addEventListener('keydown', (e) => {
     setTool(bound.tool);
     return;
   }
+  if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
+    tools.objectYaw = stepYaw(tools.objectYaw, e.code === 'BracketRight' ? 1 : -1);
+    ui.syncObject();
+    gizmosDirty = true;
+    return;
+  }
   if (e.code === 'KeyZ' && !e.ctrlKey && !e.metaKey) { applyHistory(session.undo(), 'undo'); return; }
   if (e.code === 'KeyY') { applyHistory(session.redo(), 'redo'); return; }
   if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
@@ -283,6 +399,11 @@ window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') {
     e.preventDefault();
     saveJson();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyP') {
+    e.preventDefault();
+    previewInGame();
     return;
   }
   camera.onKey(e.code, true);
@@ -314,6 +435,20 @@ function frame(): void {
   const dt = Math.min(0.1, (now - lastFrameMs) / 1000);
   lastFrameMs = now;
   camera.update(dt);
+
+  // A camera that moved puts different ground under a stationary cursor, so
+  // the gizmos have to be re-seated even when no pointer event arrived.
+  const cam = camera.camera;
+  if (!cam.position.equals(lastCamPos) || !cam.quaternion.equals(lastCamQuat)) {
+    lastCamPos.copy(cam.position);
+    lastCamQuat.copy(cam.quaternion);
+    gizmosDirty = true;
+  }
+  if (gizmosDirty) {
+    updateGizmos();
+    gizmosDirty = false;
+  }
+
   if (painting && hoverHit) applyStroke(hoverHit, dt);
   view.render(camera.camera);
   requestAnimationFrame(frame);
@@ -327,6 +462,7 @@ if (import.meta.env.DEV) {
     doc: () => currentDoc(),
     tools,
     setTool,
+    ghost,
     view,
     camera,
     THREE,

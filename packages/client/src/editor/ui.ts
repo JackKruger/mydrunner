@@ -1,12 +1,15 @@
 // The editor's side panel. A view over ToolState plus the file actions.
 //
-// Built imperatively, like the rest of the client's DOM (joinScreen,
-// chat, debugPanel) — there is no framework here and adding one for one
-// panel would be the largest dependency in the app.
+// The DOM vocabulary it is built from lives in dom.ts; this file is only
+// the layout and the bindings.
 
 import { Physics } from '@mydrunner/shared';
 import {
-  OBJECT_KINDS, TOOL_KEYS, paintableSurfaces, type ToolId, type ToolState,
+  button, caption, checkbox, el, section, select, slider, textField,
+  type SelectHandle, type SliderHandle,
+} from './dom.js';
+import {
+  TOOL_KEYS, paintableSurfaces, placeableKinds, type ToolId, type ToolState,
 } from './tools.js';
 
 export interface UiCallbacks {
@@ -15,11 +18,16 @@ export interface UiCallbacks {
   onOpenFile(file: File): void;
   onSaveJson(): void;
   onCopyModule(): void;
+  onPreview(): void;
   onBakeChange(bake: boolean): void;
   onUndo(): void;
   onRedo(): void;
   onNameChange(name: string): void;
   onIdChange(id: string): void;
+  /** The kind changed: the caller reseeds the dimension defaults and
+   *  rebuilds the placement ghost. The panel does not do it itself because
+   *  the same reseed happens from the keyboard. */
+  onObjectKindChange(kind: Physics.ObstacleKind): void;
 }
 
 export class EditorUi {
@@ -27,16 +35,22 @@ export class EditorUi {
   private toolButtons = new Map<ToolId, HTMLButtonElement>();
   private statusEl: HTMLElement;
   private fileInput: HTMLInputElement;
+  private idInput: HTMLInputElement;
+  private nameInput: HTMLInputElement;
+  private kindSelect: SelectHandle;
+  private sizeSlider: SliderHandle;
+  private heightSlider: SliderHandle;
+  private lengthSlider: SliderHandle;
+  private yawSlider: SliderHandle;
+  private dimsCaption: { set(t: string): void };
 
   constructor(parent: HTMLElement, private state: ToolState, private cb: UiCallbacks) {
     this.root = el('div', 'ed-panel');
 
     // --- Identity ---
     const idRow = section(this.root, 'Map');
-    const idInput = textField(idRow, 'id', '', (v) => this.cb.onIdChange(v));
-    const nameInput = textField(idRow, 'name', '', (v) => this.cb.onNameChange(v));
-    this.idInput = idInput;
-    this.nameInput = nameInput;
+    this.idInput = textField(idRow, 'id', '', (v) => this.cb.onIdChange(v));
+    this.nameInput = textField(idRow, 'name', '', (v) => this.cb.onNameChange(v));
 
     // --- Tools ---
     const tools = section(this.root, 'Tool');
@@ -69,15 +83,25 @@ export class EditorUi {
 
     // --- Objects ---
     const objects = section(this.root, 'Object');
-    select(
+    this.kindSelect = select(
       objects,
       'kind',
-      OBJECT_KINDS.map((k) => ({ value: k, label: k })),
+      placeableKinds().map((g) => ({
+        label: g.label,
+        options: g.kinds.map((k) => ({ value: k, label: Physics.objectInfo(k).label })),
+      })),
       state.objectKind,
-      (v) => { this.state.objectKind = v as Physics.ObstacleKind; },
+      (v) => this.cb.onObjectKindChange(v as Physics.ObstacleKind),
     );
-    slider(objects, 'size', 0.3, 8, 0.1, state.objectSize, (v) => { this.state.objectSize = v; });
-    slider(objects, 'height', 0.3, 20, 0.1, state.objectHeight, (v) => { this.state.objectHeight = v; });
+    this.sizeSlider = slider(objects, 'size', 0.3, 8, 0.1, state.objectSize,
+      (v) => { this.state.objectSize = v; });
+    this.heightSlider = slider(objects, 'height', 0.3, 20, 0.1, state.objectHeight,
+      (v) => { this.state.objectHeight = v; });
+    this.lengthSlider = slider(objects, 'length', 1, 12, 0.1, state.objectLength,
+      (v) => { this.state.objectLength = v; });
+    this.yawSlider = slider(objects, 'yaw', -Math.PI, Math.PI, 0.02, state.objectYaw,
+      (v) => { this.state.objectYaw = v; });
+    this.dimsCaption = caption(objects);
 
     // --- Spawn ---
     const spawn = section(this.root, 'Spawn');
@@ -92,6 +116,12 @@ export class EditorUi {
     row.appendChild(button('Save .json', () => this.cb.onSaveJson()));
     row.appendChild(button('Copy .ts', () => this.cb.onCopyModule()));
     checkbox(file, 'bake on save', false, (v) => this.cb.onBakeChange(v));
+
+    const previewRow = el('div', 'ed-row');
+    file.appendChild(previewRow);
+    const previewBtn = button('▶ Preview in game', () => this.cb.onPreview());
+    previewBtn.className = 'ed-primary';
+    previewRow.appendChild(previewBtn);
 
     const undoRow = el('div', 'ed-row');
     file.appendChild(undoRow);
@@ -115,10 +145,8 @@ export class EditorUi {
 
     parent.appendChild(this.root);
     this.syncTool();
+    this.syncObject();
   }
-
-  private idInput: HTMLInputElement;
-  private nameInput: HTMLInputElement;
 
   setIdentity(id: string, name: string): void {
     this.idInput.value = id;
@@ -131,120 +159,37 @@ export class EditorUi {
     }
   }
 
+  /** Push the object state back into the panel: after a kind change, and
+   *  after the wheel or the bracket keys move the yaw. */
+  syncObject(): void {
+    const info = Physics.objectInfo(this.state.objectKind);
+    this.kindSelect.set(this.state.objectKind);
+    this.sizeSlider.retarget({
+      label: info.dims.size, min: info.limits.size[0], max: info.limits.size[1],
+    });
+    this.sizeSlider.set(this.state.objectSize);
+    this.heightSlider.retarget({
+      label: info.dims.height, min: info.limits.height[0], max: info.limits.height[1],
+    });
+    this.heightSlider.set(this.state.objectHeight);
+
+    // A kind with no run hides the slider outright rather than showing a
+    // control that changes nothing — the editor's own version of not
+    // shipping a TUNING field that no physics code reads.
+    const hasLength = info.dims.length !== undefined;
+    this.lengthSlider.setVisible(hasLength);
+    if (hasLength && info.limits.length) {
+      this.lengthSlider.retarget({
+        label: info.dims.length!, min: info.limits.length[0], max: info.limits.length[1],
+      });
+      this.lengthSlider.set(this.state.objectLength);
+    }
+    this.yawSlider.set(this.state.objectYaw);
+    this.dimsCaption.set('wheel or [ ] to aim');
+  }
+
   status(text: string, kind: 'info' | 'error' = 'info'): void {
     this.statusEl.textContent = text;
     this.statusEl.classList.toggle('error', kind === 'error');
   }
-}
-
-// --- Small DOM helpers ------------------------------------------------
-
-function el(tag: string, cls: string): HTMLElement {
-  const e = document.createElement(tag);
-  e.className = cls;
-  return e;
-}
-
-function section(parent: HTMLElement, title: string): HTMLElement {
-  const s = el('div', 'ed-section');
-  const h = el('h2', 'ed-title');
-  h.textContent = title;
-  s.appendChild(h);
-  parent.appendChild(s);
-  return s;
-}
-
-function button(label: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.textContent = label;
-  b.addEventListener('click', onClick);
-  return b;
-}
-
-function slider(
-  parent: HTMLElement,
-  label: string,
-  min: number,
-  max: number,
-  step: number,
-  value: number,
-  onInput: (v: number) => void,
-): void {
-  const row = el('label', 'ed-field');
-  const name = el('span', 'ed-label');
-  const readout = el('span', 'ed-value');
-  const input = document.createElement('input');
-  input.type = 'range';
-  input.min = String(min);
-  input.max = String(max);
-  input.step = String(step);
-  input.value = String(value);
-  const show = (): void => { readout.textContent = Number(input.value).toFixed(2); };
-  show();
-  name.textContent = label;
-  input.addEventListener('input', () => {
-    onInput(Number(input.value));
-    show();
-  });
-  row.append(name, input, readout);
-  parent.appendChild(row);
-}
-
-function select(
-  parent: HTMLElement,
-  label: string,
-  options: Array<{ value: string; label: string }>,
-  value: string,
-  onChange: (v: string) => void,
-): void {
-  const row = el('label', 'ed-field');
-  const name = el('span', 'ed-label');
-  name.textContent = label;
-  const sel = document.createElement('select');
-  for (const o of options) {
-    const opt = document.createElement('option');
-    opt.value = o.value;
-    opt.textContent = o.label;
-    sel.appendChild(opt);
-  }
-  sel.value = value;
-  sel.addEventListener('change', () => onChange(sel.value));
-  row.append(name, sel);
-  parent.appendChild(row);
-}
-
-function textField(
-  parent: HTMLElement,
-  label: string,
-  value: string,
-  onChange: (v: string) => void,
-): HTMLInputElement {
-  const row = el('label', 'ed-field');
-  const name = el('span', 'ed-label');
-  name.textContent = label;
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.value = value;
-  input.addEventListener('change', () => onChange(input.value));
-  row.append(name, input);
-  parent.appendChild(row);
-  return input;
-}
-
-function checkbox(
-  parent: HTMLElement,
-  label: string,
-  value: boolean,
-  onChange: (v: boolean) => void,
-): void {
-  const row = el('label', 'ed-field');
-  const name = el('span', 'ed-label');
-  name.textContent = label;
-  const input = document.createElement('input');
-  input.type = 'checkbox';
-  input.checked = value;
-  input.addEventListener('change', () => onChange(input.checked));
-  row.append(name, input);
-  parent.appendChild(row);
 }

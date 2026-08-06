@@ -51,6 +51,8 @@ export class EditSession {
   }, MAX_HISTORY);
   private strokeOpen = false;
   private objectSeq = 0;
+  /** Held between previewId() and the addObject() that consumes it. */
+  private pendingId: string | null = null;
 
   private constructor(doc: Maps.MapDoc, world: Maps.MapWorld, base: Physics.TerrainData) {
     this.world = world;
@@ -173,11 +175,25 @@ export class EditSession {
     return rect.rows > 0 ? rect : null;
   }
 
+  /** The id the next addObject() will use.
+   *
+   *  Minted up front and held, so the placement ghost can be built with the
+   *  same id the placed object will carry. Obstacle appearance is hashed
+   *  from the id — rock colour, squash, canopy layer count — so a ghost
+   *  built with a throwaway id previews a visibly different rock from the
+   *  one that lands, which is exactly the lookalike the ghost exists to
+   *  avoid. */
+  previewId(): string {
+    this.pendingId ??= `a${this.objectSeq++}-${Date.now().toString(36)}`;
+    return this.pendingId;
+  }
+
   /** Place an object. Y is resolved from the live ground at save/compose
    *  time, so only x/z are stored here. */
   addObject(o: Omit<Maps.PlacedObject, 'id'>): Maps.PlacedObject {
     this.pushUndo();
-    const placed: Maps.PlacedObject = { ...o, id: `a${this.objectSeq++}-${Date.now().toString(36)}` };
+    const placed: Maps.PlacedObject = { ...o, id: this.previewId() };
+    this.pendingId = null;
     this.added.push(placed);
     this.rebuildObjects();
     return placed;

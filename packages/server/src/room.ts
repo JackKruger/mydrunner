@@ -139,45 +139,14 @@ export class Room {
 
   /** Where the next joiner starts.
    *
-   *  An authored map's spawn points win when it has any; the road grid
-   *  below is the fallback, and is what the procedural map (which
-   *  authors no spawns) still uses. Slots cycle the authored list, so a
-   *  map with one spawn point stacks players on it — that is the
-   *  author's call to fix by placing more, not something to second-guess
-   *  by scattering trucks somewhere they did not choose.
-   *
-   *  Y always sits at the kind's suspension equilibrium
-   *  (spawnYAboveGround) so there is no free-fall or settle bounce. */
+   *  The rule itself lives in Maps.resolveSpawn, shared with the editor's
+   *  offline preview so the two cannot drift. Only slot allocation is
+   *  Room's — the map has no idea who is already parked where. */
   private nextSpawn(
     kind: CarKind,
   ): { position: { x: number; y: number; z: number }; yaw: number; slot: number } {
     const slot = this.takeSpawnSlot();
-    const authored = this.map.spawns;
-    const { x, z, yaw } = authored.length > 0
-      ? authored[slot % authored.length]!
-      : this.gridSpawn(slot);
-    const idx = Physics.worldToTerrainIndex(this.world.terrain, x, z);
-    const ground = idx >= 0 ? (this.world.terrain.heights[idx] ?? 0) : 0;
-    return { position: { x, y: ground + Physics.spawnYAboveGround(kind), z }, yaw, slot };
-  }
-
-  /** The default: a grid at the start of the road (the -X end of the
-   *  world), facing along +X so pressing W drives toward the petrol
-   *  station and then the mountain. */
-  private gridSpawn(slot: number): { x: number; z: number; yaw: number } {
-    const col = slot % 8;
-    const row = Math.floor(slot / 8);
-    const startX = -this.world.terrain.size / 2 + 24; // 24m in from the world edge
-    // 5m spacing between slots: trucks are 3.8m long, so anything tighter
-    // means two players in adjacent slots spawn overlapping each other,
-    // which can push one through the heightfield and trip the off-map
-    // ejector. 5m gives about 1m of clearance.
-    return {
-      x: startX + col * 5,
-      z: TERRAIN.roadZ + (row === 0 ? -1.2 : 1.2), // two lanes on the main road
-      // yaw = pi/2 rotates local +Z (vehicle forward) to world +X.
-      yaw: Math.PI / 2,
-    };
+    return { ...Maps.resolveSpawn(this.map, slot, kind), slot };
   }
 
   /** Lowest slot in the spawn grid not held by a live player.
@@ -456,8 +425,7 @@ export class Room {
 
 const CHAT_MIN_INTERVAL_MS = 800;
 
-/** 8 columns x 2 road lanes. */
-const SPAWN_SLOTS = 16;
+const SPAWN_SLOTS = Maps.SPAWN_SLOTS;
 
 const TARGET_TICK_MS = 1000 / TICK_RATE;
 const PERF_WINDOW_MS = 5000;

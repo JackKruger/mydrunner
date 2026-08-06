@@ -35,6 +35,11 @@
       }
       button:hover { background: #232a34; }
       button.active { background: #2d5c8a; border-color: #4a86c4; color: #fff; }
+      button.ed-primary {
+        flex: 1; background: #1f6b45; border-color: #2f9160; color: #eafff2;
+        font-weight: 600;
+      }
+      button.ed-primary:hover { background: #268053; }
       .ed-field {
         display: grid; grid-template-columns: 62px 1fr auto;
         align-items: center; gap: 6px; margin-bottom: 4px;
@@ -54,6 +59,9 @@
         color: #93a3b3; line-height: 1.4; word-break: break-word;
       }
       .ed-status.error { color: #ff9a8a; }
+      .ed-caption { color: #6f7d8c; font-size: 10px; margin-top: 2px; }
+      optgroup { color: #7d8a99; font-style: normal; }
+      optgroup option { color: #cdd6e0; }
 
       #help {
         position: fixed; bottom: 8px; left: 8px; padding: 6px 10px;

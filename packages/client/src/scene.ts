@@ -29,6 +29,14 @@ interface SnapshotEntry {
   snap: WorldSnapshot;
 }
 
+/** The local truck's pose as the prediction sim last reported it. */
+interface LocalOverride {
+  pos: { x: number; y: number; z: number };
+  rot: { x: number; y: number; z: number; w: number };
+  wheels: { steer: number; spin: number; suspensionLength: number }[];
+  axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }];
+}
+
 interface VehicleVisual {
   group: THREE.Group;
   wheels: THREE.Object3D[];
@@ -285,12 +293,7 @@ export class Scene {
    *  set, render() skips snapshot interp/extrapolation for the local
    *  truck and uses these values directly. Reset on disconnect by
    *  passing null. */
-  private _localOverride: {
-    pos: { x: number; y: number; z: number };
-    rot: { x: number; y: number; z: number; w: number };
-    wheels: { steer: number; spin: number; suspensionLength: number }[];
-    axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }];
-  } | null = null;
+  private _localOverride: LocalOverride | null = null;
   setLocalVehiclePose(
     pos: { x: number; y: number; z: number },
     rot: { x: number; y: number; z: number; w: number },
@@ -347,6 +350,45 @@ export class Scene {
       // small-angle visual stable - rollAngle is the dominant DOF.
       v.axles[i]!.rotation.set(0, 0, ax.rollAngle);
     }
+  }
+
+  /** Pose the local truck from the prediction override.
+   *
+   *  Shared by the snapshot path, where it overwrites the interpolated
+   *  pose, and the preview path, where it is the only pose there is.
+   *  Extracted rather than copied: two versions of this would drift, and
+   *  the drift would show up as the preview handling differently from the
+   *  game it is previewing. */
+  private applyLocalOverride(vis: VehicleVisual, ov: LocalOverride): void {
+    vis.group.position.set(ov.pos.x, ov.pos.y, ov.pos.z);
+    vis.group.quaternion.set(ov.rot.x, ov.rot.y, ov.rot.z, ov.rot.w);
+    this._qa.set(ov.rot.x, ov.rot.y, ov.rot.z, ov.rot.w);
+    this.poseAxles(vis, ov.axles);
+    for (let i = 0; i < 4; i++) {
+      const wheel = vis.wheels[i]!;
+      const ws = ov.wheels[i];
+      // Front wheels take the most recent input steer so the player gets
+      // immediate visual feedback; rears come from the sim.
+      const steer = i < 2 ? this._localInputSteer : (ws ? ws.steer : 0);
+      wheel.rotation.set(ws ? ws.spin : 0, -steer, 0);
+    }
+    this._localAxlesLast[0]!.rideY = ov.axles[0].rideY;
+    this._localAxlesLast[0]!.rollAngle = ov.axles[0].rollAngle;
+    this._localAxlesLast[1]!.rideY = ov.axles[1].rideY;
+    this._localAxlesLast[1]!.rollAngle = ov.axles[1].rollAngle;
+  }
+
+  /** Point the camera at whatever pose was just written, and publish the
+   *  read-only accessors the HUD, debug panel and e2e suite consume. */
+  private finishLocal(vis: VehicleVisual): void {
+    this.cam.follow(
+      vis.group.position,
+      { x: this._qa.x, y: this._qa.y, z: this._qa.z, w: this._qa.w },
+    );
+    this._localPos.x = vis.group.position.x;
+    this._localPos.y = vis.group.position.y;
+    this._localPos.z = vis.group.position.z;
+    this._localHasState = true;
   }
 
   render(nowMs: number): void {
@@ -439,21 +481,7 @@ export class Scene {
           // arrives).
           const ov = this._localOverride;
           if (ov) {
-            vis.group.position.set(ov.pos.x, ov.pos.y, ov.pos.z);
-            vis.group.quaternion.set(ov.rot.x, ov.rot.y, ov.rot.z, ov.rot.w);
-            this._qa.set(ov.rot.x, ov.rot.y, ov.rot.z, ov.rot.w);
-            this.poseAxles(vis, ov.axles);
-            for (let i = 0; i < 4; i++) {
-              const wheel = vis.wheels[i]!;
-              const ws = ov.wheels[i];
-              const useInputSteer = i < 2;
-              const steer = useInputSteer ? this._localInputSteer : (ws ? ws.steer : 0);
-              wheel.rotation.set(ws ? ws.spin : 0, -steer, 0);
-            }
-            this._localAxlesLast[0]!.rideY = ov.axles[0].rideY;
-            this._localAxlesLast[0]!.rollAngle = ov.axles[0].rollAngle;
-            this._localAxlesLast[1]!.rideY = ov.axles[1].rideY;
-            this._localAxlesLast[1]!.rollAngle = ov.axles[1].rollAngle;
+            this.applyLocalOverride(vis, ov);
           } else {
             // Fall back to extrapolation from the latest snapshot.
             const latest = this.buffer[this.buffer.length - 1]!;
@@ -482,14 +510,22 @@ export class Scene {
             this._localAxlesLast[1]!.rideY = this._axleBuf[1]!.rideY;
             this._localAxlesLast[1]!.rollAngle = this._axleBuf[1]!.rollAngle;
           }
-          this.cam.follow(vis.group.position, { x: this._qa.x, y: this._qa.y, z: this._qa.z, w: this._qa.w });
-          this._localPos.x = vis.group.position.x;
-          this._localPos.y = vis.group.position.y;
-          this._localPos.z = vis.group.position.z;
           this._localSteer = pa.vehicle.wheels[0]?.steer ?? 0;
-          this._localHasState = true;
+          this.finishLocal(vis);
         }
       }
+    } else if (this.localId && this._localOverride) {
+      // No snapshot stream at all — the offline preview, driving the local
+      // Rapier sim with no server. Same visual, same pose code, same
+      // camera; only where the pose came from differs. Without this branch
+      // nothing is ever drawn: ensureVehicle and cam.follow used to be
+      // reachable only by iterating a snapshot's player list.
+      const ov = this._localOverride;
+      const vis = this.ensureVehicle(this.localId, true, this.localCarKind);
+      present.add(this.localId);
+      this.applyLocalOverride(vis, ov);
+      this._localSteer = ov.wheels[0]?.steer ?? 0;
+      this.finishLocal(vis);
     }
 
     // Camera follows local vehicle in the chosen mode, unless a debug
@@ -504,7 +540,10 @@ export class Scene {
       this.camera.lookAt(this._reviewCamLook!.x, this._reviewCamLook!.y, this._reviewCamLook!.z);
     }
 
-    if (pair) this.removeMissing(present);
+    // `present` holds only the local truck in preview mode and there is
+    // never anything else to remove — but gating on `pair` alone would be a
+    // trap for whoever adds a second vehicle to an offline mode later.
+    if (pair || present.size > 0) this.removeMissing(present);
 
     // Mud splatter: for each visible vehicle, look at the latest snapshot
     // pair to estimate per-wheel spin rate. If a wheel is spinning faster

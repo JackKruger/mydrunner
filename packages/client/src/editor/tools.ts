@@ -18,6 +18,14 @@ export interface ToolState {
   objectKind: Physics.ObstacleKind;
   objectSize: number;
   objectHeight: number;
+  /** Run along the object's local +X. Only written into the document for
+   *  kinds that use it — but held for every kind so switching back and
+   *  forth doesn't lose the value you dialled in. */
+  objectLength: number;
+  /** Facing of the next object placed, in radians. Objects used to get
+   *  `Math.random()` at placement time, which made the ghost a lie: you
+   *  aimed one thing and got another. */
+  objectYaw: number;
   /** Facing written onto the next spawn point placed, in radians. */
   spawnYaw: number;
 }
@@ -33,8 +41,10 @@ export function defaultToolState(): ToolState {
     hardness: 0.35,
     surface: Physics.Surface.Dirt,
     objectKind: 'rock',
-    objectSize: 1.6,
-    objectHeight: 2,
+    objectSize: Physics.objectInfo('rock').defaults.size,
+    objectHeight: Physics.objectInfo('rock').defaults.height,
+    objectLength: 3,
+    objectYaw: 0,
     // pi/2 matches Room's road-grid spawn: local +Z rotated onto world +X.
     spawnYaw: Math.PI / 2,
   };
@@ -73,6 +83,33 @@ export function paintableSurfaces(): Array<{ id: Physics.Surface; label: string 
     .sort((a, b) => a.id - b.id);
 }
 
-export const OBJECT_KINDS: readonly Physics.ObstacleKind[] = [
-  'rock', 'tree', 'pine', 'ramp', 'flagpole',
-];
+/** Kinds offered by the object tool, grouped for the palette.
+ *
+ *  Derived from OBJECT_INFO for the same reason paintableSurfaces derives
+ *  from SURFACE_INFO: the hand-written copy that used to live here was one
+ *  of three, and the compiler checked none of them. */
+export function placeableKinds(): ReturnType<typeof Physics.objectKindsByGroup> {
+  return Physics.objectKindsByGroup();
+}
+
+/** Seed the size/height/length sliders from the kind's own defaults.
+ *
+ *  Replaces a single global 1.6 / 2 that sized every kind alike — which
+ *  made placing a flagpole produce a 1.6 m-radius pole. */
+export function applyKindDefaults(state: ToolState, kind: Physics.ObstacleKind): void {
+  const info = Physics.objectInfo(kind);
+  state.objectKind = kind;
+  state.objectSize = info.defaults.size;
+  state.objectHeight = info.defaults.height;
+  state.objectLength = info.defaults.length ?? info.limits.length?.[0] ?? 3;
+}
+
+/** Radians per `[` / `]` press or wheel notch. */
+export const OBJECT_YAW_STEP = Math.PI / 12;
+
+export function stepYaw(yaw: number, dir: number): number {
+  const next = yaw + dir * OBJECT_YAW_STEP;
+  // Wrapped to the slider's own range so the panel readout and the ghost
+  // never disagree about which way round the object is pointing.
+  return Math.atan2(Math.sin(next), Math.cos(next));
+}

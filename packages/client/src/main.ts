@@ -8,7 +8,9 @@
 // responds within one tick; each snapshot nudges it toward the server
 // pose instead of snap-and-replay reconciliation.
 
-import { Maps, Physics, FIXED_DT, normalizeCarKind, type PlayerId } from '@mydrunner/shared';
+import {
+  Maps, Physics, FIXED_DT, normalizeCarKind, type CarKind, type PlayerId,
+} from '@mydrunner/shared';
 
 import { EngineAudio } from './engineAudio.js';
 import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './joinScreen.js';
@@ -21,6 +23,7 @@ import { resolveHandshakeMap } from './mapLoad.js';
 import { NetClient } from './net.js';
 import { Scene } from './scene.js';
 import { Prediction } from './prediction.js';
+import { readPreview } from './previewHandoff.js';
 
 function getServerUrl(): string {
   const explicit = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -157,125 +160,58 @@ let lastGear = 0;
 let lastFrameTimeMs = performance.now();
 let mapWorld: Maps.MapWorld | null = null;
 let prediction: Prediction | null = null;
+/** Driving a map handed over by the editor, with no server and no socket.
+ *  Set before any NetClient exists, and never unset. */
+let previewMode = false;
+let previewMapName = '';
 
-async function start(): Promise<void> {
-  // Rapier WASM init - needed before the prediction sim's World can be
-  // constructed (and by terrain generation helpers in the shared package).
-  await Physics.initRapier();
+// Input loop is a fixed-step accumulator at the same 60 Hz cadence the
+// server consumes. The accumulator is decoupled from the render rate so
+// that a 30 FPS client still sends 60 inputs per second (the server would
+// otherwise see a halved input rate and the truck would feel sluggish on
+// weak hardware).
+let inputAcc = 0;
+/** Last sampled steer (-1..1) cached across render frames. Drives the local
+ *  truck's front-wheel mesh visual override. */
+let lastInputSteer = 0;
+const HARD_STEP_CAP = 12; // catastrophic-stall safety net
 
-  // Show the name + car picker on every load so the player can pick a
-  // different rig if they want; previous name + car are pre-filled from
-  // localStorage so the common case is one Enter to drive. URL param
-  // ?auto=1 skips the picker entirely (used by e2e tests).
-  const params = new URLSearchParams(location.search);
-  const auto = params.get('auto') === '1';
-  const saved = loadSavedJoin();
-  let choice: JoinChoice;
-  if (auto) {
-    const carParam = params.get('car');
-    choice = {
-      name: params.get('name') || saved?.name || `player-${Math.floor(Math.random() * 1000)}`,
-      carKind: carParam ? normalizeCarKind(carParam) : (saved?.carKind ?? 'patrol'),
-    };
-  } else {
-    choice = await showJoinScreen(saved ?? {});
-    saveJoin(choice);
+let fps = 0;
+let frameCount = 0;
+let lastFpsUpdate = performance.now();
+
+/** Compose a map, install it everywhere, and build the local sim.
+ *
+ *  One function for both ways in — the welcome handshake and the offline
+ *  preview. It used to live inside the onWelcome closure, which is why
+ *  there was no way to enter a world without a server telling you to. */
+function enterWorld(
+  doc: Maps.MapDoc,
+  spawn: { position: { x: number; y: number; z: number }; yaw?: number },
+  carKind: CarKind,
+  id: PlayerId,
+): void {
+  localId = id;
+  scene.setLocalPlayer(id, carKind);
+  // Compose the map ONCE and share it everywhere it's needed: the terrain
+  // mesh, obstacles, landmarks, the surface-name HUD lookup, and the
+  // prediction sim. It used to be regenerated five times from the same seed
+  // at every (re)connect.
+  mapWorld = Maps.applyMapDoc(doc);
+  scene.setWorld(mapWorld);
+  // Build the local sim. Same map + spawn as the server when there is one,
+  // so the local Rapier world integrates against an identical heightmap and
+  // obstacle set and starts at the same pose.
+  prediction?.dispose();
+  prediction = new Prediction(mapWorld, spawn, carKind);
+  if (import.meta.env.DEV) {
+    (window as unknown as { __prediction: unknown }).__prediction = prediction;
   }
+}
 
-  // Debug panel: only for the player named "jack" (case-insensitive).
-  // Lets them twist physics tunables in flight and copy the result to
-  // clipboard so the values can be baked as new defaults.
-  isDebug = isDebugUser(choice.name);
-  if (isDebug) initDebugPanel();
-
-  // Auto-reconnect with exponential backoff. The welcome handshake
-  // rebuilds everything session-scoped (id, terrain, prediction world),
-  // so reconnecting is just "connect again": the server treats us as a
-  // fresh player. Backoff resets once a connection sticks.
-  let reconnectDelayMs = 1000;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const net = new NetClient(getServerUrl(), choice.name, choice.carKind, {
-    onOpen() {
-      connected = true;
-      reconnectDelayMs = 1000;
-      chat.pushSystem('connected — press T to chat');
-    },
-    onWelcome(id, _serverTimeMs, map, spawn) {
-      // The server names a map; this build supplies it. A map it does not
-      // have, or has at a different revision, means the two bundles
-      // disagree about the ground — refuse rather than drive on it.
-      const resolved = resolveHandshakeMap(map);
-      if (!resolved.ok) {
-        net.abort(resolved.reason);
-        return;
-      }
-      localId = id;
-      scene.setLocalPlayer(id, choice.carKind);
-      // Compose the map ONCE per welcome and share it everywhere it's
-      // needed: the terrain mesh, obstacles, landmarks, the surface-name
-      // HUD lookup, and the prediction sim. It used to be regenerated
-      // five times from the same seed at every (re)connect.
-      mapWorld = Maps.applyMapDoc(resolved.doc);
-      scene.setWorld(mapWorld);
-      // Build the local prediction world. Same map + spawn as the server,
-      // so the local Rapier sim is integrating against an identical
-      // heightmap and obstacle set, and starts at the same pose.
-      prediction?.dispose();
-      prediction = new Prediction(mapWorld, spawn, choice.carKind);
-      if (import.meta.env.DEV) {
-        (window as unknown as { __prediction: unknown }).__prediction = prediction;
-      }
-    },
-    onSnapshot(snap, recvAtMs) {
-      lastSnapTick = snap.tick;
-      scene.pushSnapshot(snap, recvAtMs);
-      netDiagOnSnapshot(recvAtMs);
-      // Soft-correct the local sim toward the server's authoritative
-      // pose. Cheap (~0.2 ms), no replay, no queue.
-      if (prediction && localId) prediction.applyServerSnapshot(snap, localId);
-      if (localId) {
-        const me = snap.players.find((p) => p.id === localId);
-        if (me) {
-          const lv = me.vehicle.linVel;
-          lastSpeed = Math.hypot(lv.x, lv.z);
-          lastRpm = me.vehicle.rpm;
-          lastGear = me.vehicle.gear;
-          engineAudio.set(me.vehicle.rpm, me.vehicle.throttle);
-        }
-      }
-    },
-    onChat(from, fromName, text) {
-      chat.push(fromName, text, from === localId);
-    },
-    onClose(reason, fatal) {
-      connected = false;
-      // A fatal close is one retrying cannot fix (protocol-version
-      // mismatch). Leave the reason on screen instead of burying it under
-      // a retry countdown that would never succeed.
-      if (fatal) {
-        if (reconnectTimer !== null) {
-          clearTimeout(reconnectTimer);
-          reconnectTimer = null;
-        }
-        hud.textContent = reason;
-        chat.pushSystem(reason);
-        return;
-      }
-      if (reconnectTimer !== null) return; // attempt already queued
-      const delayS = (reconnectDelayMs / 1000).toFixed(0);
-      hud.textContent = `disconnected: ${reason} — reconnecting in ${delayS}s`;
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        hud.textContent = 'reconnecting…';
-        net.connect();
-      }, reconnectDelayMs);
-      reconnectDelayMs = Math.min(15_000, reconnectDelayMs * 2);
-    },
-  });
-  currentNet = net;
-  net.connect();
-
+/** Camera cycling and pointer-drag orbit. Wanted by both the online path
+ *  and the preview, so it does not live inside either. */
+function wireCameraControls(): void {
   // Camera-cycle hotkey (C) or on-screen "cam" button. Edge-triggered.
   let cPrev = false;
   window.addEventListener('keydown', (e) => {
@@ -326,6 +262,182 @@ async function start(): Promise<void> {
   };
   canvas.addEventListener('pointerup', endDrag);
   canvas.addEventListener('pointercancel', endDrag);
+}
+
+/** Drive the map the editor stashed, offline.
+ *
+ *  No socket, no join screen, no chat: those are all wired inside the
+ *  online path, so preview mode gets none of them without a single
+ *  suppression check. The truck is the existing Prediction sim, which was
+ *  always a complete standalone Rapier world — only applyServerSnapshot
+ *  ever touched the network, and nothing calls it here. */
+function startPreview(params: URLSearchParams, savedCar: CarKind | undefined): void {
+  const payload = readPreview();
+  if (!payload) {
+    hud.textContent = 'no preview map in this tab — open one from the editor';
+    return;
+  }
+  previewMode = true;
+  previewMapName = payload.doc.name || payload.doc.id;
+  const carParam = params.get('car');
+  const carKind = carParam ? normalizeCarKind(carParam) : (savedCar ?? payload.carKind);
+
+  // Composed once here purely to resolve the spawn, then again inside
+  // enterWorld. The alternative is threading a half-built world through,
+  // which costs more clarity than the ~50 ms buys back on a page that has
+  // just loaded a WASM blob.
+  const world = Maps.applyMapDoc(payload.doc);
+  const spawn = Maps.resolveSpawn(world, 0, carKind);
+  enterWorld(payload.doc, spawn, carKind, 'preview');
+
+  installPreviewControls(spawn, carKind);
+  wireCameraControls();
+  requestAnimationFrame(frame);
+}
+
+/** Esc closes the tab; Shift+R re-seats the truck upright where it stands.
+ *
+ *  Plain R already respawns at the start via the reset button, which is
+ *  useless when the thing you are testing is 300 m out and you have just
+ *  rolled onto the roof beside it. */
+function installPreviewControls(spawn: Maps.SpawnPose, carKind: CarKind): void {
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Escape') {
+      // Valid because the editor opened this tab with window.open.
+      window.close();
+      hud.textContent = 'close this tab to return to the editor';
+      return;
+    }
+    if (e.code === 'KeyR' && e.shiftKey && prediction) {
+      e.preventDefault();
+      const p = scene.localPosition();
+      if (!p || !mapWorld) {
+        prediction.resetTo(spawn);
+        return;
+      }
+      const idx = Physics.worldToTerrainIndex(mapWorld.terrain, p.x, p.z);
+      const ground = idx >= 0 ? (mapWorld.terrain.heights[idx] ?? 0) : 0;
+      prediction.resetTo({
+        position: { x: p.x, y: ground + Physics.spawnYAboveGround(carKind), z: p.z },
+        yaw: spawn.yaw,
+      });
+    }
+  });
+}
+
+async function start(): Promise<void> {
+  // Rapier WASM init - needed before the prediction sim's World can be
+  // constructed (and by terrain generation helpers in the shared package).
+  await Physics.initRapier();
+
+  // Show the name + car picker on every load so the player can pick a
+  // different rig if they want; previous name + car are pre-filled from
+  // localStorage so the common case is one Enter to drive. URL param
+  // ?auto=1 skips the picker entirely (used by e2e tests).
+  const params = new URLSearchParams(location.search);
+  const saved = loadSavedJoin();
+
+  // Previewing a map the editor handed over. Checked before the join
+  // screen and before any NetClient exists: there is no server in this
+  // mode, so there is nothing to join and no name to pick.
+  if (params.get('preview') === '1') {
+    startPreview(params, saved?.carKind);
+    return;
+  }
+
+  const auto = params.get('auto') === '1';
+  let choice: JoinChoice;
+  if (auto) {
+    const carParam = params.get('car');
+    choice = {
+      name: params.get('name') || saved?.name || `player-${Math.floor(Math.random() * 1000)}`,
+      carKind: carParam ? normalizeCarKind(carParam) : (saved?.carKind ?? 'patrol'),
+    };
+  } else {
+    choice = await showJoinScreen(saved ?? {});
+    saveJoin(choice);
+  }
+
+  // Debug panel: only for the player named "jack" (case-insensitive).
+  // Lets them twist physics tunables in flight and copy the result to
+  // clipboard so the values can be baked as new defaults.
+  isDebug = isDebugUser(choice.name);
+  if (isDebug) initDebugPanel();
+
+  // Auto-reconnect with exponential backoff. The welcome handshake
+  // rebuilds everything session-scoped (id, terrain, prediction world),
+  // so reconnecting is just "connect again": the server treats us as a
+  // fresh player. Backoff resets once a connection sticks.
+  let reconnectDelayMs = 1000;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const net = new NetClient(getServerUrl(), choice.name, choice.carKind, {
+    onOpen() {
+      connected = true;
+      reconnectDelayMs = 1000;
+      chat.pushSystem('connected — press T to chat');
+    },
+    onWelcome(id, _serverTimeMs, map, spawn) {
+      // The server names a map; this build supplies it. A map it does not
+      // have, or has at a different revision, means the two bundles
+      // disagree about the ground — refuse rather than drive on it.
+      const resolved = resolveHandshakeMap(map);
+      if (!resolved.ok) {
+        net.abort(resolved.reason);
+        return;
+      }
+      enterWorld(resolved.doc, spawn, choice.carKind, id);
+    },
+    onSnapshot(snap, recvAtMs) {
+      lastSnapTick = snap.tick;
+      scene.pushSnapshot(snap, recvAtMs);
+      netDiagOnSnapshot(recvAtMs);
+      // Soft-correct the local sim toward the server's authoritative
+      // pose. Cheap (~0.2 ms), no replay, no queue.
+      if (prediction && localId) prediction.applyServerSnapshot(snap, localId);
+      if (localId) {
+        const me = snap.players.find((p) => p.id === localId);
+        if (me) {
+          const lv = me.vehicle.linVel;
+          lastSpeed = Math.hypot(lv.x, lv.z);
+          lastRpm = me.vehicle.rpm;
+          lastGear = me.vehicle.gear;
+          engineAudio.set(me.vehicle.rpm, me.vehicle.throttle);
+        }
+      }
+    },
+    onChat(from, fromName, text) {
+      chat.push(fromName, text, from === localId);
+    },
+    onClose(reason, fatal) {
+      connected = false;
+      // A fatal close is one retrying cannot fix (protocol-version
+      // mismatch). Leave the reason on screen instead of burying it under
+      // a retry countdown that would never succeed.
+      if (fatal) {
+        if (reconnectTimer !== null) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        hud.textContent = reason;
+        chat.pushSystem(reason);
+        return;
+      }
+      if (reconnectTimer !== null) return; // attempt already queued
+      const delayS = (reconnectDelayMs / 1000).toFixed(0);
+      hud.textContent = `disconnected: ${reason} — reconnecting in ${delayS}s`;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        hud.textContent = 'reconnecting…';
+        net.connect();
+      }, reconnectDelayMs);
+      reconnectDelayMs = Math.min(15_000, reconnectDelayMs * 2);
+    },
+  });
+  currentNet = net;
+  net.connect();
+
+  wireCameraControls();
 
   // T opens the chat input. The chat module's own keydown handler
   // catches Enter / Escape to submit / cancel. Mobile users use the
@@ -339,89 +451,94 @@ async function start(): Promise<void> {
   });
   onTouchEdge('chat', () => chat.open());
 
-  // Input loop is a fixed-step accumulator at the same 60 Hz cadence the
-  // server consumes. The accumulator is decoupled from the render rate so
-  // that a 30 FPS client still sends 60 inputs per second (the server
-  // would otherwise see a halved input rate and the truck would feel
-  // sluggish on weak hardware).
-  let inputAcc = 0;
-  // Last sampled steer (-1..1) cached across render frames. Drives
-  // the local truck's front-wheel mesh visual override; updated every
-  // time the input loop samples and consumes a new PlayerInput.
-  let lastInputSteer = 0;
-  const HARD_STEP_CAP = 12; // catastrophic-stall safety net
-
-  let fps = 0;
-  let frameCount = 0;
-  let lastFpsUpdate = performance.now();
-
-  // Render loop.
-  function frame(): void {
-    const now = performance.now();
-    const frameDt = Math.min(0.25, (now - lastFrameTimeMs) / 1000);
-    lastFrameTimeMs = now;
-
-    frameCount++;
-    if (now - lastFpsUpdate >= 1000) {
-      fps = frameCount;
-      frameCount = 0;
-      lastFpsUpdate = now;
-    }
-
-    if (connected) {
-      inputAcc += frameDt;
-      let steps = 0;
-      while (inputAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
-        const input = sampleInput();
-        net.sendInput(input);
-        // Step the local prediction sim with the same input. Local body
-        // responds within 1 tick (~16 ms) - the basis of the perceived
-        // responsiveness improvement.
-        if (prediction) prediction.step(input);
-        lastInputSteer = input.steer;
-        inputAcc -= FIXED_DT;
-        steps += 1;
-      }
-      if (steps >= HARD_STEP_CAP) inputAcc = 0;
-      scene.setLocalInputSteer(lastInputSteer);
-    }
-    // Push the predicted local state into the scene each frame so it
-    // overrides the snapshot interp/extrapolation for the local truck.
-    if (prediction) {
-      const ps = prediction.state();
-      scene.setLocalVehiclePose(ps.position, ps.rotation, ps.wheels, ps.axles);
-      updateAxleDebug(ps.axles[0], ps.axles[1]);
-    }
-
-    const renderStart = performance.now();
-    scene.render(now);
-    const renderMs = performance.now() - renderStart;
-
-    const frameTotalMs = performance.now() - now;
-    frameDiag.frames += 1;
-    frameDiag.totalMsSum += frameTotalMs;
-    if (frameTotalMs > frameDiag.totalMsMax) frameDiag.totalMsMax = frameTotalMs;
-    frameDiag.renderMsSum += renderMs;
-    if (renderMs > frameDiag.renderMsMax) frameDiag.renderMsMax = renderMs;
-
-    if (connected) {
-      const kmh = (lastSpeed * 3.6).toFixed(0);
-      let surfaceLabel = '';
-      const lp = scene.localPosition();
-      if (mapWorld && lp) {
-        const s = Physics.sampleSurface(mapWorld.terrain, lp.x, lp.z);
-        surfaceLabel = ` · ${Physics.surfaceInfo(s).label}`;
-      }
-      const gearLabel = lastGear === -1 ? 'R' : lastGear === 0 ? 'N' : String(lastGear);
-      const fpsLabel = ` · ${fps} FPS`;
-      const hbLabel = isHandbrakeOn() || getTouchState().handbrake ? ' · HANDBRAKE' : '';
-      hud.textContent =
-        `connected · tick=${lastSnapTick} · ${kmh} km/h · ` +
-        `${lastRpm.toFixed(0)} RPM · gear ${gearLabel}${surfaceLabel}${hbLabel}${fpsLabel}`;
-    }
-    requestAnimationFrame(frame);
-  }
   requestAnimationFrame(frame);
+}
+
+// Render loop. Module scope rather than closed over a NetClient, because
+// the preview path never builds one.
+function frame(): void {
+  const now = performance.now();
+  const frameDt = Math.min(0.25, (now - lastFrameTimeMs) / 1000);
+  lastFrameTimeMs = now;
+
+  frameCount++;
+  if (now - lastFpsUpdate >= 1000) {
+    fps = frameCount;
+    frameCount = 0;
+    lastFpsUpdate = now;
+  }
+
+  // Preview drives the same accumulator with no socket on the other end:
+  // sendInput is a no-op and prediction.step IS the simulation rather than
+  // a guess at one.
+  if (connected || previewMode) {
+    inputAcc += frameDt;
+    let steps = 0;
+    while (inputAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
+      const input = sampleInput();
+      currentNet?.sendInput(input);
+      // Step the local prediction sim with the same input. Local body
+      // responds within 1 tick (~16 ms) - the basis of the perceived
+      // responsiveness improvement.
+      if (prediction) prediction.step(input);
+      lastInputSteer = input.steer;
+      inputAcc -= FIXED_DT;
+      steps += 1;
+    }
+    if (steps >= HARD_STEP_CAP) inputAcc = 0;
+    scene.setLocalInputSteer(lastInputSteer);
+  }
+  // Push the predicted local state into the scene each frame so it
+  // overrides the snapshot interp/extrapolation for the local truck.
+  if (prediction) {
+    const ps = prediction.state();
+    scene.setLocalVehiclePose(ps.position, ps.rotation, ps.wheels, ps.axles);
+    updateAxleDebug(ps.axles[0], ps.axles[1]);
+  }
+
+  const renderStart = performance.now();
+  scene.render(now);
+  const renderMs = performance.now() - renderStart;
+
+  const frameTotalMs = performance.now() - now;
+  frameDiag.frames += 1;
+  frameDiag.totalMsSum += frameTotalMs;
+  if (frameTotalMs > frameDiag.totalMsMax) frameDiag.totalMsMax = frameTotalMs;
+  frameDiag.renderMsSum += renderMs;
+  if (renderMs > frameDiag.renderMsMax) frameDiag.renderMsMax = renderMs;
+
+  if (connected || previewMode) updateHud();
+  requestAnimationFrame(frame);
+}
+
+function surfaceLabel(): string {
+  const lp = scene.localPosition();
+  if (!mapWorld || !lp) return '';
+  const s = Physics.sampleSurface(mapWorld.terrain, lp.x, lp.z);
+  return ` · ${Physics.surfaceInfo(s).label}`;
+}
+
+function updateHud(): void {
+  const hbLabel = isHandbrakeOn() || getTouchState().handbrake ? ' · HANDBRAKE' : '';
+  const fpsLabel = ` · ${fps} FPS`;
+  if (previewMode) {
+    // Telemetry comes off the local sim: there are no snapshots to read it
+    // from, and the values the online HUD shows arrive in those.
+    const t = prediction?.telemetry();
+    const kmh = ((t?.speed ?? 0) * 3.6).toFixed(0);
+    const gear = t?.gear ?? 0;
+    const gearLabel = gear === -1 ? 'R' : gear === 0 ? 'N' : String(gear);
+    hud.textContent =
+      `PREVIEW · ${previewMapName} · ${kmh} km/h · ` +
+      `${(t?.rpm ?? 0).toFixed(0)} RPM · gear ${gearLabel}` +
+      `${surfaceLabel()}${hbLabel}${fpsLabel}`;
+    return;
+  }
+  const kmh = (lastSpeed * 3.6).toFixed(0);
+  const gearLabel = lastGear === -1 ? 'R' : lastGear === 0 ? 'N' : String(lastGear);
+  hud.textContent =
+    `connected · tick=${lastSnapTick} · ${kmh} km/h · ` +
+    `${lastRpm.toFixed(0)} RPM · gear ${gearLabel}${surfaceLabel()}${hbLabel}${fpsLabel}`;
 }
 
 start().catch((err) => {

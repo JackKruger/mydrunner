@@ -108,6 +108,39 @@ export class Prediction {
     this.posOffset.z *= PREDICTION.visualOffsetDecay;
   }
 
+  /** Re-seat the local body.
+   *
+   *  Online this happens inside step() when the reset button is held, and
+   *  the server does the same thing on its own copy. Offline there is no
+   *  server, so the preview drives it directly — and it takes a pose so the
+   *  preview can also offer "put me upright right here", which is what you
+   *  want after flipping on the obstacle you are 300 m out testing. */
+  resetTo(spawn: { position: { x: number; y: number; z: number }; yaw: number }): void {
+    this.vehicle.resetTo(spawn);
+    this.posOffset.x = 0; this.posOffset.y = 0; this.posOffset.z = 0;
+  }
+
+  /** Where this sim thinks it spawned. The preview's reset button needs it
+   *  and has no welcome message to have learned it from. */
+  get spawnPose(): { position: { x: number; y: number; z: number }; yaw: number } {
+    return this.spawn;
+  }
+
+  /** Speed, revs and gear straight off the local vehicle.
+   *
+   *  The online HUD reads these out of the snapshot stream; a preview has
+   *  no snapshots, and this is cheaper than widening PredictionState with
+   *  fields the render path does not want. */
+  telemetry(): { speed: number; rpm: number; gear: number; throttle: number } {
+    const s = this.vehicle.getState();
+    return {
+      speed: Math.hypot(s.linVel.x, s.linVel.z),
+      rpm: s.rpm,
+      gear: s.gear,
+      throttle: s.throttle,
+    };
+  }
+
   /** Apply a server snapshot as a soft correction. Never replays inputs;
    *  never snaps the body unless the divergence is large enough that
    *  smoothing would be visibly wrong. */
