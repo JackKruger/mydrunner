@@ -72,8 +72,10 @@ jobs:
         uses: actions/deploy-pages@v5
         with:
           artifact_name: github-pages-${{ github.run_attempt }}
-          # Pages sat in `deployment_queued` for the full default 10 minutes
-          # on 2026-08-06 and the action aborted a build that was ready in
-          # 21 seconds. How long the queue takes is not ours to control; how
-          # long we wait for it is.
-          timeout: 1200000
+          # No `timeout:` here on purpose. 600000 ms is not just the default,
+          # it is the action's hard maximum - passing anything larger is
+          # silently clamped back down and only earns a warning in the log
+          # ("timeout value is greater than the allowed maximum"). So when
+          # Pages sits in `deployment_queued`, as it did repeatedly on
+          # 2026-08-06, waiting longer is not an available lever: the job
+          # will always give up at 10 minutes. Retry once the queue clears.
