@@ -16,6 +16,7 @@
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 import { TerrainMesh } from './terrain.js';
+import { WaterMesh } from './water.js';
 import { Obstacles } from './obstacles/index.js';
 import { LandmarkMeshes } from './landmarks.js';
 import { Sky } from './sky.js';
@@ -42,6 +43,7 @@ export class WorldView {
 
   private sky: Sky;
   private terrainMeshRef: TerrainMesh | null = null;
+  private waterMeshRef: WaterMesh | null = null;
   private terrainPlaceholder: THREE.Mesh | null = null;
   private obstacles: Obstacles | null = null;
   private landmarks: LandmarkMeshes | null = null;
@@ -101,6 +103,14 @@ export class WorldView {
     return this.terrainMeshRef;
   }
 
+  /** Null on a map with no water at all — the common case, and worth not
+   *  drawing a full-grid transparent plane for. The editor's water brush
+   *  writes through this, and calls refreshWater() when a dry map gains
+   *  its first cell of water. */
+  get waterMesh(): WaterMesh | null {
+    return this.waterMeshRef;
+  }
+
   /** Full teardown and rebuild of terrain, obstacles and landmarks. Safe
    *  to call repeatedly — the game calls it on every welcome (reconnects
    *  included), the editor whenever a change alters the whole world. */
@@ -118,8 +128,27 @@ export class WorldView {
     this.terrainMeshRef = new TerrainMesh(v.terrain);
     this.scene.add(this.terrainMeshRef.mesh);
 
+    this.refreshWater(v.terrain);
     this.refreshObstacles(v.obstacles);
     this.refreshLandmarks(v.landmarks);
+  }
+
+  /** Build, drop or rebuild the water surface for a terrain.
+   *
+   *  Separate from setWorld because the editor can turn a dry map wet (or
+   *  wet map dry) with one brush stroke, and that is the only case that
+   *  needs the mesh to appear or disappear — an ordinary stroke on an
+   *  already-wet map goes through WaterMesh.updateWater instead. */
+  refreshWater(terrain: Physics.TerrainData): void {
+    const wanted = Physics.hasWater(terrain);
+    if (this.waterMeshRef) {
+      this.scene.remove(this.waterMeshRef.mesh);
+      this.waterMeshRef.dispose();
+      this.waterMeshRef = null;
+    }
+    if (!wanted) return;
+    this.waterMeshRef = new WaterMesh(terrain);
+    this.scene.add(this.waterMeshRef.mesh);
   }
 
   /** Rebuild just the obstacle meshes — placing or deleting an object
@@ -171,6 +200,7 @@ export class WorldView {
    *  need the sky follow, so it belongs here rather than in each loop. */
   render(camera: THREE.Camera): void {
     this.sky.update(camera);
+    this.waterMeshRef?.update();
     this.renderer.render(this.scene, camera);
   }
 
@@ -179,6 +209,11 @@ export class WorldView {
       this.scene.remove(this.terrainMeshRef.mesh);
       this.terrainMeshRef.dispose();
       this.terrainMeshRef = null;
+    }
+    if (this.waterMeshRef) {
+      this.scene.remove(this.waterMeshRef.mesh);
+      this.waterMeshRef.dispose();
+      this.waterMeshRef = null;
     }
     if (this.obstacles) {
       this.scene.remove(this.obstacles.group);

@@ -1,0 +1,218 @@
+// GLSL for the water surface. Split from water.ts on the same principle
+// terrainShader.ts is split from terrain.ts: the mesh class stays about
+// geometry, this stays about shading.
+//
+// Two things here are gameplay, not decoration, and should survive any
+// restyling:
+//
+//   Depth tint. How dark the water reads IS the depth readout — it is
+//   what lets a player pick a line before committing to the crossing.
+//   A uniformly opaque surface would hide the one fact that matters.
+//
+//   Flow-scrolled ripples. The surface normal detail scrolls along the
+//   authored velocity field, so a river visibly moves and a pond visibly
+//   does not. Still water over a flowing river reads as a bug, and worse,
+//   it hides the current that is about to push the truck sideways.
+//
+// The lighting and fog constants are duplicated from worldView.ts for the
+// same reason terrainShader.ts duplicates them: this is a raw
+// ShaderMaterial, so scene lights never reach it. Retune one, retune all
+// three or the river will light differently from the bank it sits in.
+
+import * as THREE from 'three';
+import { Physics } from '@mydrunner/shared';
+
+const VERT = /* glsl */ `
+attribute float aWet;
+attribute float aDepth;
+varying vec3 vWorldPos;
+varying float vWet;
+varying float vDepth;
+
+void main() {
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorldPos = wp.xyz;
+  vWet = aWet;
+  vDepth = aDepth;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+
+const FRAG = /* glsl */ `
+precision highp float;
+varying vec3 vWorldPos;
+varying float vWet;
+varying float vDepth;
+
+uniform vec3 uSunDir;
+uniform vec3 uSunColor;
+uniform vec3 uAmbient;
+uniform vec3 uFogColor;
+uniform float uFogNear;
+uniform float uFogFar;
+uniform float uTime;
+uniform sampler2D uFlowMap;
+uniform float uTerrainSize;
+uniform vec3 uShallowColor;
+uniform vec3 uDeepColor;
+uniform float uDeepAt;
+uniform float uFoamDepth;
+
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float vnoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+float fbm(vec2 p) {
+  float v = 0.0;
+  float a = 0.5;
+  for (int i = 0; i < 3; i++) {
+    v += a * vnoise(p);
+    p *= 2.07;
+    a *= 0.5;
+  }
+  return v;
+}
+
+void main() {
+  // Dry vertices are collapsed onto the bed and flagged; discarding is
+  // what lets one full-grid mesh serve a map with a thin river on it.
+  if (vWet < 0.5) discard;
+
+  vec2 uv = vWorldPos.xz / uTerrainSize + 0.5;
+  // Flow is stored signed in [-1, 1] scaled into a byte pair.
+  vec2 flow = texture2D(uFlowMap, uv).rg * 2.0 - 1.0;
+
+  // Ripples advect along the flow. Two layers at different rates and
+  // scales so the motion does not read as one sliding texture.
+  vec2 p = vWorldPos.xz;
+  vec2 drift = flow * uTime;
+  float r1 = fbm(p * 0.9 - drift * 1.6);
+  float r2 = fbm(p * 2.7 - drift * 3.1 + 17.0);
+  float ripple = r1 * 0.65 + r2 * 0.35;
+
+  // Perturbed normal from the ripple field, tilted mostly upward.
+  float e = 0.35;
+  float rx = fbm((p + vec2(e, 0.0)) * 0.9 - drift * 1.6) - r1;
+  float rz = fbm((p + vec2(0.0, e)) * 0.9 - drift * 1.6) - r1;
+  vec3 n = normalize(vec3(-rx * 3.0, 1.0, -rz * 3.0));
+
+  // Depth tint: this is the readout the player steers by.
+  float t = clamp(vDepth / uDeepAt, 0.0, 1.0);
+  vec3 base = mix(uShallowColor, uDeepColor, t);
+
+  // Shallow water is see-through, deep water is not.
+  float alpha = mix(0.42, 0.93, t);
+
+  // Sun glitter. Sharp, so the surface reads as wet rather than painted.
+  vec3 viewDir = normalize(cameraPosition - vWorldPos);
+  vec3 h = normalize(normalize(uSunDir) + viewDir);
+  float spec = pow(max(dot(n, h), 0.0), 90.0);
+
+  // Foam at the waterline. Draws the shore, and marks the shallow edge
+  // that is safe to enter.
+  float foam = smoothstep(uFoamDepth, 0.0, vDepth) * (0.55 + 0.45 * ripple);
+  base = mix(base, vec3(0.92, 0.95, 0.97), foam * 0.75);
+  alpha = mix(alpha, 0.85, foam * 0.7);
+
+  float diff = max(dot(n, normalize(uSunDir)), 0.0);
+  vec3 lit = base * (uAmbient + uSunColor * (0.35 + 0.65 * diff));
+  lit += uSunColor * spec * 0.9;
+  // A touch of the ripple in the albedo so flow is legible even in flat
+  // light, where the specular alone would not show it.
+  lit += (ripple - 0.5) * 0.06;
+
+  float dist = length(vWorldPos - cameraPosition);
+  float fogFactor = clamp((dist - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);
+  vec3 final = mix(lit, uFogColor, fogFactor);
+
+  gl_FragColor = vec4(final, alpha);
+}
+`;
+
+/** Depth at which the tint reaches uDeepColor, m. Chosen against the
+ *  wading depths in vehicleGeom: by the time water reads fully "deep" it
+ *  is already over every kind's air intake. */
+const DEEP_AT = 1.4;
+
+/** Depth below which the foam band draws, m. */
+const FOAM_DEPTH = 0.22;
+
+export function makeWaterMaterial(terrain: Physics.TerrainData): THREE.ShaderMaterial {
+  const n = terrain.resolution;
+  const flowData = new Uint8Array(n * n * 4);
+  packFlow(terrain, flowData, { r0: 0, c0: 0, rows: n, cols: n });
+  const flowMap = new THREE.DataTexture(flowData, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
+  // Linear, unlike the surface map: flow is a continuous field and
+  // nearest sampling would make the ripples visibly step at cell edges.
+  flowMap.magFilter = THREE.LinearFilter;
+  flowMap.minFilter = THREE.LinearFilter;
+  flowMap.needsUpdate = true;
+
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uSunDir: { value: new THREE.Vector3(50, 80, 30).normalize() },
+      uSunColor: { value: new THREE.Color(0xfff4dd).multiplyScalar(1.4) },
+      uAmbient: { value: new THREE.Color(0xd6e2ec).multiplyScalar(0.45) },
+      uFogColor: { value: new THREE.Color(0xd6e2ec) },
+      uFogNear: { value: 180 },
+      uFogFar: { value: 480 },
+      uTime: { value: 0 },
+      uFlowMap: { value: flowMap },
+      uTerrainSize: { value: terrain.size },
+      uShallowColor: { value: new THREE.Color(0x6f8f7a) },
+      uDeepColor: { value: new THREE.Color(0x12333c) },
+      uDeepAt: { value: DEEP_AT },
+      uFoamDepth: { value: FOAM_DEPTH },
+    },
+    vertexShader: VERT,
+    fragmentShader: FRAG,
+    transparent: true,
+    // Water must not occlude what is under it in the depth buffer, or the
+    // bed it is meant to be see-through to stops drawing.
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+}
+
+/** Pack the flow field into RG, signed range mapped to [0, 255].
+ *
+ *  FLOW_RANGE bounds what a byte can express. Anything faster than this
+ *  clamps visually while still being fully simulated — the physics reads
+ *  the float field, this texture only drives ripple advection. */
+const FLOW_RANGE = 4;
+
+export function packFlow(
+  terrain: Physics.TerrainData,
+  out: Uint8Array,
+  rect: Physics.GridRect,
+): void {
+  const n = terrain.resolution;
+  const r1 = Math.min(n, rect.r0 + rect.rows);
+  const c1 = Math.min(n, rect.c0 + rect.cols);
+  for (let r = Math.max(0, rect.r0); r < r1; r++) {
+    for (let c = Math.max(0, rect.c0); c < c1; c++) {
+      const i = r * n + c;
+      const fx = (terrain.waterFlowX[i] ?? 0) / FLOW_RANGE;
+      const fz = (terrain.waterFlowZ[i] ?? 0) / FLOW_RANGE;
+      out[i * 4] = Math.round((Math.max(-1, Math.min(1, fx)) * 0.5 + 0.5) * 255);
+      out[i * 4 + 1] = Math.round((Math.max(-1, Math.min(1, fz)) * 0.5 + 0.5) * 255);
+    }
+  }
+}
+
+/** The flow texture is only reachable through the uniform; both the
+ *  editor's repaint path and dispose() need it. */
+export function flowTextureOf(mat: THREE.ShaderMaterial): THREE.DataTexture | undefined {
+  return mat.uniforms.uFlowMap?.value as THREE.DataTexture | undefined;
+}

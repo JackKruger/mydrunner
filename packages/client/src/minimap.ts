@@ -80,10 +80,24 @@ export class Minimap {
         const h = t.heights[i] ?? 0;
         const hw = t.heights[r * n + Math.max(0, c - 1)] ?? h;
         const shade = Math.max(0.55, Math.min(1.45, 1 + (h - hw) * 0.35));
+        let red = cr * shade;
+        let green = cg * shade;
+        let blue = cb * shade;
+        // Water blends over the bed rather than replacing it, so a
+        // shallow ford still reads as the gravel it is and only the deep
+        // channel goes solid blue. Same information the shader's depth
+        // tint gives in the world, at map scale.
+        const level = t.waterLevel[i] ?? Physics.WATER_NONE;
+        if (Physics.isWet(level) && level > h) {
+          const mix = Math.min(0.85, 0.3 + (level - h) * 0.45);
+          red += (34 - red) * mix;
+          green += (78 - green) * mix;
+          blue += (104 - blue) * mix;
+        }
         const o = i * 4;
-        img.data[o] = Math.min(255, cr * shade);
-        img.data[o + 1] = Math.min(255, cg * shade);
-        img.data[o + 2] = Math.min(255, cb * shade);
+        img.data[o] = Math.min(255, red);
+        img.data[o + 1] = Math.min(255, green);
+        img.data[o + 2] = Math.min(255, blue);
         img.data[o + 3] = 255;
       }
     }
