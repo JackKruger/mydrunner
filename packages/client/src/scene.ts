@@ -16,7 +16,7 @@ import {
 import { RENDER_DELAY_MS } from './net.js';
 import { buildCarMesh, colorHash } from './carMesh.js';
 import { createNameplate, disposeNameplate } from './nameplate.js';
-import { ParticleSystem } from './particles.js';
+import { VehicleEffects } from './vehicleEffects.js';
 import { ChaseCamera } from './camera.js';
 import { Minimap, type MinimapPlayer } from './minimap.js';
 import { WorldView } from './worldView.js';
@@ -71,10 +71,9 @@ export class Scene {
   private vehicles = new Map<PlayerId, VehicleVisual>();
   private localId: PlayerId | null = null;
   private localCarKind: CarKind = DEFAULT_CAR_KIND;
-  private particles: ParticleSystem;
+  private effects: VehicleEffects;
   private minimap = new Minimap();
   private lastFrameTimeMs = 0;
-  private _lastParticleSnapMs = 0;
   private _minimapBuf: MinimapPlayer[] = [];
   // Pre-allocated render-loop scratch buffers — avoids per-frame GC pressure.
   private _aMap = new Map<PlayerId, PlayerSnapshot>();
@@ -110,8 +109,8 @@ export class Scene {
     this.cam = new ChaseCamera(window.innerWidth / window.innerHeight);
     this.camera = this.cam.camera;
 
-    this.particles = new ParticleSystem();
-    this.scene.add(this.particles.group);
+    this.effects = new VehicleEffects();
+    this.scene.add(this.effects.group);
 
     window.addEventListener('resize', () => {
       this.cam.setAspect(window.innerWidth / window.innerHeight);
@@ -145,6 +144,7 @@ export class Scene {
       landmarks: map.landmarks,
     });
     this.minimap.setTerrain(terrain);
+    this.effects.setTerrain(terrain);
     this.cam.setTerrain({ heightAt: (x, z) => this.view.heightAt(x, z) });
   }
 
@@ -329,7 +329,10 @@ export class Scene {
     for (let i = 0; i < 2; i++) {
       const ag = i === 0 ? geom.front : geom.rear;
       const ax = axles[i]!;
-      const sink = this.axleSinkAt(v.group, { centerLocalY: ag.centerLocalY, centerLocalZ: ag.centerLocalZ });
+      const sink = this.effects.axleSink(v.group, {
+        centerLocalY: ag.centerLocalY,
+        centerLocalZ: ag.centerLocalZ,
+      });
       const springExt = ag.suspensionRestLength - ax.rideY;
       v.axles[i]!.position.set(
         0,
@@ -564,19 +567,19 @@ export class Scene {
     // trap for whoever adds a second vehicle to an offline mode later.
     if (pair || present.size > 0) this.removeMissing(present);
 
-    // Mud splatter: for each visible vehicle, look at the latest snapshot
-    // pair to estimate per-wheel spin rate. If a wheel is spinning faster
-    // than the chassis is moving and the surface beneath it is muddy,
-    // throw particles. Pure visual; no networking impact.
+    // Ground-response visuals (mud thrown by spinning wheels) read the
+    // poses just written above, so they show exactly what is on screen.
+    // VehicleEffects owns the snapshot-arrival gate.
     const frameDt = this.lastFrameTimeMs > 0 ? nowMs - this.lastFrameTimeMs : 16;
     this.lastFrameTimeMs = nowMs;
-    // Gate on snapshot arrival, not frame rate - otherwise a 120 Hz
-    // client would emit 4x the particles of a 30 Hz one.
-    if (pair && this.terrainData && pair.b.recvAtMs !== this._lastParticleSnapMs) {
-      this._lastParticleSnapMs = pair.b.recvAtMs;
-      this.spawnMudParticles(pair.b.snap);
+    if (pair) {
+      this.effects.spawnFromSnapshot(
+        pair.b.snap,
+        pair.b.recvAtMs,
+        (id) => this.vehicles.get(id)?.group ?? null,
+      );
     }
-    this.particles.update(frameDt);
+    this.effects.update(frameDt);
 
     // Minimap dots come from the posed visuals, so they show exactly what
     // the player sees (owner simulation locally, interpolation remotely).
@@ -601,69 +604,8 @@ export class Scene {
     this.view.render(this.camera);
   }
 
-  private spawnMudParticles(snap: WorldSnapshot): void {
-    const terrainData = this.terrainData!;
-    for (const p of snap.players) {
-      const vis = this.vehicles.get(p.id);
-      if (!vis) continue;
-      const wheelPositions = Physics.restWheelPositions(p.carKind);
-      // Vehicle ground speed (horizontal magnitude).
-      const groundSpeed = Math.hypot(p.vehicle.linVel.x, p.vehicle.linVel.z);
-      for (let i = 0; i < 4; i++) {
-        const wheelSnap = p.vehicle.wheels[i];
-        if (!wheelSnap || !wheelSnap.contact) continue;
-        // angVel is on the wire per wheel (rad/s); deriving a rate from
-        // consecutive spin values doesn't work because spin is wrapped
-        // mod 2pi for transport and aliases at speed.
-        const wheelLin = Math.abs(wheelSnap.angVel) * VEHICLE.wheelRadius;
-        if (wheelLin <= groundSpeed + 1.5) continue; // not really slipping
-        // World-space wheel contact point: rotate the local wheel position
-        // (lowered slightly so particles emit near the ground) by the
-        // chassis quaternion, then add the chassis world position.
-        const wp = wheelPositions[i]!;
-        const t = vis.group.position;
-        const q = vis.group.quaternion;
-        const local = { x: wp.x, y: wp.y - VEHICLE.wheelRadius * 0.6, z: wp.z };
-        const v = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
-        const wx = t.x + v.x;
-        const wy = t.y + v.y;
-        const wz = t.z + v.z;
-
-        const surf = Physics.sampleSurface(terrainData, wx, wz);
-        if (surf !== Physics.Surface.Mud && surf !== Physics.Surface.DeepMud) continue;
-        const color = surf === Physics.Surface.DeepMud ? 0x1a0d05 : 0x3a2618;
-        // Spawn intensity scales with how much faster the wheel is than the ground.
-        const excess = wheelLin - groundSpeed;
-        const count = Math.min(3, Math.max(1, Math.floor(excess / 4)));
-        for (let n = 0; n < count; n++) this.particles.emit(wx, wy, wz, color);
-      }
-    }
-  }
-
-  /** Compute how far below its physics-resolved position an axle visual
-   *  should drop because the ground beneath it is soft (mud). Both
-   *  wheels of a solid axle share the beam, so the sink applies to the
-   *  whole axle - one wheel digging in pulls its partner down too,
-   *  matching the rigid coupling. Pure visual; chassis still rides at
-   *  its physics-determined height. Returns 0 on road / dirt. */
-  private axleSinkAt(group: THREE.Group, anchor: { centerLocalY: number; centerLocalZ: number }): number {
-    if (!this.terrainData) return 0;
-    const q = group.quaternion;
-    // Sample at the axle centre - in chassis-local that's (0, anchor.centerLocalY, anchor.centerLocalZ).
-    const local = { x: 0, y: anchor.centerLocalY, z: anchor.centerLocalZ };
-    const w = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
-    const surf = Physics.sampleSurface(
-      this.terrainData,
-      group.position.x + w.x,
-      group.position.z + w.z,
-    );
-    if (surf === Physics.Surface.Mud) return VEHICLE.wheelRadius * 0.18;
-    if (surf === Physics.Surface.DeepMud) return VEHICLE.wheelRadius * 0.35;
-    return 0;
-  }
-
   /** The TerrainData the world was built from, or null before the
-   *  handshake. Surface lookups for particles and axle sink read it. */
+   *  handshake. */
   private get terrainData(): Physics.TerrainData | null {
     return this.view.terrainMesh?.terrain ?? null;
   }

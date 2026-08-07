@@ -20,9 +20,13 @@ export class ParticleSystem {
   private pool: Particle[] = [];
   private cursor = 0;
   private tmp = new THREE.Vector3();
+  // Held for dispose(): the geometry is shared by every particle, the
+  // materials are per-particle clones (emit() writes colour and opacity).
+  private readonly geo: THREE.SphereGeometry;
 
   constructor() {
     const geo = new THREE.SphereGeometry(0.07, 5, 4);
+    this.geo = geo;
     const mat = new THREE.MeshStandardMaterial({
       color: 0x3a2618,
       roughness: 0.95,
@@ -81,5 +85,17 @@ export class ParticleSystem {
       (p.mesh.material as THREE.MeshStandardMaterial).opacity = alpha;
       p.mesh.scale.setScalar(0.6 + alpha * 0.6);
     }
+  }
+
+  /** Free the pool. Three frees nothing on scene.remove(), and each
+   *  particle owns a cloned material, so the shared geometry alone is not
+   *  the whole leak. */
+  dispose(): void {
+    for (const p of this.pool) {
+      (p.mesh.material as THREE.Material).dispose();
+    }
+    this.geo.dispose();
+    this.group.clear();
+    this.pool.length = 0;
   }
 }
