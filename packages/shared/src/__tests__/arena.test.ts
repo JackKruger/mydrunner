@@ -72,7 +72,12 @@ function crossSlopeTerrain(slopeDeg: number, surface: Physics.Surface): Physics.
 }
 
 function makeWorld(terrain: Physics.TerrainData): { world: Physics.World; vehicle: Physics.VehicleLike } {
-  const world = new Physics.World({ terrain });
+  // This matrix measures tyres against slope + surface only. Leaving
+  // obstacles undefined asks World to generate the production scatter;
+  // that scatter depends on the painted surface (rocks are rejected on
+  // Road but accepted on Dirt/Mud), so the rows stop being comparable and
+  // the ledge crawler can spend seconds climbing a boulder mid-run.
+  const world = new Physics.World({ terrain, obstacles: [] });
   // Spawn yaw pi/2 = chassis-forward along +x. The terrain is built so
   // +x is the direction of interest (uphill for ramps, lateral for cross).
   const spawnY = Physics.sampleHeightBilinear(terrain, -30, 0) + 1.5;
@@ -214,15 +219,18 @@ describe('arena: hill climb', () => {
         `   ${r.rolledOver ? 'YES' : 'no'}`,
       );
     }
-    // Loose sanity: on flat road the truck should make at least 20 m
-    // forward progress in 8 s of throttle.
+    // Loose traction floors. Now that this fixture excludes generated
+    // boulders, these rows measure the actual tyre/surface model and will
+    // catch a real loss of dirt or mud hill-climb grip.
     const flatRoad = rows.find((r) => r.surface === 'Road' && r.slopeDeg === 0)!;
+    const dirt20 = rows.find((r) => r.surface === 'Dirt' && r.slopeDeg === 20)!;
+    const mud20 = rows.find((r) => r.surface === 'Mud' && r.slopeDeg === 20)!;
     expect(flatRoad.maxX).toBeGreaterThan(-10); // started at -30, gained > 20 m
+    expect(dirt20.maxX).toBeGreaterThan(20);
+    expect(mud20.maxX).toBeGreaterThan(10);
   // This is an 18-scenario diagnostic matrix (9,720 Rapier steps), not a
-  // latency contract. It takes ~8 s locally on its own, so the old 10 s
-  // ceiling was flaky when CI scheduled the other physics files beside
-  // it. Keep enough headroom for a slower/shared runner while leaving the
-  // actual vehicle-behaviour assertion above unchanged.
+  // latency contract. Keep enough headroom for a slower/shared runner while
+  // leaving the actual vehicle-behaviour assertions above unchanged.
   }, 30_000);
 });
 

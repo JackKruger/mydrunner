@@ -35,6 +35,9 @@ export interface WorldOptions {
    *  procedural world only. Kept for tests and fixtures. */
   terrain?: TerrainData;
   generate?: TerrainOptions;
+  /** Explicit procedural-world obstacle override. Tests use an empty list
+   *  when they need to isolate terrain behaviour from object collisions. */
+  obstacles?: Obstacle[];
 }
 
 export class World {
@@ -62,7 +65,7 @@ export class World {
     // Without a map the obstacles are deterministic from the terrain, so
     // every consumer reaches the same list from the seed alone. With one
     // they are whatever the author left, and only the document knows.
-    this.obstacles = opts.map?.obstacles ?? generateObstacles(this.terrain);
+    this.obstacles = opts.map?.obstacles ?? opts.obstacles ?? generateObstacles(this.terrain);
     this.obstacleBodies = spawnObstacleColliders(this.world, this.obstacles);
     this.landmarks = opts.map?.landmarks ?? landmarksFor(this.terrain);
     this.landmarkBodies = spawnLandmarkColliders(this.world, this.landmarks);
