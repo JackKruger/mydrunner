@@ -7,7 +7,7 @@
 // "Copy settings" serialises TUNING as a TypeScript snippet so the
 // values can be pasted into constants.ts as new defaults.
 
-import { AXLE, TUNING } from '@mydrunner/shared';
+import { AXLE, TUNING, WATER } from '@mydrunner/shared';
 
 interface Slider {
   label: string;
@@ -49,6 +49,12 @@ const SLIDERS: Slider[] = [
   { label: 'brakeForce', min: 500, max: 6000, step: 50, get: () => TUNING.brakeForce, set: (v) => (TUNING.brakeForce = v) },
   { label: 'maxSteer (rad)', min: 0.1, max: 0.8, step: 0.02, get: () => TUNING.maxSteer, set: (v) => (TUNING.maxSteer = v) },
   { label: 'steerSpeed', min: 0.5, max: 6, step: 0.1, get: () => TUNING.steerSpeed, set: (v) => (TUNING.steerSpeed = v) },
+  // Water. These three interact strongly - more buoyancy means less tyre
+  // load means the current carries you further - so a crossing gets tuned
+  // on all three at once, live, while driving it.
+  { label: 'waterBuoyancy×', min: 0, max: 2, step: 0.05, get: () => TUNING.waterBuoyancy, set: (v) => (TUNING.waterBuoyancy = v) },
+  { label: 'waterDrag×', min: 0, max: 3, step: 0.05, get: () => TUNING.waterDrag, set: (v) => (TUNING.waterDrag = v) },
+  { label: 'waterFlow×', min: 0, max: 3, step: 0.05, get: () => TUNING.waterFlowScale, set: (v) => (TUNING.waterFlowScale = v) },
 ];
 
 const STYLE = `
@@ -232,6 +238,10 @@ export const SURFACE_FRICTION = {
 //   steerSpeed: ${f(t.steerSpeed, 2)},
 //   frontGripMult: ${f(t.frontGripMult, 2)},
 //   rearGripMult: ${f(t.rearGripMult, 2)},
+// WATER.* multipliers - resolve against the WATER block before pasting:
+//   buoyancy x${f(t.waterBuoyancy, 2)}  (hullVolume ${f(WATER.hullVolume * t.waterBuoyancy, 2)})
+//   drag     x${f(t.waterDrag, 2)}  (long ${f(WATER.dragLong * t.waterDrag, 0)}, lat ${f(WATER.dragLat * t.waterDrag, 0)}, vert ${f(WATER.dragVert * t.waterDrag, 0)})
+//   flow     x${f(t.waterFlowScale, 2)}
 `;
 }
 

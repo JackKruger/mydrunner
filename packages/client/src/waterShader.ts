@@ -97,40 +97,54 @@ void main() {
   // scales so the motion does not read as one sliding texture.
   vec2 p = vWorldPos.xz;
   vec2 drift = flow * uTime;
-  float r1 = fbm(p * 0.9 - drift * 1.6);
-  float r2 = fbm(p * 2.7 - drift * 3.1 + 17.0);
-  float ripple = r1 * 0.65 + r2 * 0.35;
+  float r1 = fbm(p * 1.7 - drift * 1.6);
+  float r2 = fbm(p * 4.3 - drift * 3.1 + 17.0);
+  float ripple = r1 * 0.6 + r2 * 0.4;
 
   // Perturbed normal from the ripple field, tilted mostly upward.
-  float e = 0.35;
-  float rx = fbm((p + vec2(e, 0.0)) * 0.9 - drift * 1.6) - r1;
-  float rz = fbm((p + vec2(0.0, e)) * 0.9 - drift * 1.6) - r1;
-  vec3 n = normalize(vec3(-rx * 3.0, 1.0, -rz * 3.0));
+  //
+  // The gradient step and the amplitude are deliberately small. A wide
+  // step with a big amplitude tilts the normal by tens of degrees over
+  // metre-wide patches, and against a tight specular exponent that reads
+  // as white paint splattered across the river rather than as glitter.
+  // Fine, shallow ripples are what make a surface look wet.
+  float e = 0.12;
+  float rx = fbm((p + vec2(e, 0.0)) * 1.7 - drift * 1.6) - r1;
+  float rz = fbm((p + vec2(0.0, e)) * 1.7 - drift * 1.6) - r1;
+  vec3 n = normalize(vec3(-rx * 0.9, 1.0, -rz * 0.9));
 
   // Depth tint: this is the readout the player steers by.
   float t = clamp(vDepth / uDeepAt, 0.0, 1.0);
   vec3 base = mix(uShallowColor, uDeepColor, t);
 
   // Shallow water is see-through, deep water is not.
-  float alpha = mix(0.42, 0.93, t);
+  float alpha = mix(0.38, 0.9, t);
 
-  // Sun glitter. Sharp, so the surface reads as wet rather than painted.
+  // Sun glitter. Sharp and weak: a highlight on a moving surface, not a
+  // light source.
   vec3 viewDir = normalize(cameraPosition - vWorldPos);
   vec3 h = normalize(normalize(uSunDir) + viewDir);
-  float spec = pow(max(dot(n, h), 0.0), 90.0);
+  float spec = pow(max(dot(n, h), 0.0), 160.0);
+  // Fresnel: water is a mirror at grazing angles and nearly clear looking
+  // straight down. It is also what makes the far side of a river read as
+  // brighter than the water at your own bumper, which is the depth cue
+  // you actually steer by.
+  float fres = pow(1.0 - max(dot(viewDir, vec3(0.0, 1.0, 0.0)), 0.0), 4.0);
 
   // Foam at the waterline. Draws the shore, and marks the shallow edge
   // that is safe to enter.
   float foam = smoothstep(uFoamDepth, 0.0, vDepth) * (0.55 + 0.45 * ripple);
-  base = mix(base, vec3(0.92, 0.95, 0.97), foam * 0.75);
-  alpha = mix(alpha, 0.85, foam * 0.7);
+  base = mix(base, vec3(0.86, 0.90, 0.92), foam * 0.45);
+  alpha = mix(alpha, 0.9, foam * 0.5);
 
   float diff = max(dot(n, normalize(uSunDir)), 0.0);
   vec3 lit = base * (uAmbient + uSunColor * (0.35 + 0.65 * diff));
-  lit += uSunColor * spec * 0.9;
+  lit = mix(lit, uFogColor * 0.85, fres * 0.4);
+  lit += uSunColor * spec * 0.35;
   // A touch of the ripple in the albedo so flow is legible even in flat
   // light, where the specular alone would not show it.
-  lit += (ripple - 0.5) * 0.06;
+  lit += (ripple - 0.5) * 0.035;
+  alpha = clamp(alpha + fres * 0.25, 0.0, 1.0);
 
   float dist = length(vWorldPos - cameraPosition);
   float fogFactor = clamp((dist - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);

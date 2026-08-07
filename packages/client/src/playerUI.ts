@@ -119,6 +119,8 @@ export class PlayerUI {
         connecting…
       </div>
 
+      <div id="hud-engine-status" class="hud-engine-status instrument-panel" role="status" aria-live="assertive"></div>
+
       <section class="hud-cluster instrument-panel" aria-label="Vehicle telemetry">
         <div class="hud-speed">
           <span id="hud-speed-value" class="hud-speed-value">0</span>
@@ -138,7 +140,6 @@ export class PlayerUI {
           </div>
         </div>
         <div id="hud-handbrake" class="hud-handbrake" role="status" aria-live="polite"></div>
-        <div id="hud-engine-status" class="hud-handbrake" role="status" aria-live="polite"></div>
       </section>
 
       <section id="hud-diagnostics" class="hud-diagnostics instrument-panel" aria-label="Development diagnostics"${options.development ? '' : ' hidden'}>

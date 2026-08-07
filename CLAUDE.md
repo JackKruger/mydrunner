@@ -14,6 +14,8 @@ Vehicles are procedural Three.js silhouettes with per-kind physics geometry (`ve
 
 The owning client constructs the chosen kind in its local Rapier world. The server keeps the kind as relay metadata so every remote client builds the matching mesh and collision proxy.
 
+Water is the second real hazard after rollover. A truck in a river loses tyre grip, is pushed downstream by an authored current, gets light as buoyancy unloads the springs, and floods its engine if the air intake goes under — which is per-`CarKind`, so the Patrol's snorkel is a stat rather than a decoration. Deep enough and it floats free and is swept away, gradually swamps, and settles onto the bed.
+
 Rollover is intentionally a real risk on slopes and at-speed turns into ruts — it's tuned to be controllable on the road but punishing off it. There is also an incline-traction assist (`INCLINE_ASSIST_MAX`) so the truck can actually climb the rocky path up the mountain.
 
 ## Stack
@@ -59,6 +61,14 @@ Generate a fresh visual changelog:
 pnpm --filter @mydrunner/e2e exec playwright test tests/screenshot.spec.ts
 ```
 
+Re-cut the default map's river (after changing its centreline, depths or flow):
+
+```bash
+pnpm --filter @mydrunner/shared exec tsx scripts/carveRiver.ts
+```
+
+It rewrites `map/maps/defaultMap.ts` in place and is idempotent — it strips the previous run's channel before recutting, so running it twice produces the same file.
+
 This drives the car through a short scripted sequence and writes PNGs to `packages/e2e/screenshots/`. They are committed to the repo so each commit's screenshots reflect the game state at that point in history.
 
 Playwright browsers: in sandboxed environments without internet, the config auto-points at `/opt/pw-browsers` if it exists. Otherwise: `pnpm --filter @mydrunner/e2e exec playwright install chromium`.
@@ -103,8 +113,8 @@ Shared:
 - `packages/shared/src/physics/wheelContact.ts` — exact tyre-cylinder queries for sharp faces, reachable-top probing, corner contact frames, and the face-to-top climb direction used by the controlled-crawl path. Ordinary terrain support remains ray-based.
 - `packages/shared/src/physics/axle.ts` — kinematic axle state (rideY + rollAngle DOFs, articulation cap). Pure functions, no Rapier handles.
 - `packages/shared/src/physics/wheelDynamics.ts` — per-wheel angular-velocity integrator (drive/brake/ground/rolling torques on wheel inertia). Pure functions.
-- `packages/shared/src/physics/engine.ts` — engine + automatic gearbox: torque curve, RPM smoothing, chassis-speed-based shift logic (immune to wheel-slip gear hunting).
-- `packages/shared/src/physics/vehicleGeom.ts` — per-`CarKind` physics identity: axle placement, spring rates, mass/power multipliers, `spawnYAboveGround`, `restWheelPositions`.
+- `packages/shared/src/physics/engine.ts` — engine + automatic gearbox: torque curve, RPM smoothing, chassis-speed-based shift logic (immune to wheel-slip gear hunting), plus the flood/restart state machine (`stepEngineFlooding`). A drowned engine short-circuits `stepEngine` before the RPM floor and winds down to zero, which fades the audio and reads as 0 on the tacho with no wire change.
+- `packages/shared/src/physics/vehicleGeom.ts` — per-`CarKind` physics identity: axle placement, spring rates, mass/power multipliers, `airIntakeY` (chassis-local; what makes the Patrol's snorkel matter and the bike drown first), `spawnYAboveGround`, `restWheelPositions`.
 - `packages/shared/src/physics/tire.ts` — slip-curve helpers. Half-live: `slipAngle` + `lateralGripFromSlipAngle` feed the friction-circle model's lateral force; `gripFromSlip` / `slipRatio` and the `TIRE` slip constants are unused, kept as tested building blocks.
 - `packages/shared/src/physics/terrain.ts` — deterministic FBM-noise heightmap + Surface enum + `SURFACE_INFO` (the single label/friction-key/minimap-colour table; `surfaceInfo(id)` falls back to Dirt) + hill-climb trail layers. Rolling hills, one Gaussian mountain peak, scattered mud bogs, graded switchback trail. Multiple roads: main asphalt strip, north loop (dirt circuit), south bog trail, east gravel connector, plus the mountain-trail dirt connector.
 - `packages/shared/src/physics/objectCatalog.ts` — `OBJECT_INFO`: one source of truth for placeable object metadata and collider parts. Every owner client builds these independently, so collider-layout changes require a protocol bump to keep connected client builds compatible.
@@ -112,11 +122,12 @@ Shared:
 - `packages/shared/src/map/spawn.ts` — `gridSpawn` / `resolveSpawn`: where a player starts. Extracted from `Room` so the multiplayer relay and the editor's offline preview cannot answer differently. Slot *allocation* stays in `Room` — who is parked where is not the map's business.
 - `packages/shared/src/physics/landmarks.ts` — deterministic landmark spec (petrol station, flagpoles, summit lookout) + colliders.
 - `packages/shared/src/physics/ruts.ts` — `RutBuffer` accumulates per-cell erosion, capped at `RUT_MAX_DEPTH`. Only Mud / DeepMud cells erode. **Not wired into anything** — the wire message, `World.rebuildTerrain`, the client apply path and Room's flush loop were deleted; this class plus its unit test survive as the building block for a re-implementation. See the RUT_RATE comment in `constants.ts` for the two problems to solve first.
+- `packages/shared/src/physics/water.ts` — water sampling (`sampleWaterLevel` / `sampleWaterDepth` / `sampleWaterFlow` / `hasWater`) and the whole force model in `computeWaterLoad`. There is no water collider: buoyancy, drag and current are forces computed from the grids. Buoyancy is four corner forces rather than one resultant, so the righting moment falls out with no second torque term. Drag and current are **one equation** taken against velocity *relative to the water* — a parked truck is pushed, one drifting at the flow speed feels nothing, and the flow speed is a fixed point. Swamping is driven by hull submersion, **not** the air intake: they are different holes, and gating both on the intake let a floating Patrol (snorkel clear, as designed) drift forever.
 - `packages/shared/src/physics/util.ts` — small shared helpers (currently `rotateVecByQuat`).
 
 Map (`packages/shared/src/map/`) — the level format. The relay composes it for identity/spawns; the game client composes it for visuals and owner physics; the editor and tests use the same path.
 
-- `mapDoc.ts` — the `MapDoc` type: a procedural base (`{ seed, size, resolution }` plus the road / bog / pad data that used to be hardcoded) with a height delta, surface override, and object / spawn / marker lists layered on top. Delta form is what makes generator improvements flow into existing maps for free, and it is the format's one hazard — a delta only means anything against the base it was cut on. `decodeMapDoc` is a trust boundary in the same posture as `decodeClient`: documents come from files a user picked.
+- `mapDoc.ts` — the `MapDoc` type: a procedural base (`{ seed, size, resolution }` plus the road / bog / pad data that used to be hardcoded) with a height delta, surface override, a `water` block (level + flow grids), and object / spawn / marker lists layered on top. Water is **authored-only** — no generator layer makes any — which is what keeps it out of `baseChecksum`, out of the drift check and out of `bake`. Delta form is what makes generator improvements flow into existing maps for free, and it is the format's one hazard — a delta only means anything against the base it was cut on. `decodeMapDoc` is a trust boundary in the same posture as `decodeClient`: documents come from files a user picked.
 - `applyMapDoc.ts` — composes a document into a `MapWorld { terrain, obstacles, landmarks, spawns, markers }`. `applyMapDoc(proceduralDoc())` reproduces `generateTerrain()` byte for byte, which is what let the document path replace the old one without moving the map anyone drives on. Throws `BaseDriftError` when the generator has moved under a document's edits; the editor passes `onBaseDrift: 'ignore'` to open it anyway and offer a rebase or a bake.
 - `tileGrid.ts` — one sparse 16×16 tile codec for both grids. Only tiles differing from the default are stored, so a localised sculpt is ~10 KB rather than ~43 KB and its git diff is local to the edit.
 - `registry.ts` — the maps this build knows about, compiled into *both* bundles. The wire carries an id + revision because a baked map is ~65 KB against a 4 KiB message cap. Authored maps are committed as `.ts` modules, not JSON: Node 22 ESM needs an import attribute for JSON and a malformed map should be a `pnpm typecheck` failure. JSON stays the editor's interchange format.
@@ -142,6 +153,8 @@ Client:
 - `packages/client/src/terrainShader.ts` — the GLSL and `makeTerrainMaterial`. The per-surface branches are procedural textures, not colours, so they stay in GLSL rather than folding into `SURFACE_INFO` — but the branch IDs are interpolated from `Physics.Surface` so renumbering the enum can't desync them. Sun direction and fog range are duplicated from `WorldView`'s light and fog on purpose: this is a raw `ShaderMaterial`, so scene lights never reach it. Retune one, retune the other.
 - `packages/client/src/obstacles/` — one mesh builder per object kind. `registry.ts`'s `Record<ObstacleKind, ObjectMeshBuilder>` is the point of the folder: it turns "added a kind to the catalog, forgot the client" into a compile error, where the old per-kind chain ended in an unlabelled `else` that quietly built a tree. The table lives client-side because `shared` must not import three. Builders work in the **local frame** — origin at the ground point, +X facing, no yaw — and `Obstacles` places and yaws one tagged root group per object; that is what makes the editor's ghost movable without a rebuild, and it fixed clicking a tree's canopy (only the trunk used to carry the id). `prims.ts` is the shared shape vocabulary, `materials.ts` the palettes plus a per-instance material cache. Colour/scale variation is hashed from `Obstacle.id` — `Math.random()` there meant the scenery reshuffled on every rebuild and no two clients saw the same forest.
 - `packages/client/src/previewHandoff.ts` — the editor→game document handoff, via `sessionStorage`. A tab opened with `window.open` inherits a copy of its opener's session storage, which is both the mechanism and the trap: `noopener` would hand the new tab a blank one. The read path runs the same strict `decodeMapDoc` a picked file does, because storage is user-editable.
+- `packages/client/src/water.ts` / `waterShader.ts` — `WaterMesh` mirrors `TerrainMesh` (full-grid plane, level in vertex Y, rect-scoped `updateWater`), with a per-vertex `aWet` attribute so dry cells are discarded in the fragment shader rather than rebuilt out of the geometry on every stroke. Dry vertices sit on the bed, never at the `WATER_NONE` sentinel — a vertex at -1e9 blows up the bounding sphere and breaks culling and editor raycasts. Two things in the shader are gameplay, not decoration: the **depth tint** is the readout a player picks a line by, and the ripples **advect along the flow field** so a river visibly moves and a pond does not. `uTime` self-ticks from `performance.now()` like `sky.ts`, so `WorldView.render(camera)` keeps its signature.
+- `packages/client/src/vehicleEffects.ts` — mud splatter, water spray, bow wave, and the soft-ground axle sink. Lifted out of `scene.ts` (670 lines) and takes a pose lookup rather than the vehicle map, so it never learns what a `VehicleVisual` is. The snapshot-arrival gate lives **inside** `spawnFromSnapshot`: emission must track snapshots, not frames, or a 120 Hz client throws 4x the particles of a 30 Hz one. `spawnLocal` covers offline preview, which has no snapshot stream at all.
 - `packages/client/src/landmarks.ts` / `sky.ts` (procedural sky dome: gradient + clouds + sun) / `particles.ts` / `nameplate.ts` / `minimap.ts` — world + HUD visuals, all deterministic from the terrain handshake.
 Level editor (`packages/client/src/editor/`) — a second Vite page at `/editor.html`, listed explicitly in `vite.config.ts` because the default single-entry build would drop it from the deploy. It renders through `WorldView`, so the ground you sculpt is lit and textured exactly as the game will show it, and it never calls `initRapier`: it edits a document, it does not simulate one.
 
@@ -149,6 +162,7 @@ Level editor (`packages/client/src/editor/`) — a second Vite page at `/editor.
 - `editor/brush.ts` — pure brush geometry (which cells, what weight). `cellCenter` must stay the inverse of `worldToTerrainIndex` or every stroke lands off to one side.
 - `editor/tools.ts` — tool ids, defaults, keyboard bindings. The paint palette derives from `SURFACE_INFO` and the object palette from `OBJECT_INFO`, so a new surface or kind appears without anyone remembering to add it. `applyKindDefaults` reseeds the dimension sliders from the kind — one global 1.6 / 2 used to size a traffic cone like a boulder.
 - `editor/ghost.ts` — the translucent preview of the object about to be placed, built by the *same* `Obstacles` path as the real thing (a lookalike is the failure mode `worldView.ts` exists to prevent, one layer down). Materials are **cloned** before being made transparent, never mutated. The spec carries the id `EditSession.previewId()` minted for the next placement, because appearance is hashed from the id — a throwaway id previews a different-looking rock from the one that lands.
+- `editor/waterLayer.ts` — the authored water of the map being edited: raise / erase / flow brushes, `autoFlowFromSlope`, and the document encode. Its own module because water is **absolute**, not a delta over a generated base, so it shares none of `editSession.ts`'s rebase/checksum/drift rules. The raise brush measures depth once at the *stroke centre* — per-cell would follow the bumps underneath, which is wet ground rather than a body of water. Auto-flow derives from the slope of the **water surface**, not the bed, so a flat pond comes out still.
 - `editor/flyCamera.ts` / `pick.ts` / `gizmos.ts` / `dom.ts` / `ui.ts` / `main.ts` — camera, raycasting, brush ring + spawn markers, the panel's DOM vocabulary, the panel, and the wiring. Brush strokes **and gizmo placement** run from the render loop, not from `pointermove`: a brush is a rate, so applying per event made strength depend on the pointer's report rate and holding still did nothing — and a gizmo seated only on pointer events goes stale the moment the fly camera moves, which for the ghost means it visibly hangs in mid-air. The re-raycast is gated on the pointer or camera having actually moved.
 
 Authored maps are committed as `.ts` modules and added to `AUTHORED` in `map/registry.ts` — the editor's "Copy .ts" button emits exactly that module. "Save .json" is the interchange format for round-tripping a work in progress.
@@ -166,7 +180,8 @@ Rapier in single-threaded mode is deterministic given identical inputs and step 
 
 ## Conventions
 
-- **Tunables in `constants.ts`.** Magic numbers in physics or networking code are bugs in waiting. Values a tester might twist at runtime are mirrored onto `TUNING`; owner physics reads those values directly.
+- **Tunables in `constants.ts`.** Magic numbers in physics or networking code are bugs in waiting. Values a tester might twist at runtime are mirrored onto `TUNING`; owner physics reads those values directly. Every `TUNING` field needs a real reader **and** a test asserting the reader responds — the panel has twice grown sliders for fields nothing read (see `solidAxleVehicle.test.ts` and the water multiplier tests in `waterPhysics.test.ts`). `debugPanel.ts` also holds a second hand-written copy of the tunables for its copy-to-clipboard serialiser; update both.
+- **Measure the vehicle before authoring terrain for it.** The ford took four attempts because its depths were reasoned from a guessed ride height. The truck actually rests 1.36 m up with its hull bottom at 0.91 m, intakes at 1.36 / 1.56 / 1.65 / 2.41 m by kind, and buoyancy beats weight past 1.77 m — so "deep water" is a 0.4 m band, not a vibe. Print the numbers from a real `World` first.
 - **One lookup per concept.** `SURFACE_INFO` (`terrain.ts`) is the model: label, friction key and minimap colour for every `Surface` in one `Record`, so a new surface is a compile error until it's complete. `OBJECT_INFO` (`objectCatalog.ts`) is the second instance, and the cautionary tale: the five object kinds were hand-copied into five places with the compiler checking one, and adding a sixth meant finding the other four from memory. If you find yourself adding a parallel switch keyed on an existing enum, extend the table instead.
 - **Deploy:** exactly one workflow publishes to the `github-pages` environment (`deploy.yml`). Two of them raced for a while and the live site was whichever finished last. Don't add a second.
 - **Shared types are the wire contract.** When you change `PlayerInput` or `VehicleState`, both client and server pick it up via TypeScript.
@@ -217,6 +232,7 @@ The MVP loop is complete: connect → pick a rig → run canonical local physics
 - Mountain switchback trail with per-traverse features (whoops, rocky step, mud puddle).
 - Multiple roads: north loop (dirt circuit), south bog trail, east gravel connector.
 - Procedural sky dome: gradient + warm horizon band + 5-octave FBM clouds + sun disc with glow.
+- Physics-driven water: buoyancy, drag, authored current, per-kind engine drowning with a manual restart, depth-tinted surface with flow-scrolled ripples, wheel spray and bow wave, an editor water tool, and a river ford across the main road.
 
 - Protocol-version handshake refusing mismatched client/server builds.
 - Single Pages deploy workflow (the scaffold `static.yml` raced it and shipped the raw repo).
@@ -244,7 +260,7 @@ The MVP loop is complete: connect → pick a rig → run canonical local physics
 ### Stretch
 - Winch (rope constraint between vehicles, physics-driven recovery).
 - Destructible terrain features (trees, fences) on top of mud-deformation.
-- Physics-driven water bodies that the chassis floats in / bogs down in.
+- Winch recovery for a truck that has swamped and settled onto a river bed (today the only way out is a reset).
 - Day/night cycle + headlight illumination.
 - Re-enable ruts: needs higher heightfield resolution or a sub-cell visual deformation overlay. Each owner would need the same persistent rut deltas for collision consistency.
 

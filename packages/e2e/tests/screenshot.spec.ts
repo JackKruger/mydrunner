@@ -81,4 +81,74 @@ test.describe('@screenshot', () => {
 
     await page.keyboard.up('KeyW');
   });
+
+  // The river ford across the main road.
+  //
+  // The establishing shot uses the setReviewView debug hook rather than
+  // driving to a position: the truck is being shoved downstream while it
+  // crosses, so a "drive until x > N" poll frames a different piece of
+  // river every run and the sequence comes out in the wrong order.
+  test('cross the river ford', async ({ page }) => {
+    test.setTimeout(180_000);
+    const outDir = join(process.cwd(), 'screenshots');
+    mkdirSync(outDir, { recursive: true });
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/?auto=1&car=patrol');
+    await expect(page.locator('#hud')).toContainText('connected', { timeout: 10_000 });
+    await page.waitForTimeout(800);
+
+    // Locked overview looking east down the road at the crossing.
+    await page.evaluate(() => {
+      const w = window as unknown as { __scene: { setReviewView: (p: unknown, l: unknown) => void } };
+      w.__scene.setReviewView({ x: -78, y: 14, z: -50 }, { x: -30, y: -1, z: -52 });
+    });
+    await page.waitForTimeout(700);
+    await page.screenshot({ path: join(outDir, '30-ford-overview.png') });
+
+    // Downstream, where the river is deep enough to float a truck.
+    await page.evaluate(() => {
+      const w = window as unknown as { __scene: { setReviewView: (p: unknown, l: unknown) => void } };
+      w.__scene.setReviewView({ x: -70, y: 20, z: -95 }, { x: -42, y: -1, z: -78 });
+    });
+    await page.waitForTimeout(700);
+    await page.screenshot({ path: join(outDir, '31-river-downstream.png') });
+
+    // Back to the chase camera and drive in.
+    await page.evaluate(() => {
+      const w = window as unknown as { __scene: { setReviewView: (p: unknown, l: unknown) => void } };
+      w.__scene.setReviewView(null, null);
+    });
+    await page.waitForTimeout(300);
+
+    // Drive until the HUD reports water, then hold for the wading shot.
+    await page.keyboard.down('KeyW');
+    await expect(page.locator('#hud-surface')).toContainText(/water \d/, { timeout: 40_000 });
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: join(outDir, '32-ford-wading.png') });
+
+    await page.waitForTimeout(1400);
+    await page.screenshot({ path: join(outDir, '33-ford-crossing.png') });
+    await page.keyboard.up('KeyW');
+  });
+
+  // The bike drowns at the ford: the per-kind air intake, made visible.
+  test('drown the motorbike', async ({ page }) => {
+    test.setTimeout(180_000);
+    const outDir = join(process.cwd(), 'screenshots');
+    mkdirSync(outDir, { recursive: true });
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/?auto=1&car=motorbike');
+    await expect(page.locator('#hud')).toContainText('connected', { timeout: 10_000 });
+    await page.waitForTimeout(800);
+
+    await page.keyboard.down('KeyW');
+    // The flooded-engine prompt is the whole point of the shot.
+    await expect(page.locator('#hud-engine-status'))
+      .toContainText('FLOODED', { timeout: 60_000 });
+    await page.keyboard.up('KeyW');
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: join(outDir, '34-bike-drowned.png') });
+  });
 });

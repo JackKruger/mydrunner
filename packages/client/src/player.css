@@ -344,6 +344,32 @@ input:focus-visible,
   box-shadow: inset 0 0 12px rgba(241, 91, 78, 0.12);
 }
 
+/* Its own centred slot just above the instrument cluster.
+   Two earlier homes were both wrong and both only showed up in a
+   screenshot: stacked under the handbrake indicator it ran off the
+   bottom of the viewport, and inside the session panel it was covered by
+   the chat log. This is the one line telling a stranded player which key
+   to press, so it cannot be clipped or overlapped. */
+.hud-engine-status {
+  display: none;
+  position: absolute;
+  bottom: calc(var(--ui-safe-bottom) + 152px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  border-color: var(--ui-red);
+  background: rgba(241, 91, 78, 0.2);
+  color: #ff8c80;
+  font: 800 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.09em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.hud-engine-status.active {
+  display: block;
+}
+
 .hud-diagnostics {
   position: absolute;
   bottom: calc(var(--ui-safe-bottom) + 126px);
