@@ -28,6 +28,8 @@ export interface UiCallbacks {
    *  rebuilds the placement ghost. The panel does not do it itself because
    *  the same reseed happens from the keyboard. */
   onObjectKindChange(kind: Physics.ObstacleKind): void;
+  /** Derive the whole flow field from the water surface's slope. */
+  onAutoFlow(): void;
 }
 
 export class EditorUi {
@@ -80,6 +82,26 @@ export class EditorUi {
       String(state.surface),
       (v) => { this.state.surface = Number(v) as Physics.Surface; },
     );
+
+    // --- Water ---
+    const water = section(this.root, 'Water');
+    select(
+      water,
+      'mode',
+      [
+        { value: 'raise', label: 'raise' },
+        { value: 'erase', label: 'erase' },
+        { value: 'flow', label: 'flow (drag to aim)' },
+      ],
+      state.waterMode,
+      (v) => { this.state.waterMode = v as ToolState['waterMode']; },
+    );
+    slider(water, 'depth', 0.1, 4, 0.05, state.waterDepth,
+      (v) => { this.state.waterDepth = v; });
+    slider(water, 'flow m/s', 0, 6, 0.1, state.waterSpeed,
+      (v) => { this.state.waterSpeed = v; });
+    water.appendChild(button('Auto-flow from slope', () => this.cb.onAutoFlow()));
+    caption(water).set('depth is measured from the ground under the stroke centre');
 
     // --- Objects ---
     const objects = section(this.root, 'Object');

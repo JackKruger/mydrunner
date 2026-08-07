@@ -7,7 +7,13 @@
 import { Physics } from '@mydrunner/shared';
 import type { SculptMode } from './editSession.js';
 
-export type ToolId = SculptMode | 'paint' | 'object' | 'spawn' | 'delete';
+export type ToolId = SculptMode | 'paint' | 'water' | 'object' | 'spawn' | 'delete';
+
+/** What the water brush does with a drag.
+ *  - raise: flood to `waterDepth` above the ground at the stroke centre
+ *  - erase: dry the cells out
+ *  - flow:  stamp the drag direction into the velocity field */
+export type WaterMode = 'raise' | 'erase' | 'flow';
 
 export interface ToolState {
   tool: ToolId;
@@ -28,6 +34,12 @@ export interface ToolState {
   objectYaw: number;
   /** Facing written onto the next spawn point placed, in radians. */
   spawnYaw: number;
+  waterMode: WaterMode;
+  /** Metres of water the raise mode floods to, above the ground under
+   *  the stroke centre. */
+  waterDepth: number;
+  /** Metres per second written by the flow mode and the auto-flow button. */
+  waterSpeed: number;
 }
 
 export function defaultToolState(): ToolState {
@@ -47,6 +59,12 @@ export function defaultToolState(): ToolState {
     objectYaw: 0,
     // pi/2 matches Room's road-grid spawn: local +Z rotated onto world +X.
     spawnYaw: Math.PI / 2,
+    waterMode: 'raise',
+    // Just over the Hilux's air intake and well under the Patrol's
+    // snorkel, so the default brush authors a crossing that already
+    // separates the kinds.
+    waterDepth: 0.9,
+    waterSpeed: 1.8,
   };
 }
 
@@ -54,7 +72,7 @@ export function defaultToolState(): ToolState {
  *  click — dragging the object tool would carpet the map in rocks. */
 export function isContinuous(tool: ToolId): boolean {
   return tool === 'raise' || tool === 'lower' || tool === 'smooth'
-    || tool === 'flatten' || tool === 'paint';
+    || tool === 'flatten' || tool === 'paint' || tool === 'water';
 }
 
 export function isSculpt(tool: ToolId): tool is SculptMode {
@@ -70,6 +88,7 @@ export const TOOL_KEYS: ReadonlyArray<{ code: string; tool: ToolId; label: strin
   { code: 'Digit6', tool: 'object', label: 'Object' },
   { code: 'Digit7', tool: 'spawn', label: 'Spawn' },
   { code: 'Digit8', tool: 'delete', label: 'Delete' },
+  { code: 'Digit9', tool: 'water', label: 'Water' },
 ];
 
 /** Surfaces offered by the paint tool.

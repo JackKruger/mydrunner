@@ -63,6 +63,15 @@ const ui = new EditorUi(panelHost, tools, {
     ui.syncObject();
     setTool('object');
   },
+  onAutoFlow: () => {
+    const rect = session.autoFlow(tools.waterSpeed);
+    if (!rect) {
+      ui.status('no water to flow — paint some first');
+      return;
+    }
+    syncWater(rect);
+    ui.status(`flow derived from slope at ${tools.waterSpeed.toFixed(1)} m/s`);
+  },
   onBakeChange: (v) => { bakeOnSave = v; },
   onUndo: () => applyHistory(session.undo(), 'undo'),
   onRedo: () => applyHistory(session.redo(), 'redo'),
@@ -155,6 +164,11 @@ function applyHistory(changed: boolean, what: string): void {
     mesh.updateHeights(Physics.fullGridRect(session.world.terrain));
     mesh.updateSurfaces(Physics.fullGridRect(session.world.terrain));
   }
+  // Full rebuild rather than updateWater: an undo can take the map from
+  // wet back to dry (or the reverse), and only refreshWater creates or
+  // drops the mesh. Without this, undoing the first water stroke leaves
+  // the river on screen.
+  view.refreshWater(session.world.terrain);
   view.refreshObstacles(session.world.obstacles);
   refreshSpawnMarkers();
   ui.status(what);
@@ -263,6 +277,9 @@ const endPointer = (e: PointerEvent): void => {
     }
   }
   lastPointer = null;
+  // A fresh stroke must not inherit the last one's aim, or the flow
+  // brush stamps a direction the player never dragged.
+  lastStrokePoint = null;
   gizmosDirty = true;
 };
 canvas.addEventListener('pointerup', endPointer);
@@ -302,6 +319,21 @@ function updateGizmos(): void {
   }
 }
 
+/** Push a water edit to the GPU.
+ *
+ *  Goes through refreshWater when the mesh does not exist yet: a dry map
+ *  builds none, so the first stroke on one has nothing to update. */
+function syncWater(rect: Physics.GridRect | null): void {
+  if (!rect) return;
+  const mesh = view.waterMesh;
+  if (mesh) mesh.updateWater(rect);
+  else view.refreshWater(session.world.terrain);
+}
+
+/** Previous stroke point, for the flow brush's drag direction. Cleared
+ *  on pointer-up so a new stroke does not inherit the last one's aim. */
+let lastStrokePoint: { x: number; z: number } | null = null;
+
 function applyStroke(hit: { x: number; z: number }, dt: number): void {
   const mesh = view.terrainMesh;
   if (!mesh) return;
@@ -313,11 +345,48 @@ function applyStroke(hit: { x: number; z: number }, dt: number): void {
       mode: tools.tool,
       dt,
     });
-    if (rect) mesh.updateHeights(rect);
+    if (rect) {
+      mesh.updateHeights(rect);
+      // Depth is level minus ground, so sculpting under standing water
+      // changes the water without touching the water grid.
+      if (view.waterMesh) view.waterMesh.updateWater(rect);
+    }
   } else if (tools.tool === 'paint') {
     const rect = session.paint(hit.x, hit.z, { radius: tools.radius, surface: tools.surface });
     if (rect) mesh.updateSurfaces(rect);
+  } else if (tools.tool === 'water') {
+    applyWaterStroke(hit);
   }
+  lastStrokePoint = { x: hit.x, z: hit.z };
+}
+
+function applyWaterStroke(hit: { x: number; z: number }): void {
+  if (tools.waterMode === 'erase') {
+    syncWater(session.eraseWater(hit.x, hit.z, { radius: tools.radius }));
+    return;
+  }
+  if (tools.waterMode === 'flow') {
+    // Direction comes from the drag itself, so aiming a river is the
+    // same gesture as drawing it. A stationary pointer has no direction
+    // and must not stamp one - it would freeze the last aim into every
+    // cell the brush sat over.
+    const prev = lastStrokePoint;
+    if (!prev) return;
+    const dx = hit.x - prev.x;
+    const dz = hit.z - prev.z;
+    if (Math.hypot(dx, dz) < 0.25) return;
+    syncWater(session.paintFlow(hit.x, hit.z, {
+      radius: tools.radius,
+      dirX: dx,
+      dirZ: dz,
+      speed: tools.waterSpeed,
+    }));
+    return;
+  }
+  syncWater(session.paintWater(hit.x, hit.z, {
+    radius: tools.radius,
+    depth: tools.waterDepth,
+  }));
 }
 
 /** The object the tool state currently describes, at (x, z).

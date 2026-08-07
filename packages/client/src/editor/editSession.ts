@@ -16,6 +16,7 @@
 import { Maps, Physics } from '@mydrunner/shared';
 import { forEachBrushCell, type GridSpec } from './brush.js';
 import { History } from './history.js';
+import { WaterLayer, type WaterSnapshot } from './waterLayer.js';
 
 const { HEIGHT_DELTA_SCALE, NO_SURFACE_OVERRIDE } = Maps;
 
@@ -28,6 +29,7 @@ interface Snapshot {
   removed: string[];
   spawns: Maps.SpawnPoint[];
   includeProcedural: boolean;
+  water: WaterSnapshot;
 }
 
 const MAX_HISTORY = 60;
@@ -45,6 +47,9 @@ export class EditSession {
   private removed: string[];
   private spawns: Maps.SpawnPoint[];
   private includeProcedural: boolean;
+  /** Authored water. Its own layer because water is absolute rather than
+   *  a delta over the generated base — no rebase, no checksum, no drift. */
+  readonly water: WaterLayer;
   private history = new History<Snapshot>({
     capture: () => this.snapshot(),
     restore: (s) => this.restore(s),
@@ -79,6 +84,10 @@ export class EditSession {
       this.delta = Maps.decodeInt16Grid(doc.heightDelta);
       this.override = Maps.decodeUint8Grid(doc.surfaceOverride, NO_SURFACE_OVERRIDE);
     }
+    this.water = new WaterLayer(world.terrain, {
+      size: world.terrain.size,
+      resolution: world.terrain.resolution,
+    });
     this.recomposeAll();
   }
 
@@ -175,6 +184,31 @@ export class EditSession {
     return rect.rows > 0 ? rect : null;
   }
 
+  /** Flood a disc. Undo-grouped by the caller's beginStroke, like any
+   *  other continuous brush. */
+  paintWater(x: number, z: number, opts: { radius: number; depth: number }): Physics.GridRect | null {
+    return this.water.paint(x, z, opts);
+  }
+
+  eraseWater(x: number, z: number, opts: { radius: number }): Physics.GridRect | null {
+    return this.water.erase(x, z, opts);
+  }
+
+  paintFlow(
+    x: number,
+    z: number,
+    opts: { radius: number; dirX: number; dirZ: number; speed: number },
+  ): Physics.GridRect | null {
+    return this.water.flow(x, z, opts);
+  }
+
+  /** One-shot: derive the whole flow field from the water surface's own
+   *  slope. Its own undo step, because it is a button rather than a drag. */
+  autoFlow(speed: number): Physics.GridRect | null {
+    this.pushUndo();
+    return this.water.autoFlowFromSlope(speed);
+  }
+
   /** The id the next addObject() will use.
    *
    *  Minted up front and held, so the placement ghost can be built with the
@@ -258,6 +292,7 @@ export class EditSession {
       removed: [...this.removed],
       spawns: this.spawns.map((s) => ({ ...s })),
       includeProcedural: this.includeProcedural,
+      water: this.water.snapshot(),
     };
   }
 
@@ -268,6 +303,7 @@ export class EditSession {
     this.removed = [...s.removed];
     this.spawns = s.spawns.map((x) => ({ ...x }));
     this.includeProcedural = s.includeProcedural;
+    this.water.restore(s.water);
     this.recomposeAll();
     this.rebuildObjects();
   }
@@ -325,6 +361,7 @@ export class EditSession {
         removed: [...this.removed],
       },
       spawns: this.spawns.map((s) => ({ ...s })),
+      water: this.water.toDoc(),
     };
     if (opts.bake) {
       const cm = new Int16Array(n * n);
