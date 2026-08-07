@@ -20,7 +20,12 @@
 //    resolution live in the document both sides compile in.
 // 4: clients own vehicle physics and upload canonical VehicleState; the
 //    server relays it instead of simulating and correcting player bodies.
-export const PROTOCOL_VERSION = 4;
+// 5: authored water. MapDoc gains a water block (MAP_FORMAT_VERSION 2),
+//    TerrainData gains the level and flow grids, and the vehicle model
+//    gains buoyancy, drag, current and drowning. Two builds either side
+//    of this disagree about both the map's geometry and how a truck
+//    behaves in it.
+export const PROTOCOL_VERSION = 5;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // The client-owned vehicle simulation advances at this fixed cadence.
@@ -415,10 +420,23 @@ export const WATER = {
   hullVolume: 1.9,
 
   /** Vertical extent over which a hull sample goes from dry to fully
-   *  submerged, m. Softens the step as the waterline crosses a corner;
-   *  without it the four corner forces switch on and off discretely and
-   *  the truck buzzes at the waterline. */
-  sampleDepthSpan: 0.5,
+   *  submerged, m.
+   *
+   *  This is not just anti-buzz smoothing (though it is that too — four
+   *  corner forces switching on and off discretely make the truck
+   *  chatter at the waterline). It is where the hull's displacement
+   *  LIVES, and so it decides how deep the water has to be before the
+   *  truck floats.
+   *
+   *  It must span the chassis box's full height. At 0.5 the whole
+   *  displacement was used up by the time water reached the chassis
+   *  mid-line, so a truck floated off its wheels in 1.4 m of water and
+   *  drifted across every ford with its air intake serenely above the
+   *  surface — which made the snorkel decorative and the crossing
+   *  identical for all four kinds. Spanning the real hull height means
+   *  you have to be bonnet-deep before buoyancy beats weight, and by
+   *  then a factory intake is already under. */
+  sampleDepthSpan: 0.95,
 
   /** Quadratic drag: 0.5 * rho * Cd * A, pre-multiplied, N per (m/s)^2.
    *  Lateral is much higher than longitudinal because a truck presents
