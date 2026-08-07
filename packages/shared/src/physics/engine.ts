@@ -14,7 +14,7 @@
 // gear changes are instantaneous. Good enough for a game; bad for a
 // simulator.
 
-import { ENGINE } from '../constants.js';
+import { ENGINE, WATER } from '../constants.js';
 
 export interface EngineState {
   rpm: number;
@@ -22,10 +22,58 @@ export interface EngineState {
   gearIndex: number;
   /** Ticks remaining before the next automatic RPM-triggered shift is allowed. */
   shiftCooldown: number;
+  /** Flooded: the air intake went under. No torque and RPM decays to
+   *  zero until the player cranks it (and only if the intake is clear). */
+  drowned: boolean;
+  /** Ticks the starter has been held with a clear intake. */
+  crankTicks: number;
 }
 
 export function createEngineState(): EngineState {
-  return { rpm: ENGINE.idleRpm, gearIndex: ENGINE.neutralGear, shiftCooldown: 0 };
+  return {
+    rpm: ENGINE.idleRpm,
+    gearIndex: ENGINE.neutralGear,
+    shiftCooldown: 0,
+    drowned: false,
+    crankTicks: 0,
+  };
+}
+
+/** Advance the flood/restart state machine.
+ *
+ *  Separate from stepEngine because it is driven by geometry (is the
+ *  intake under water?) and player intent (is the starter held?), not by
+ *  driveline state. stepEngine only has to honour the resulting flag.
+ *
+ *  Returns true while the starter is cranking, so the HUD and audio can
+ *  say so. */
+export function stepEngineFlooding(
+  state: EngineState,
+  intakeSubmerged: boolean,
+  drownedNow: boolean,
+  starterHeld: boolean,
+): boolean {
+  if (drownedNow) state.drowned = true;
+  if (!state.drowned) {
+    state.crankTicks = 0;
+    return false;
+  }
+  // Cranking only counts with the intake clear. Holding the starter down
+  // while still submerged should do nothing at all - that is the whole
+  // point of the failure state, and letting it tick would mean a player
+  // who mashed the key came back to life the instant they surfaced.
+  if (!starterHeld || intakeSubmerged) {
+    state.crankTicks = 0;
+    return false;
+  }
+  state.crankTicks += 1;
+  if (state.crankTicks >= WATER.crankTicks) {
+    state.drowned = false;
+    state.crankTicks = 0;
+    state.rpm = ENGINE.idleRpm;
+    return false;
+  }
+  return true;
 }
 
 /** Approximate torque curve. Peak around peakTorqueRpm, falls off either
@@ -67,6 +115,19 @@ export function stepEngine(
   throttle: number,
   dt: number,
 ): { wheelForce: number; rpm: number; gear: number } {
+  // A flooded engine makes no torque and winds down to a stop. This has
+  // to short-circuit before the RPM block below, which floors targetRpm
+  // at idleRpm - the assumption everywhere else that the engine is
+  // always running is exactly what a drowning has to break. Zero RPM
+  // also fades the engine audio and reads as 0 on the tacho with no wire
+  // change, because rpm is already a transmitted field.
+  if (state.drowned) {
+    state.rpm = Math.max(0, state.rpm - ENGINE.idleRpm * dt * 2);
+    state.gearIndex = ENGINE.neutralGear;
+    state.shiftCooldown = 0;
+    return { wheelForce: 0, rpm: state.rpm, gear: 0 };
+  }
+
   // Derive engine RPM from driveshaft. In neutral, RPM follows throttle
   // toward an idle/blip behaviour; when in gear, it's locked to the
   // wheels through the gear and final drive.

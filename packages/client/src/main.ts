@@ -562,7 +562,21 @@ function surfaceLabel(): string {
   const lp = scene.localPosition();
   if (!mapWorld || !lp) return '';
   const s = Physics.sampleSurface(mapWorld.terrain, lp.x, lp.z);
-  return Physics.surfaceInfo(s).label;
+  const label = Physics.surfaceInfo(s).label;
+  // The bed is still what you are driving on, so it stays the headline;
+  // depth is what decides whether to commit to the crossing.
+  const depth = Physics.sampleWaterDepth(mapWorld.terrain, lp.x, lp.z);
+  return depth > 0.02 ? `${label} · water ${depth.toFixed(2)} m` : label;
+}
+
+/** Flooded-engine prompt. A truck that has gone silent and will not
+ *  respond to the throttle needs to say why and say what to press. */
+function engineStatusLabel(): string {
+  const w = localSimulation?.waterStatus();
+  if (!w) return '';
+  if (w.drowned) return 'ENGINE FLOODED — HOLD E';
+  if (w.intakeSubmerged) return 'INTAKE UNDER';
+  return '';
 }
 
 function updateHud(): void {
@@ -577,6 +591,7 @@ function updateHud(): void {
       gear: t?.gear ?? 0,
       surface: surfaceLabel(),
       handbrake,
+      engineStatus: engineStatusLabel(),
       fps,
       previewDiagnostic: 'offline physics',
     });
@@ -588,6 +603,7 @@ function updateHud(): void {
     gear: lastGear,
     surface: surfaceLabel(),
     handbrake,
+    engineStatus: engineStatusLabel(),
     tick: lastSnapTick,
     fps,
     previewDiagnostic: '',

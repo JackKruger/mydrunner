@@ -11,6 +11,23 @@ export interface VehicleSpawn {
   yaw?: number;
 }
 
+/** Water state of one vehicle, for the HUD and the spray effects.
+ *
+ *  Not part of VehicleState and not on the wire: a drowned engine
+ *  already reads as rpm 0 / gear 0 through the existing snapshot tuple,
+ *  and a remote truck's spray is derived from its transmitted position
+ *  against the water height both ends compute from the same map. */
+export interface WaterStatus {
+  /** 0..1 mean submersion of the hull. */
+  submerged: number;
+  /** Metres of water over each wheel, [FL, FR, RL, RR]. */
+  wheelDepths: [number, number, number, number];
+  intakeSubmerged: boolean;
+  drowned: boolean;
+  /** 0..1 displacement lost to flooding. */
+  flood: number;
+}
+
 export interface VehicleLike {
   readonly id: string;
   readonly body: RAPIER.RigidBody;
@@ -23,4 +40,5 @@ export interface VehicleLike {
   /** Axle DOF state (rideY/rollAngle) for owner rendering and upload. */
   axleSnaps?(): [AxleSnap, AxleSnap];
   applyAxleSnaps?(snaps: [AxleSnap, AxleSnap]): void;
+  waterStatus?(): WaterStatus;
 }

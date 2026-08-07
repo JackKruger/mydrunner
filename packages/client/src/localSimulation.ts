@@ -6,6 +6,7 @@
 // most recent completed steps for a smooth render pose at any display rate.
 
 import {
+  BUTTON_RESET,
   VEHICLE,
   Maps,
   Physics,
@@ -168,7 +169,7 @@ export class LocalSimulation {
   step(input: PlayerInput): void {
     if (input.seq <= this.lastSteppedSeq) return;
     copyState(this.current, this.previous);
-    if ((input.buttons & 1) !== 0) {
+    if ((input.buttons & BUTTON_RESET) !== 0) {
       this.vehicle.resetTo(this.spawn);
     } else {
       this.vehicle.setInput(input);
@@ -178,7 +179,7 @@ export class LocalSimulation {
     }
     this.lastSteppedSeq = input.seq;
     copyVehicleState(this.vehicle.getState(), this.current);
-    if ((input.buttons & 1) !== 0) copyState(this.current, this.previous);
+    if ((input.buttons & BUTTON_RESET) !== 0) copyState(this.current, this.previous);
   }
 
   resetTo(spawn: { position: { x: number; y: number; z: number }; yaw: number }): void {
@@ -252,6 +253,21 @@ export class LocalSimulation {
       rpm: s.rpm,
       gear: s.gear,
       throttle: s.throttle,
+    };
+  }
+
+  /** Water state of the owned truck, for the HUD and the spray effects.
+   *
+   *  Read from the owner simulation rather than from a snapshot because
+   *  it is deliberately not on the wire — the local truck is the only one
+   *  whose flood state anyone needs to a tick's accuracy. */
+  waterStatus(): Physics.WaterStatus {
+    return this.vehicle.waterStatus?.() ?? {
+      submerged: 0,
+      wheelDepths: [0, 0, 0, 0],
+      intakeSubmerged: false,
+      drowned: false,
+      flood: 0,
     };
   }
 

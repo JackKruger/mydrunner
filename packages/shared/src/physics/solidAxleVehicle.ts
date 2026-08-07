@@ -33,6 +33,7 @@ import {
 } from '../constants.js';
 import { TUNING } from '../tuning.js';
 import {
+  BUTTON_STARTER,
   EMPTY_INPUT,
   type CarKind,
   type PlayerInput,
@@ -45,7 +46,9 @@ import {
   resetWaterState, sampleWaterDepth, wetGripMult, wheelSubmersion,
   type WaterLoad, type WaterState,
 } from './water.js';
-import { createEngineState, stepEngine, type EngineState } from './engine.js';
+import {
+  createEngineState, stepEngine, stepEngineFlooding, type EngineState,
+} from './engine.js';
 // slipRatio / gripFromSlip kept in tire.ts for tests; not used here since
 // the impulse-clamped integrator below replaced the Pacejka groundTq path.
 // slipAngle / lateralGripFromSlipAngle ARE used to shape the lateral
@@ -68,7 +71,7 @@ import {
   resetWheelKinematic,
   type WheelKinematic,
 } from './wheelDynamics.js';
-import type { VehicleLike, VehicleSpawn } from './vehicleTypes.js';
+import type { VehicleLike, VehicleSpawn, WaterStatus } from './vehicleTypes.js';
 import type { World } from './world.js';
 import { COLLISION_GROUP_OWNED_VEHICLE, COLLISION_GROUP_WHEEL_RAY } from './collisionGroups.js';
 import {
@@ -578,6 +581,16 @@ export class SolidAxleVehicle implements VehicleLike {
       this.waterLoad.drowned = false;
     }
 
+    // 3d. Flood / restart state machine. Must run before the engine so a
+    //     drowning cuts the drive on the tick it happens, and so a
+    //     successful crank restores idle RPM before stepEngine reads it.
+    stepEngineFlooding(
+      this.engine,
+      this.waterLoad.intakeSubmerged,
+      this.waterLoad.drowned,
+      (this.input.buttons & BUTTON_STARTER) !== 0,
+    );
+
     // 4. Engine + gearbox.
     const avgAngVel = (this.wheels[0]!.angVel + this.wheels[1]!.angVel + this.wheels[2]!.angVel + this.wheels[3]!.angVel) / 4;
     const longSpeed = lv.x * fwd.x + lv.y * fwd.y + lv.z * fwd.z;
@@ -875,13 +888,7 @@ export class SolidAxleVehicle implements VehicleLike {
    *  position against the water height both ends compute from the same
    *  map document. Adding a field would have cost a SNAPSHOT_SCHEMA bump
    *  for information both sides already have. */
-  waterStatus(): {
-    submerged: number;
-    wheelDepths: [number, number, number, number];
-    intakeSubmerged: boolean;
-    drowned: boolean;
-    flood: number;
-  } {
+  waterStatus(): WaterStatus {
     return {
       submerged: this.waterLoad.submergedFrac,
       wheelDepths: [
@@ -889,7 +896,12 @@ export class SolidAxleVehicle implements VehicleLike {
         this.wheels[2]!.waterDepth, this.wheels[3]!.waterDepth,
       ],
       intakeSubmerged: this.waterLoad.intakeSubmerged,
-      drowned: this.waterLoad.drowned,
+      // The latched engine flag, not waterLoad.drowned. That one is the
+      // momentary "the intake has been under for drownTicks" trigger and
+      // goes false the instant you surface — which would clear the HUD's
+      // restart prompt while the engine was still dead, and would report
+      // a drowned truck as healthy the moment it was towed out.
+      drowned: this.engine.drowned,
       flood: this.water.floodFrac,
     };
   }

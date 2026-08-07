@@ -6,6 +6,7 @@
 //   - right "gas" / "brake" pedals
 //   - dedicated handbrake button
 //   - aux buttons: cam, reset, mute (edge-triggered events)
+//   - starter, held to crank a flooded engine back to life
 
 type Edge = 'cam' | 'reset' | 'mute' | 'chat';
 
@@ -15,6 +16,7 @@ const state = {
   brake: 0,
   handbrake: 0,
   reset: 0,
+  starter: 0,
 };
 
 const edgeListeners: Record<Edge, Array<() => void>> = {
@@ -46,7 +48,10 @@ function isTouchDevice(): boolean {
 }
 
 /** Bind a button so it sets `state[key]` to 1 while held, 0 on release. */
-function bindHoldButton(el: HTMLElement, key: 'throttle' | 'brake' | 'handbrake' | 'reset'): void {
+function bindHoldButton(
+  el: HTMLElement,
+  key: 'throttle' | 'brake' | 'handbrake' | 'reset' | 'starter',
+): void {
   const press = (e: Event): void => {
     e.preventDefault();
     state[key] = 1;
@@ -147,6 +152,7 @@ export function initTouchInput(): void {
   const brake = document.getElementById('brake-btn');
   const handbrake = document.getElementById('handbrake-btn');
   const reset = document.getElementById('reset-btn');
+  const starter = document.getElementById('starter-btn');
   const cam = document.getElementById('cam-btn');
   const mute = document.getElementById('mute-btn');
   const chat = document.getElementById('chat-btn');
@@ -156,6 +162,9 @@ export function initTouchInput(): void {
   if (brake) bindHoldButton(brake, 'brake');
   if (handbrake) bindToggleButton(handbrake, 'handbrake');
   if (reset) bindHoldButton(reset, 'reset');
+  // Held, not edge-triggered: cranking takes WATER.crankTicks of
+  // continuous hold, same as the keyboard binding.
+  if (starter) bindHoldButton(starter, 'starter');
   if (cam) bindEdgeButton(cam, 'cam');
   if (mute) bindEdgeButton(mute, 'mute');
   if (chat) bindEdgeButton(chat, 'chat');

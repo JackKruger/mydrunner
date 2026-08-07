@@ -21,6 +21,9 @@ export interface PlayerTelemetry {
   gear: number;
   surface: string;
   handbrake: boolean;
+  /** Empty when the engine is fine. Otherwise the flooded / cranking
+   *  prompt: a dead engine with no explanation reads as a broken game. */
+  engineStatus: string;
   tick?: number;
   fps?: number;
   previewDiagnostic?: string;
@@ -72,6 +75,7 @@ export class PlayerUI {
   private readonly rpmMeter: HTMLElement;
   private readonly gearText: HTMLElement;
   private readonly handbrakeText: HTMLElement;
+  private readonly engineStatusText: HTMLElement;
   private readonly tickText: HTMLElement;
   private readonly fpsText: HTMLElement;
   private readonly previewDiagnosticText: HTMLElement;
@@ -85,6 +89,7 @@ export class PlayerUI {
       gear: 0,
       surface: '',
       handbrake: false,
+      engineStatus: '',
       tick: 0,
       fps: 0,
       previewDiagnostic: '',
@@ -133,6 +138,7 @@ export class PlayerUI {
           </div>
         </div>
         <div id="hud-handbrake" class="hud-handbrake" role="status" aria-live="polite"></div>
+        <div id="hud-engine-status" class="hud-handbrake" role="status" aria-live="polite"></div>
       </section>
 
       <section id="hud-diagnostics" class="hud-diagnostics instrument-panel" aria-label="Development diagnostics"${options.development ? '' : ' hidden'}>
@@ -153,6 +159,7 @@ export class PlayerUI {
     this.rpmMeter = root.querySelector('#hud-rpm-meter')!;
     this.gearText = root.querySelector('#hud-gear-value')!;
     this.handbrakeText = root.querySelector('#hud-handbrake')!;
+    this.engineStatusText = root.querySelector('#hud-engine-status')!;
     this.tickText = root.querySelector('#hud-tick')!;
     this.fpsText = root.querySelector('#hud-fps')!;
     this.previewDiagnosticText = root.querySelector('#hud-preview-diagnostic')!;
@@ -209,6 +216,11 @@ export class PlayerUI {
     this.rpmMeter.style.setProperty('--rpm-ratio', String(rpmRatio));
     this.gearText.textContent = formatGear(this.state.gear);
     this.surfaceText.textContent = this.state.surface || '—';
+
+    const engineStatus = this.state.engineStatus || '';
+    this.engineStatusText.classList.toggle('active', engineStatus !== '');
+    this.engineStatusText.textContent = engineStatus;
+    this.engineStatusText.setAttribute('aria-hidden', String(engineStatus === ''));
 
     this.handbrakeText.classList.toggle('active', this.state.handbrake);
     this.handbrakeText.textContent = this.state.handbrake ? 'HANDBRAKE' : '';

@@ -1,6 +1,6 @@
 // Keyboard + touch -> PlayerInput. Polled each frame from main loop.
 
-import type { PlayerInput } from '@mydrunner/shared';
+import { BUTTON_RESET, BUTTON_STARTER, type PlayerInput } from '@mydrunner/shared';
 
 import { getTouchState } from './touchInput.js';
 
@@ -90,13 +90,14 @@ export function sampleInput(): PlayerInput {
   const steer = Math.abs(t.steer) > Math.abs(turn) ? t.steer : turn;
   const kbBrake = KEYS.has('ShiftLeft') || KEYS.has('ShiftRight') ? 1 : 0;
   const kbHandbrake = handbrakeOn ? 1 : 0;
-  const kbReset = KEYS.has('KeyR') ? 1 : 0;
+  const reset = KEYS.has('KeyR') || t.reset > 0;
+  const starter = KEYS.has('KeyE') || t.starter > 0;
   return {
     seq,
     throttle,
     steer,
     brake: Math.max(kbBrake, t.brake),
     handbrake: Math.max(kbHandbrake, t.handbrake),
-    buttons: Math.max(kbReset, t.reset),
+    buttons: (reset ? BUTTON_RESET : 0) | (starter ? BUTTON_STARTER : 0),
   };
 }

@@ -35,9 +35,20 @@ export interface PlayerInput {
   steer: number;    // -1 left .. 1 right
   brake: number;    // 0..1
   handbrake: number; // 0..1
-  // Bitfield of misc actions (horn, camera, reset, etc.)
+  // Bitfield of misc actions. See BUTTON_* below.
   buttons: number;
 }
+
+/** Bits in PlayerInput.buttons.
+ *
+ *  This was documented as a bitfield from the start but used as a
+ *  boolean - input.ts wrote `Math.max(kbReset, touchReset)` and the
+ *  simulation tested `& 1` - so the second action needed the field to
+ *  actually become one. Named constants rather than literals because a
+ *  bare `& 2` at a call site is unreadable and unsearchable. */
+export const BUTTON_RESET = 1;
+/** Crank the starter. Only catches with the air intake clear of water. */
+export const BUTTON_STARTER = 2;
 
 export const EMPTY_INPUT: PlayerInput = {
   seq: 0,
