@@ -1,4 +1,4 @@
-// The shapes 35 object builders are assembled from.
+// The shared shapes every object builder is assembled from.
 //
 // Without these, each new kind is a fresh pile of BoxGeometry/position/
 // rotation/castShadow lines and they drift apart — one forgets a shadow,

@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 import { cautionStripeMaterial, metal, solid, TRUNK_COLOR } from './materials.js';
-import { box, cyl, lyingCyl, plane, plankDeck, repeatX, torus } from './prims.js';
+import { box, cyl, ico, lyingCyl, plane, plankDeck, repeatX, torus } from './prims.js';
 import type { ObjectMeshBuilder } from './types.js';
 
 /** A tyre, lying flat (axis up) or standing (face-on). */
@@ -169,7 +169,83 @@ const cattleGrid: ObjectMeshBuilder = (ctx, o) => {
   return out;
 };
 
+const stairSteps: ObjectMeshBuilder = (ctx, o) => {
+  const count = 6;
+  const run = o.length ?? 4.5;
+  const tread = run / count;
+  const concrete = solid(ctx, ctx.pick([0x8d8c86, 0x999890, 0x817f78], o, 'steps'), 0.96, true);
+  const edge = solid(ctx, 0xd69a27, 0.82);
+  const out: THREE.Object3D[] = [];
+  for (let i = 0; i < count; i++) {
+    const h = o.height * (i + 1) / count;
+    const x = -run / 2 + tread * (i + 0.5);
+    out.push(box(tread, h, o.size * 2, concrete, { x, y: h / 2, recv: true }));
+    out.push(box(0.035, 0.025, o.size * 2.02, edge, { x: x + tread / 2, y: h + 0.013 }));
+  }
+  return out;
+};
+
+const rockGarden: ObjectMeshBuilder = (ctx, o) => {
+  const run = o.length ?? 6;
+  const layout = [
+    [-0.42, -0.42, 0.82], [-0.29, 0.38, 1.08], [-0.12, -0.08, 0.9],
+    [0.05, 0.48, 1.18], [0.2, -0.5, 1], [0.36, 0.16, 0.86], [0.46, -0.28, 1.12],
+  ] as const;
+  return layout.map(([tx, tz, scale], i) => {
+    const radius = o.height * scale;
+    const mesh = ico(radius, solid(ctx, ctx.pick([0x5f5954, 0x716a63, 0x4f4b47], o, `rg${i}`), 0.92, true), {
+      x: tx * run,
+      y: radius * 0.62,
+      z: tz * o.size * 1.5,
+      ry: ctx.h(o, `rgSpin${i}`) * Math.PI,
+      recv: true,
+    });
+    mesh.scale.y = 0.82 + ctx.h(o, `rgSquash${i}`) * 0.25;
+    return mesh;
+  });
+};
+
+const washboard: ObjectMeshBuilder = (ctx, o) => {
+  const run = o.length ?? 5;
+  const count = Math.max(4, Math.round(run / 0.7));
+  const dirt = solid(ctx, 0x866e4d, 0.98, true);
+  const end = solid(ctx, 0x6f5a3e, 0.98, true);
+  return repeatX(count, run, (_i, x) => {
+    const group = new THREE.Group();
+    group.add(cyl(o.height, o.height, o.size * 2, dirt, {
+      x, y: o.height * 0.65, rx: Math.PI / 2,
+    }, 10));
+    group.add(cyl(o.height * 0.88, o.height * 0.88, 0.025, end, {
+      x, y: o.height * 0.65, z: o.size, rx: Math.PI / 2,
+    }, 10));
+    return group;
+  });
+};
+
+const sandbagWall: ObjectMeshBuilder = (ctx, o) => {
+  const bag = solid(ctx, ctx.pick([0xa38d62, 0x94805a, 0xb09a6d], o, 'sandbag'), 0.98, true);
+  const len = o.length ?? 4;
+  const bagW = Math.min(0.62, Math.max(0.35, len / 8));
+  const rows = Math.max(1, Math.round(o.height / 0.28));
+  const cols = Math.max(2, Math.round(len / bagW));
+  const out: THREE.Object3D[] = [];
+  for (let row = 0; row < rows; row++) {
+    const offset = row % 2 ? bagW / 2 : 0;
+    out.push(...repeatX(cols, len - bagW, (i, x) => {
+      const m = ico(bagW * 0.48, bag, {
+        x: x + offset,
+        y: (row + 0.5) * o.height / rows,
+        z: (ctx.h(o, `bagZ${row}-${i}`) - 0.5) * o.size * 0.25,
+      });
+      m.scale.set(1, 0.55, o.size / bagW);
+      return m;
+    }));
+  }
+  return out;
+};
+
 export const TRAIL_MESHES = {
   ramp, kicker, tyreStack, tyreWall, culvertPipe, concreteBlock,
-  jerseyBarrier, plankBridge, logCrossing, cattleGrid,
+  jerseyBarrier, plankBridge, logCrossing, cattleGrid, stairSteps, rockGarden,
+  washboard, sandbagWall,
 } satisfies Record<string, ObjectMeshBuilder>;

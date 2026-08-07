@@ -20,7 +20,7 @@
 //    resolution live in the document both sides compile in.
 // 4: clients own vehicle physics and upload canonical VehicleState; the
 //    server relays it instead of simulating and correcting player bodies.
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 6;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // The client-owned vehicle simulation advances at this fixed cadence.

@@ -24,7 +24,22 @@ function sample(kind: ObstacleKind, yaw = 0.7): Obstacle {
 describe('object catalog', () => {
   it('derives the kind list from the table', () => {
     expect([...OBJECT_KINDS].sort()).toEqual(Object.keys(OBJECT_INFO).sort());
-    expect(OBJECT_KINDS.length).toBeGreaterThan(30);
+    expect(OBJECT_KINDS.length).toBeGreaterThanOrEqual(66);
+  });
+
+  it('includes the expanded editor choices in their intended sections', () => {
+    const groups = new Map(objectKindsByGroup().map((g) => [g.group, g.kinds]));
+    expect(groups.get('natural')).toEqual(expect.arrayContaining(['cactus', 'reeds']));
+    expect(groups.get('trail')).toEqual(expect.arrayContaining([
+      'stairSteps', 'rockGarden', 'washboard', 'sandbagWall',
+    ]));
+    expect(groups.get('props')).toEqual(expect.arrayContaining([
+      'fuelPump', 'generator', 'portableToilet', 'streetLight', 'bench',
+      'roadworkBarrier', 'horizontalTank', 'watchtower',
+      'campTent', 'woodPile', 'waterTrough', 'farmWindmill', 'solarPanel',
+      'oldTractor', 'bushHut', 'timberCabin', 'leanTo', 'caravan', 'bushDunny',
+    ]));
+    expect(groups.get('markers')).toContain('checkpointArch');
   });
 
   it('recognises exactly the kinds in the table', () => {
@@ -90,6 +105,20 @@ describe('object catalog', () => {
         expect(qlen, `${kind}: collider rotation is not a unit quaternion`).toBeCloseTo(1, 6);
       }
     }
+  });
+
+  it('rotates the individual rocks in a rock garden with its yaw', () => {
+    const garden = sample('rockGarden', Math.PI / 2);
+    const colliders = resolveColliders(garden);
+    expect(colliders).toHaveLength(7);
+    expect(new Set(colliders.map((c) => `${c.pos.x.toFixed(3)},${c.pos.z.toFixed(3)}`)).size)
+      .toBe(7);
+    // A local +X offset points along world -Z under the catalog's yaw
+    // convention. If boulder offsets ignored yaw, this garden would rotate
+    // visually while its collision rocks stayed behind.
+    const first = colliders[0]!;
+    expect(first.pos.x).not.toBeCloseTo(garden.x - 0.42 * (garden.length ?? 6), 3);
+    expect(first.pos.z).toBeGreaterThan(garden.z);
   });
 
   it('stays finite at both ends of every slider', () => {

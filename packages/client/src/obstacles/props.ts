@@ -234,8 +234,314 @@ const wreckCar: ObjectMeshBuilder = (ctx, o) => {
   return out;
 };
 
+const fuelPump: ObjectMeshBuilder = (ctx, o) => {
+  const body = solid(ctx, ctx.pick([0xb94836, 0x336f78, 0xd2aa36], o, 'pump'), 0.78);
+  const trim = metal(ctx, 0xd4d0c5, 0.48);
+  const dark = solid(ctx, 0x20272a, 0.75);
+  const hose = solid(ctx, 0x202020, 0.9);
+  const w = o.length ?? 0.75;
+  return [
+    box(w * 1.15, 0.12, o.size * 2.2, trim, { y: 0.06 }),
+    box(w, o.height * 0.84, o.size * 2, body, { y: o.height * 0.48 }),
+    box(w * 0.72, o.height * 0.2, 0.035, dark, {
+      y: o.height * 0.68, z: o.size + 0.02,
+    }),
+    box(w * 1.05, o.height * 0.12, o.size * 2.08, trim, { y: o.height * 0.94 }),
+    torus(o.height * 0.2, 0.025, hose, {
+      x: w * 0.56, y: o.height * 0.48, z: 0, ry: Math.PI / 2,
+    }),
+    box(0.08, o.height * 0.24, 0.1, dark, {
+      x: w * 0.62, y: o.height * 0.68, z: o.size * 0.3, rz: -0.2,
+    }),
+  ];
+};
+
+const generator: ObjectMeshBuilder = (ctx, o) => {
+  const frame = metal(ctx, 0x2f3335, 0.5);
+  const engine = solid(ctx, ctx.pick([0xd55f25, 0xd3a72f, 0x3b6e8c], o, 'generator'), 0.78);
+  const dark = solid(ctx, 0x232526, 0.92);
+  const len = o.length ?? 1.2;
+  const w = o.size * 2;
+  const tube = 0.055;
+  const out: THREE.Object3D[] = [
+    box(len * 0.7, o.height * 0.58, w * 0.72, engine, { y: o.height * 0.46 }),
+    box(len * 0.28, o.height * 0.42, w * 0.76, dark, {
+      x: len * 0.28, y: o.height * 0.47,
+    }),
+  ];
+  for (const y of [tube, o.height - tube]) {
+    for (const z of [-w / 2, w / 2]) out.push(box(len, tube * 2, tube * 2, frame, { y, z }));
+  }
+  for (const x of [-len / 2, len / 2]) {
+    for (const z of [-w / 2, w / 2]) out.push(box(tube * 2, o.height, tube * 2, frame, { x, y: o.height / 2, z }));
+  }
+  for (const x of [-len * 0.32, len * 0.32]) {
+    out.push(cyl(o.height * 0.15, o.height * 0.15, w * 1.08, dark, {
+      x, y: o.height * 0.15, rx: Math.PI / 2,
+    }, 10));
+  }
+  return out;
+};
+
+const portableToilet: ObjectMeshBuilder = (ctx, o) => {
+  const body = solid(ctx, ctx.pick([0x287aa1, 0x267a58, 0x8b63a6], o, 'toilet'), 0.86);
+  const dark = solid(ctx, 0x26333a, 0.82);
+  const white = solid(ctx, 0xd7dedb, 0.82);
+  const w = o.length ?? 1.15;
+  return [
+    box(w * 1.08, 0.12, o.size * 2.08, dark, { y: 0.06 }),
+    box(w, o.height * 0.91, o.size * 2, body, { y: o.height * 0.48 }),
+    box(w * 0.86, o.height * 0.82, 0.035, dark, {
+      y: o.height * 0.47, z: o.size + 0.02,
+    }),
+    box(w * 0.28, 0.05, 0.04, white, {
+      y: o.height * 0.62, z: o.size + 0.045,
+    }),
+    cyl(0.055, 0.055, o.height * 0.28, dark, {
+      x: -w * 0.32, y: o.height * 1.05, z: -o.size * 0.3,
+    }, 7),
+    box(w * 1.08, o.height * 0.08, o.size * 2.08, body, {
+      y: o.height * 0.96, rz: 0.03,
+    }),
+  ];
+};
+
+const streetLight: ObjectMeshBuilder = (ctx, o) => {
+  const pole = metal(ctx, 0x777d80, 0.46);
+  const lamp = solid(ctx, 0xe4deae, 0.5);
+  const arm = o.height * 0.18;
+  return [
+    cyl(o.size * 0.7, o.size, o.height * 0.9, pole, { y: o.height * 0.45 }, 9),
+    lyingCyl(o.size * 0.62, arm, pole, {
+      x: arm / 2, y: o.height * 0.9,
+    }, 8),
+    box(arm * 0.42, o.size * 1.4, o.size * 2.5, pole, {
+      x: arm, y: o.height * 0.88,
+    }),
+    box(arm * 0.34, 0.025, o.size * 2, lamp, {
+      x: arm, y: o.height * 0.8,
+    }),
+  ];
+};
+
+const bench: ObjectMeshBuilder = (ctx, o) => {
+  const timber = solid(ctx, ctx.pick([0x7f5d3a, 0x8c6943, 0x6f5438], o, 'bench'), 0.93);
+  const frame = metal(ctx, 0x383b3c, 0.58);
+  const len = o.length ?? 1.8;
+  const out: THREE.Object3D[] = [];
+  for (const z of [-o.size * 0.55, 0, o.size * 0.55]) {
+    out.push(box(len, 0.08, o.size * 0.48, timber, { y: o.height * 0.52, z }));
+  }
+  for (let i = 0; i < 3; i++) {
+    out.push(box(len, 0.08, o.size * 0.45, timber, {
+      y: o.height * (0.66 + i * 0.13), z: -o.size * 0.82, rx: -0.12,
+    }));
+  }
+  for (const x of [-len * 0.36, len * 0.36]) {
+    out.push(box(0.08, o.height * 0.56, 0.08, frame, { x, y: o.height * 0.28, z: o.size * 0.45 }));
+    out.push(box(0.08, o.height * 0.92, 0.08, frame, { x, y: o.height * 0.46, z: -o.size * 0.72 }));
+  }
+  return out;
+};
+
+const roadworkBarrier: ObjectMeshBuilder = (ctx, o) => {
+  const orange = solid(ctx, 0xe56a1d, 0.78);
+  const white = solid(ctx, 0xf1eee5, 0.76);
+  const dark = solid(ctx, 0x303234, 0.9);
+  const len = o.length ?? 2.4;
+  const out: THREE.Object3D[] = [];
+  for (const x of [-len / 2, len / 2]) {
+    out.push(cyl(o.size, o.size, o.height, dark, { x, y: o.height / 2 }, 8));
+    out.push(box(o.size * 5, 0.055, o.size * 3, dark, { x, y: 0.03 }));
+  }
+  const segments = 7;
+  out.push(...repeatX(segments, len - len / segments, (i, x) =>
+    box(len / segments + 0.015, o.height * 0.2, o.size * 2, i % 2 ? white : orange, {
+      x, y: o.height * 0.72,
+    })));
+  return out;
+};
+
+const checkpointArch: ObjectMeshBuilder = (ctx, o) => {
+  const orange = solid(ctx, 0xe85c1c, 0.75);
+  const dark = solid(ctx, 0x25282a, 0.82);
+  const white = solid(ctx, 0xf0eee7, 0.74);
+  const half = (o.length ?? 4.5) / 2;
+  const out: THREE.Object3D[] = [];
+  for (const x of [-half, half]) {
+    out.push(cyl(o.size, o.size * 1.25, o.height, orange, { x, y: o.height / 2 }, 8));
+    for (let i = 0; i < 4; i++) {
+      out.push(box(o.size * 2.05, o.height * 0.11, o.size * 2.05, i % 2 ? white : dark, {
+        x, y: o.height * (0.22 + i * 0.18),
+      }));
+    }
+  }
+  out.push(
+    box(half * 2 + o.size * 2, o.size * 2, o.size * 2, orange, {
+      y: o.height - o.size,
+    }),
+    box(half * 1.08, o.size * 1.2, o.size * 2.1, dark, {
+      y: o.height - o.size,
+    }),
+  );
+  return out;
+};
+
+const campTent: ObjectMeshBuilder = (ctx, o) => {
+  const canvas = solid(ctx, ctx.pick([0x6f7845, 0x9b7b4c, 0x5e6d58], o, 'tent'), 0.94);
+  const ground = solid(ctx, 0x49483f, 0.98);
+  const pole = metal(ctx, 0x767875, 0.58);
+  const len = o.length ?? 2.4;
+  const slope = Math.atan2(o.height, o.size);
+  const panel = Math.hypot(o.height, o.size);
+  return [
+    box(len, 0.035, o.size * 2, ground, { y: 0.018 }),
+    box(len, 0.045, panel, canvas, {
+      y: o.height / 2, z: o.size / 2, rx: slope,
+    }),
+    box(len, 0.045, panel, canvas, {
+      y: o.height / 2, z: -o.size / 2, rx: -slope,
+    }),
+    lyingCyl(0.025, len * 1.08, pole, { y: o.height }, 6),
+    cyl(0.025, 0.025, o.height, pole, {
+      x: -len / 2, y: o.height / 2,
+    }, 6),
+    cyl(0.025, 0.025, o.height, pole, {
+      x: len / 2, y: o.height / 2,
+    }, 6),
+  ];
+};
+
+const woodPile: ObjectMeshBuilder = (ctx, o) => {
+  const bark = solid(ctx, TRUNK_COLOR, 0.98, true);
+  const cut = solid(ctx, 0xa6855c, 0.92);
+  const len = o.length ?? 2.5;
+  const rows = Math.max(2, Math.round(o.height / 0.28));
+  const out: THREE.Object3D[] = [];
+  for (let row = 0; row < rows; row++) {
+    const logs = Math.max(2, rows - Math.floor(row / 2));
+    for (let j = 0; j < logs; j++) {
+      const r = Math.min(0.16, o.height / rows * 0.46);
+      const z = (j - (logs - 1) / 2) * r * 1.8;
+      const y = r + row * r * 1.65;
+      out.push(
+        lyingCyl(r, len * (0.88 + ctx.h(o, `log${row}-${j}`) * 0.12), bark, { y, z }, 7),
+        cyl(r * 0.9, r * 0.9, 0.025, cut, {
+          x: len * 0.45, y, z, rz: Math.PI / 2,
+        }, 7),
+      );
+    }
+  }
+  // Uprights at the ends keep the stack visually contained.
+  for (const x of [-len / 2, len / 2]) {
+    out.push(cyl(0.06, 0.07, o.height, bark, { x, y: o.height / 2, z: o.size * 0.75 }, 7));
+  }
+  return out;
+};
+
+const waterTrough: ObjectMeshBuilder = (ctx, o) => {
+  const steel = metal(ctx, 0x858d8c, 0.62);
+  const water = ctx.mat('troughWater', () => new THREE.MeshStandardMaterial({
+    color: 0x416f7b, roughness: 0.3, metalness: 0.05,
+  }));
+  const len = o.length ?? 2.4;
+  const rim = 0.08;
+  return [
+    box(len, o.height, rim, steel, { y: o.height / 2, z: -o.size }),
+    box(len, o.height, rim, steel, { y: o.height / 2, z: o.size }),
+    box(rim, o.height, o.size * 2, steel, { x: -len / 2, y: o.height / 2 }),
+    box(rim, o.height, o.size * 2, steel, { x: len / 2, y: o.height / 2 }),
+    box(len, rim, o.size * 2, steel, { y: rim / 2 }),
+    box(len - rim * 2, 0.025, o.size * 2 - rim * 2, water, { y: o.height * 0.72 }),
+  ];
+};
+
+const farmWindmill: ObjectMeshBuilder = (ctx, o) => {
+  const steel = metal(ctx, 0x747b7c, 0.56);
+  const rust = solid(ctx, 0x86563b, 0.9);
+  const rotorR = o.height * 0.19;
+  const rotorY = o.height * 0.82;
+  const out: THREE.Object3D[] = [
+    cyl(o.size * 0.55, o.size, o.height, steel, { y: o.height / 2 }, 7),
+    torus(rotorR, o.size * 0.32, rust, {
+      x: o.size * 1.2, y: rotorY, ry: Math.PI / 2,
+    }),
+    cyl(o.size * 0.25, o.size * 0.25, rotorR * 2, rust, {
+      x: o.size * 1.2, y: rotorY,
+    }, 6),
+    cyl(o.size * 0.25, o.size * 0.25, rotorR * 2, rust, {
+      x: o.size * 1.2, y: rotorY, rx: Math.PI / 2,
+    }, 6),
+  ];
+  // Wide footings and braces give the narrow tower a farm-windmill silhouette.
+  for (const z of [-rotorR * 0.45, rotorR * 0.45]) {
+    out.push(box(o.size, o.height * 0.75, o.size, steel, {
+      y: o.height * 0.36, z, rx: z < 0 ? -0.12 : 0.12,
+    }));
+  }
+  return out;
+};
+
+const solarPanel: ObjectMeshBuilder = (ctx, o) => {
+  const frame = metal(ctx, 0x737b7e, 0.48);
+  const cell = solid(ctx, 0x173a55, 0.34);
+  const len = o.length ?? 2.4;
+  const out: THREE.Object3D[] = [];
+  for (const x of [-len * 0.3, len * 0.3]) {
+    out.push(cyl(0.055, 0.07, o.height * 0.8, frame, { x, y: o.height * 0.4 }, 7));
+  }
+  const panel = new THREE.Group();
+  panel.position.y = o.height * 0.8;
+  panel.rotation.x = -0.35;
+  panel.add(box(len, 0.1, o.size * 2, frame, { recv: true }));
+  const cols = 6;
+  const rows = 3;
+  for (let x = 0; x < cols; x++) {
+    for (let z = 0; z < rows; z++) {
+      panel.add(box(len / cols - 0.025, 0.012, o.size * 2 / rows - 0.025, cell, {
+        x: -len / 2 + (x + 0.5) * len / cols,
+        y: 0.058,
+        z: -o.size + (z + 0.5) * o.size * 2 / rows,
+      }));
+    }
+  }
+  out.push(panel);
+  return out;
+};
+
+const oldTractor: ObjectMeshBuilder = (ctx, o) => {
+  const paint = solid(ctx, ctx.pick([0x6d7938, 0xa35831, 0x9b8a3a], o, 'tractor'), 0.9, true);
+  const rust = solid(ctx, ctx.pick(RUST_COLORS, o, 'tractorRust'), 0.98, true);
+  const tyreMat = solid(ctx, 0x232322, 0.96);
+  const seat = solid(ctx, 0x322b25, 0.95);
+  const len = o.length ?? 3.2;
+  const out: THREE.Object3D[] = [
+    box(len * 0.52, o.height * 0.34, o.size * 1.3, paint, {
+      x: len * 0.2, y: o.height * 0.56,
+    }),
+    box(len * 0.28, o.height * 0.12, o.size * 0.9, rust, {
+      x: -len * 0.23, y: o.height * 0.75,
+    }),
+    box(len * 0.2, o.height * 0.3, o.size * 0.65, seat, {
+      x: -len * 0.22, y: o.height * 0.92, rz: -0.12,
+    }),
+    cyl(0.055, 0.07, o.height * 0.82, rust, {
+      x: len * 0.33, y: o.height * 1.02, z: -o.size * 0.38,
+    }, 7),
+  ];
+  for (const [x, r] of [[-len * 0.3, o.height * 0.34], [len * 0.3, o.height * 0.23]] as const) {
+    for (const z of [-o.size, o.size]) {
+      out.push(cyl(r, r, o.size * 0.34, tyreMat, { x, y: r, z, rx: Math.PI / 2 }, 12));
+      out.push(cyl(r * 0.42, r * 0.42, o.size * 0.36, rust, { x, y: r, z, rx: Math.PI / 2 }, 10));
+    }
+  }
+  return out;
+};
+
 export const PROP_MESHES = {
   barrel, crate, pallet, hayBale, trafficCone, bollard, fencePost, fenceRun,
   gate, signpost, telegraphPole, windSock, campfire, picnicTable, flagpole,
-  wreckCar,
+  wreckCar, fuelPump, generator, portableToilet, streetLight, bench,
+  roadworkBarrier, checkpointArch, campTent, woodPile, waterTrough,
+  farmWindmill, solarPanel, oldTractor,
 } satisfies Record<string, ObjectMeshBuilder>;

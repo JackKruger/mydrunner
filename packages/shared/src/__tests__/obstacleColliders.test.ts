@@ -24,6 +24,9 @@ import { generateTerrain } from '../physics/terrain.js';
 import {
   generateObstacles, spawnObstacleColliders, type Obstacle,
 } from '../physics/obstacles.js';
+import {
+  OBJECT_KINDS, objectInfo, resolveColliders,
+} from '../physics/objectCatalog.js';
 import { fnv1a32 } from '../hash.js';
 
 const GOLDEN = {
@@ -97,6 +100,25 @@ describe('obstacle collider golden fingerprint', () => {
   it('builds the same colliders twice from the same terrain', () => {
     const again = spawnInto(generateObstacles(generateTerrain()));
     expect(describeColliders(again.world)).toEqual(describeColliders(world));
+  });
+
+  it('spawns every editor kind through the Rapier collider path', () => {
+    const allKinds: Obstacle[] = OBJECT_KINDS.map((kind, i) => {
+      const d = objectInfo(kind).defaults;
+      return {
+        id: `catalog-${kind}`, kind,
+        x: i * 20, y: 0, z: -i * 20, yaw: 0.37,
+        size: d.size, height: d.height,
+        ...(d.length !== undefined ? { length: d.length } : {}),
+      };
+    });
+    const spawned = spawnInto(allKinds);
+    expect(spawned.bodies).toHaveLength(OBJECT_KINDS.length);
+    let colliderCount = 0;
+    spawned.world.forEachCollider(() => { colliderCount++; });
+    expect(colliderCount).toBe(allKinds.reduce(
+      (sum, obstacle) => sum + resolveColliders(obstacle).length, 0,
+    ));
   });
 
   // The per-kind rules spelled out, so a failure above says *which* kind
