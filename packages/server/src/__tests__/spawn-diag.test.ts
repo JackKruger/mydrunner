@@ -11,7 +11,8 @@ describe('spawn movement diagnostic', () => {
     surfaces.fill(Physics.Surface.Road);
     const world = new Physics.World({
       terrain: { size, resolution: n, heights, surfaces, seed: 0,
-        mountain: Physics.mountainFor(size), petrolStation: Physics.petrolStationPadFor(size), bogs: [], roads: [] },
+        mountain: Physics.mountainFor(size), petrolStation: Physics.petrolStationPadFor(size),
+        ...Physics.dryWater(n), bogs: [], roads: [] },
     });
 
     const v = world.spawnVehicle('p', { position: { x: 0, y: 1.5, z: 0 } });

@@ -14,11 +14,12 @@ import {
 } from '../physics/obstacles.js';
 import { landmarksFor, type Landmarks } from '../physics/landmarks.js';
 import {
-  generateTerrain, petrolStationPadFor, sampleHeightBilinear,
+  generateTerrain, petrolStationPadFor, sampleHeightBilinear, WATER_NONE,
   type TerrainData,
 } from '../physics/terrain.js';
 import {
   HEIGHT_DELTA_SCALE, MAP_FORMAT_VERSION, NO_SURFACE_OVERRIDE,
+  WATER_FLOW_SCALE, WATER_LEVEL_SCALE, WATER_NONE_CM,
   type MapDoc, type Marker, type PlacedObject, type SpawnPoint,
 } from './mapDoc.js';
 import {
@@ -102,6 +103,20 @@ export function applyMapDoc(doc: MapDoc, opts: ApplyOptions = {}): MapWorld {
     }
   }
 
+  // Water composes after the bake/delta branch and outside it: it is
+  // absolute, not a delta, so a baked map's frozen ground does not make
+  // its water any less authored. Levels stay in the same units the
+  // heights they will be differenced against are in.
+  const waterCm = decodeInt16Grid(doc.water.level, WATER_NONE_CM);
+  const flowXCm = decodeInt16Grid(doc.water.flowX);
+  const flowZCm = decodeInt16Grid(doc.water.flowZ);
+  for (let i = 0; i < n * n; i++) {
+    const lvl = waterCm[i]!;
+    terrain.waterLevel[i] = lvl === WATER_NONE_CM ? WATER_NONE : lvl / WATER_LEVEL_SCALE;
+    terrain.waterFlowX[i] = flowXCm[i]! / WATER_FLOW_SCALE;
+    terrain.waterFlowZ[i] = flowZCm[i]! / WATER_FLOW_SCALE;
+  }
+
   const obstacles = generateObstacles(terrain, {
     includeProcedural: doc.objects.includeProcedural,
     removed: doc.objects.removed,
@@ -166,8 +181,19 @@ export function proceduralDoc(overrides: Partial<MapDoc['base']> = {}): MapDoc {
     surfaceOverride: encodeUint8Grid(
       new Uint8Array(n * n).fill(NO_SURFACE_OVERRIDE), n, NO_SURFACE_OVERRIDE,
     ),
+    water: emptyWater(n),
     objects: { includeProcedural: true, added: [], removed: [] },
     spawns: [],
     markers: [],
+  };
+}
+
+/** A document's water block with no water in it. The level grid's fill is
+ *  the dry sentinel, so all three encode to zero stored tiles. */
+export function emptyWater(n: number): MapDoc['water'] {
+  return {
+    level: encodeInt16Grid(new Int16Array(n * n).fill(WATER_NONE_CM), n, WATER_NONE_CM),
+    flowX: encodeInt16Grid(new Int16Array(n * n), n),
+    flowZ: encodeInt16Grid(new Int16Array(n * n), n),
   };
 }

@@ -9,10 +9,13 @@ import {
 } from '../map/applyMapDoc.js';
 import {
   decodeMapDoc, encodeMapDoc, mapDocRev, MAP_FORMAT_VERSION,
-  HEIGHT_DELTA_SCALE, NO_SURFACE_OVERRIDE, type MapDoc,
+  HEIGHT_DELTA_SCALE, NO_SURFACE_OVERRIDE, WATER_NONE_CM, type MapDoc,
 } from '../map/mapDoc.js';
 import { encodeInt16Grid, encodeUint8Grid } from '../map/tileGrid.js';
-import { generateTerrain, Surface, worldToTerrainIndex } from '../physics/terrain.js';
+import {
+  generateTerrain, Surface, WATER_NONE, worldToTerrainIndex,
+} from '../physics/terrain.js';
+import { hasWater } from '../physics/water.js';
 import { generateObstacles } from '../physics/obstacles.js';
 import { landmarksFor } from '../physics/landmarks.js';
 import { fnv1aArray } from '../hash.js';
@@ -279,6 +282,81 @@ describe('decodeMapDoc rejects malformed documents', () => {
   it('rejects a missing required field', () => {
     bad((d) => { delete d.spawns; }, /spawns must be an array/);
   });
+  it('rejects a document with no water block', () => {
+    bad((d) => { delete d.water; }, /water must be an object/);
+  });
+  it('rejects a water grid at the wrong resolution', () => {
+    bad((d) => {
+      ((d.water as Record<string, unknown>).level as Record<string, unknown>).n = 64;
+    }, /resolution cannot be changed/);
+  });
+});
+
+describe('authored water', () => {
+  it('composes to a dry terrain when the document has no water', () => {
+    const world = applyMapDoc(proceduralDoc());
+    expect(hasWater(world.terrain)).toBe(false);
+    expect(world.terrain.waterLevel[0]).toBe(WATER_NONE);
+  });
+
+  it('stores no tiles for an empty water block', () => {
+    const doc = proceduralDoc();
+    expect(doc.water.level.cells).toHaveLength(0);
+    expect(doc.water.flowX.cells).toHaveLength(0);
+    expect(doc.water.flowZ.cells).toHaveLength(0);
+  });
+
+  it('round-trips levels and flow through the document', () => {
+    const doc = proceduralDoc();
+    const level = new Int16Array(RES * RES).fill(WATER_NONE_CM);
+    const flowX = new Int16Array(RES * RES);
+    const flowZ = new Int16Array(RES * RES);
+    // A 3-cell puddle at a known spot, 0.75 m up, drifting +x at 1.8 m/s.
+    const at = 40 * RES + 40;
+    for (let k = 0; k < 3; k++) {
+      level[at + k] = 75;
+      flowX[at + k] = 180;
+      flowZ[at + k] = -25;
+    }
+    doc.water = {
+      level: encodeInt16Grid(level, RES, WATER_NONE_CM),
+      flowX: encodeInt16Grid(flowX, RES),
+      flowZ: encodeInt16Grid(flowZ, RES),
+    };
+
+    const world = applyMapDoc(reparse(doc));
+    expect(world.terrain.waterLevel[at]).toBeCloseTo(0.75, 6);
+    expect(world.terrain.waterFlowX[at]).toBeCloseTo(1.8, 6);
+    expect(world.terrain.waterFlowZ[at]).toBeCloseTo(-0.25, 6);
+    // And everywhere else is still dry.
+    expect(world.terrain.waterLevel[0]).toBe(WATER_NONE);
+    expect(hasWater(world.terrain)).toBe(true);
+  });
+
+  it('survives a bake: water is authored, not generated, so freezing the ground leaves it alone', () => {
+    const doc = proceduralDoc();
+    const level = new Int16Array(RES * RES).fill(WATER_NONE_CM);
+    level[100] = -40;
+    doc.water = { ...doc.water, level: encodeInt16Grid(level, RES, WATER_NONE_CM) };
+    doc.bake = {
+      heights: encodeInt16Grid(new Int16Array(RES * RES), RES),
+      surfaces: encodeUint8Grid(new Uint8Array(RES * RES).fill(Surface.Dirt), RES, 0),
+    };
+    const world = applyMapDoc(doc);
+    expect(world.terrain.waterLevel[100]).toBeCloseTo(-0.4, 6);
+  });
+
+  it('is not part of the base checksum', () => {
+    // Water cannot drift against the generator because the generator
+    // never makes any, so adding water must not invalidate a delta.
+    const dry = proceduralDoc();
+    const wet = proceduralDoc();
+    const level = new Int16Array(RES * RES).fill(WATER_NONE_CM);
+    level[7] = 120;
+    wet.water = { ...wet.water, level: encodeInt16Grid(level, RES, WATER_NONE_CM) };
+    expect(wet.baseChecksum).toBe(dry.baseChecksum);
+  });
+
 });
 
 function cellX(c: number): number {

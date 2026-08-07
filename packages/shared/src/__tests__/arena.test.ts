@@ -14,7 +14,9 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Physics, EMPTY_INPUT, FIXED_DT, type PlayerInput } from '../index.js';
-import { mountainFor, petrolStationPadFor } from '../physics/terrain.js';
+import { mountainFor, petrolStationPadFor,
+  dryWater,
+} from '../physics/terrain.js';
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -43,6 +45,7 @@ function rampTerrain(slopeDeg: number, surface: Physics.Surface, flatEnd = -20):
   return {
     size: SIZE, resolution: RES, heights, surfaces, seed: 0,
     mountain: mountainFor(SIZE), petrolStation: petrolStationPadFor(SIZE),
+    ...dryWater(RES),
     bogs: [], roads: [],
   };
 }
@@ -63,6 +66,7 @@ function crossSlopeTerrain(slopeDeg: number, surface: Physics.Surface): Physics.
   return {
     size: SIZE, resolution: RES, heights, surfaces, seed: 0,
     mountain: mountainFor(SIZE), petrolStation: petrolStationPadFor(SIZE),
+    ...dryWater(RES),
     bogs: [], roads: [],
   };
 }
@@ -265,6 +269,7 @@ function bumpTerrain(bumpHeight: number, bumpX = 5, sigma = 1.2): Physics.Terrai
   return {
     size: SIZE, resolution: RES, heights, surfaces, seed: 0,
     mountain: mountainFor(SIZE), petrolStation: petrolStationPadFor(SIZE),
+    ...dryWater(RES),
     bogs: [], roads: [],
   };
 }
@@ -289,6 +294,7 @@ function articulationTerrain(stepHeight: number, stepX = 0): Physics.TerrainData
   return {
     size: SIZE, resolution: RES, heights, surfaces, seed: 0,
     mountain: mountainFor(SIZE), petrolStation: petrolStationPadFor(SIZE),
+    ...dryWater(RES),
     bogs: [], roads: [],
   };
 }
@@ -392,6 +398,7 @@ function runDrop(dropHeight: number): DropResult {
   const terrain: Physics.TerrainData = {
     size: SIZE, resolution: RES, heights, surfaces, seed: 0,
     mountain: mountainFor(SIZE), petrolStation: petrolStationPadFor(SIZE),
+    ...dryWater(RES),
     bogs: [], roads: [],
   };
   const world = new Physics.World({ terrain });

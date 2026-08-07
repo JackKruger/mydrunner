@@ -57,6 +57,36 @@ export function surfaceInfo(s: number): SurfaceInfo {
   return SURFACE_INFO[s as Surface] ?? SURFACE_INFO[Surface.Dirt];
 }
 
+/** Water-surface height meaning "this cell is dry".
+ *
+ *  It cannot be 0: roadLayer flattens the main road to exactly y=0, so a
+ *  river fording the road would have a legitimate water level of zero and
+ *  a zero sentinel would erase it. Any value far below the world floor
+ *  works; this one is also unmistakable in a debug dump. */
+export const WATER_NONE = -1e9;
+
+/** True for a water level that means "there is water here". Written as a
+ *  threshold rather than `!== WATER_NONE` because levels round-trip
+ *  through int16 centimetres, so the sentinel that comes back out of a map
+ *  document is not bit-identical to the one that went in. */
+export function isWet(level: number): boolean {
+  return level > WATER_NONE * 0.5;
+}
+
+/** The water fields of a terrain with no water in it.
+ *
+ *  Spread into a hand-built TerrainData (`...dryWater(n)`). Water is
+ *  authored-only, so "dry" is what every terrain that did not come from a
+ *  map document has — which is every test fixture and the raw generator
+ *  output alike. */
+export function dryWater(n: number): Pick<TerrainData, 'waterLevel' | 'waterFlowX' | 'waterFlowZ'> {
+  return {
+    waterLevel: new Float32Array(n * n).fill(WATER_NONE),
+    waterFlowX: new Float32Array(n * n),
+    waterFlowZ: new Float32Array(n * n),
+  };
+}
+
 export interface TerrainData {
   /** World-space size on each axis (square). */
   size: number;
@@ -66,6 +96,18 @@ export interface TerrainData {
   heights: Float32Array;
   /** Same shape as heights, values are Surface ids. */
   surfaces: Uint8Array;
+  /** Absolute world-Y of the water surface per cell, WATER_NONE where dry.
+   *
+   *  Absolute rather than depth-above-bed so a pond painted over uneven
+   *  ground has a flat surface; storing depth would give it a wavy one.
+   *  Water is authored-only — no height layer produces it — which is what
+   *  keeps it out of baseChecksum and out of the drift check. */
+  waterLevel: Float32Array;
+  /** Water velocity in m/s, split into components so it interpolates.
+   *  An angle would wrap and produce garbage halfway between two cells
+   *  pointing either side of the +/-pi seam. Zero where still or dry. */
+  waterFlowX: Float32Array;
+  waterFlowZ: Float32Array;
   /** Seed used to generate this terrain. */
   seed: number;
   /** Landmark specs exposed for obstacle placement. */
@@ -717,6 +759,9 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
   const n = resolution;
   const heights = new Float32Array(n * n);
   const surfaces = new Uint8Array(n * n);
+  // Dry by default. Nothing in the generator writes water — it arrives
+  // only from a map document's authored grids.
+  const water = dryWater(n);
 
   const mountain = mountainFor(size);
   const pad = opts.pad ?? petrolStationPadFor(size);
@@ -773,7 +818,10 @@ export function generateTerrain(opts: TerrainOptions = {}): TerrainData {
     }
   }
 
-  return { size, resolution, heights, surfaces, seed, mountain, petrolStation: pad, bogs, roads };
+  return {
+    size, resolution, heights, surfaces, ...water,
+    seed, mountain, petrolStation: pad, bogs, roads,
+  };
 }
 
 /** Map a world-space (x, z) to a flat index into heights/surfaces, or -1 if

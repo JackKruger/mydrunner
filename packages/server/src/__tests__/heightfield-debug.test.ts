@@ -24,6 +24,7 @@ describe('heightfield orientation', () => {
         seed: 0,
         mountain: Physics.mountainFor(size),
         petrolStation: Physics.petrolStationPadFor(size),
+        ...Physics.dryWater(n),
         bogs: [],
         roads: [],
       },

@@ -13,7 +13,9 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Physics, EMPTY_INPUT } from '../index.js';
-import { mountainFor, petrolStationPadFor } from '../physics/terrain.js';
+import { mountainFor, petrolStationPadFor,
+  dryWater,
+} from '../physics/terrain.js';
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -31,6 +33,7 @@ function makeWorld(surface: number) {
     size, resolution: n, heights, surfaces, seed: 0,
     mountain: mountainFor(size),
     petrolStation: petrolStationPadFor(size),
+    ...dryWater(n),
     bogs: [],
     roads: [],
   };

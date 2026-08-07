@@ -20,12 +20,26 @@ import type { TileGrid } from './tileGrid.js';
 
 /** Bumped when the document shape changes incompatibly. decodeMapDoc
  *  refuses anything it does not recognise rather than guessing. */
-export const MAP_FORMAT_VERSION = 1;
+export const MAP_FORMAT_VERSION = 2;
 
 /** Height deltas are stored in centimetres so the grid can be int16.
  *  ±327 m of range against a 70 m peak, and 1 cm over a 2.5 m cell is a
  *  0.4% grade artifact — below anything the suspension can feel. */
 export const HEIGHT_DELTA_SCALE = 100;
+
+/** Water levels use the same centimetre quantisation as heights: they are
+ *  compared against heights constantly (depth = level - height), so a
+ *  coarser scale would show up as a depth error rather than a level one. */
+export const WATER_LEVEL_SCALE = 100;
+
+/** Flow velocities in centimetres per second. int16 gives ±327 m/s
+ *  against a river that runs at 2. */
+export const WATER_FLOW_SCALE = 100;
+
+/** Sentinel in `water.level` meaning "dry". int16's most-negative value,
+ *  which is also the tile codec's fill — so a map with no water stores no
+ *  water tiles at all. */
+export const WATER_NONE_CM = -32768;
 
 /** Sentinel in `surfaceOverride` meaning "leave the generated surface".
  *  Cannot be 0: that is Surface.Road. */
@@ -94,6 +108,21 @@ export interface MapDoc {
   heightDelta: TileGrid;
   /** Surface ids, NO_SURFACE_OVERRIDE where the generator wins. */
   surfaceOverride: TileGrid;
+  /** Authored water. Unlike heights and surfaces there is no generated
+   *  base to delta against — nothing in the generator makes water — so
+   *  these grids are absolute, and a map with no water carries three
+   *  empty grids costing a few bytes.
+   *
+   *  Water is deliberately not a Surface: the surface slot is what tells
+   *  the tyre model whether a wheel is on gravel or mud, and overwriting
+   *  it would make every river bed feel the same. */
+  water: {
+    /** Absolute water-surface Y in centimetres, WATER_NONE_CM where dry. */
+    level: TileGrid;
+    /** Water velocity in cm/s, split into components so it interpolates. */
+    flowX: TileGrid;
+    flowZ: TileGrid;
+  };
   /** Frozen composed grids. When present these REPLACE the generated
    *  ones, and the generator no longer affects this map's terrain. */
   bake?: { heights: TileGrid; surfaces: TileGrid };
@@ -185,6 +214,7 @@ export function decodeMapDoc(input: unknown): MapDoc {
 
   const objects = obj(o.objects, 'objects');
   const bakeRaw = o.bake === undefined ? undefined : obj(o.bake, 'bake');
+  const waterRaw = obj(o.water, 'water');
 
   return {
     formatVersion,
@@ -197,6 +227,11 @@ export function decodeMapDoc(input: unknown): MapDoc {
     pad: o.pad === undefined ? undefined : decodePad(o.pad, 'pad'),
     heightDelta: tileGrid(o.heightDelta, 'heightDelta', resolution),
     surfaceOverride: tileGrid(o.surfaceOverride, 'surfaceOverride', resolution),
+    water: {
+      level: tileGrid(waterRaw.level, 'water.level', resolution),
+      flowX: tileGrid(waterRaw.flowX, 'water.flowX', resolution),
+      flowZ: tileGrid(waterRaw.flowZ, 'water.flowZ', resolution),
+    },
     bake: bakeRaw && {
       heights: tileGrid(bakeRaw.heights, 'bake.heights', resolution),
       surfaces: tileGrid(bakeRaw.surfaces, 'bake.surfaces', resolution),

@@ -46,7 +46,7 @@ export const defaultMap: MapDoc = {
       "z": 55
     }
   ],
-  "formatVersion": 1,
+  "formatVersion": 2,
   "heightDelta": {
     "cells": [
       {
@@ -912,5 +912,22 @@ export const defaultMap: MapDoc = {
     ],
     "n": 128,
     "tile": 16
+  },
+  "water": {
+    "flowX": {
+      "cells": [],
+      "n": 128,
+      "tile": 16
+    },
+    "flowZ": {
+      "cells": [],
+      "n": 128,
+      "tile": 16
+    },
+    "level": {
+      "cells": [],
+      "n": 128,
+      "tile": 16
+    }
   }
 };

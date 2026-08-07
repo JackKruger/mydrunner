@@ -13,6 +13,7 @@ import {
   SURFACE_INFO,
   surfaceInfo,
   type TerrainData,
+  dryWater,
 } from '../physics/terrain.js';
 import { SURFACE_FRICTION, TERRAIN } from '../constants.js';
 
@@ -25,6 +26,7 @@ function makeTerrain(resolution: number, size: number, heights: number[]): Terra
     seed: 0,
     mountain: mountainFor(size),
     petrolStation: petrolStationPadFor(size),
+    ...dryWater(resolution),
     bogs: [],
     roads: [],
   };

@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Physics, EMPTY_INPUT, type PlayerInput } from '../index.js';
-import { mountainFor, petrolStationPadFor } from '../physics/terrain.js';
+import { mountainFor, petrolStationPadFor,
+  dryWater,
+} from '../physics/terrain.js';
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -15,6 +17,7 @@ function makeWorld(surface: number = Physics.Surface.Road) {
     size: 200, resolution: n, heights, surfaces, seed: 0,
     mountain: mountainFor(200),
     petrolStation: petrolStationPadFor(200),
+    ...dryWater(n),
     bogs: [],
     roads: [],
   };
@@ -66,6 +69,7 @@ describe('physics audit: side slope and progression', () => {
       size: 200, resolution: n, heights, surfaces, seed: 0,
       mountain: mountainFor(200),
       petrolStation: petrolStationPadFor(200),
+      ...dryWater(n),
       bogs: [],
       roads: [],
     };

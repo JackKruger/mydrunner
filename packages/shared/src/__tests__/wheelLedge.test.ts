@@ -11,6 +11,7 @@ import {
   mountainFor,
   petrolStationPadFor,
   type TerrainData,
+  dryWater,
 } from '../physics/terrain.js';
 import {
   cylinderRotation,
@@ -106,6 +107,7 @@ function flatVehicleWorld(): { world: World; vehicle: SolidAxleVehicle } {
     seed: 0,
     mountain: mountainFor(40),
     petrolStation: petrolStationPadFor(40),
+    ...dryWater(resolution),
     bogs: [],
     roads: [],
   };

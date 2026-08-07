@@ -9,7 +9,9 @@
 
 import { describe, expect, it } from 'vitest';
 import { RutBuffer } from '../physics/ruts.js';
-import { Surface, mountainFor, petrolStationPadFor, type TerrainData } from '../physics/terrain.js';
+import { Surface, mountainFor, petrolStationPadFor, type TerrainData,
+  dryWater,
+} from '../physics/terrain.js';
 import { RUT_MAX_DEPTH } from '../constants.js';
 
 /** Ticks per flush batch. Room used to flush the buffer every 30 ticks
@@ -33,6 +35,7 @@ function makeMudTerrain(): TerrainData {
     seed: 0,
     mountain: mountainFor(size),
     petrolStation: petrolStationPadFor(size),
+    ...dryWater(n),
     bogs: [],
     roads: [],
   };
