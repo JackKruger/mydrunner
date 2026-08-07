@@ -15,39 +15,28 @@
 // module also makes a malformed map a `pnpm typecheck` failure. JSON
 // stays the editor's import/export interchange format.
 
-import { proceduralDoc } from './applyMapDoc.js';
 import { mapDocRev, type MapDoc } from './mapDoc.js';
+import { defaultMap } from './maps/defaultMap.js';
 
-/** The generated world, with no authored edits. The default, and what
- *  every existing test and screenshot is framed against. */
-export const PROCEDURAL_MAP_ID = 'procedural';
+/** The authored world shipped by both client and server. */
+export const DEFAULT_MAP_ID = defaultMap.id;
+
+/** Compatibility name retained for callers that address the original map id. */
+export const PROCEDURAL_MAP_ID = DEFAULT_MAP_ID;
 
 /** Authored maps. Add an entry per committed map module:
  *
  *      import { canyon } from './maps/canyon.js';
  *      const AUTHORED: readonly MapDoc[] = [canyon];
  */
-const AUTHORED: readonly MapDoc[] = [];
-
-// proceduralDoc() runs the full generator to compute its base checksum,
-// which is ~50 ms. Built once on first use rather than at module load so
-// importing the registry stays free for callers that never resolve a map.
-let proceduralCache: MapDoc | null = null;
-function procedural(): MapDoc {
-  if (!proceduralCache) proceduralCache = proceduralDoc();
-  return proceduralCache;
-}
+const AUTHORED: readonly MapDoc[] = [defaultMap];
 
 export function getMap(id: string): MapDoc | null {
-  if (id === PROCEDURAL_MAP_ID) return procedural();
   return AUTHORED.find((m) => m.id === id) ?? null;
 }
 
 export function listMaps(): Array<{ id: string; name: string }> {
-  return [
-    { id: PROCEDURAL_MAP_ID, name: procedural().name },
-    ...AUTHORED.map((m) => ({ id: m.id, name: m.name })),
-  ];
+  return AUTHORED.map((m) => ({ id: m.id, name: m.name }));
 }
 
 const revCache = new Map<string, number>();

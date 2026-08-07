@@ -1,61 +1,60 @@
-// Hostile-input hardening. decodeClient is the first line of defense;
-// Room.applyInput is defense in depth for the direct-call path. Either
-// way, no client-supplied value may reach the physics as NaN/Infinity —
-// a single NaN force corrupts the sender's rigid body state.
+// Direct-call hardening for owner-state relay. The wire decoder rejects
+// malformed tuples first; Room also refuses non-finite or stale updates so
+// tests and future call sites cannot poison every peer's snapshot.
 
-import { describe, it, expect, beforeAll } from 'vitest';
-import { Physics, type PlayerInput } from '@mydrunner/shared';
+import { describe, expect, it } from 'vitest';
+import { Net, type VehicleState } from '@mydrunner/shared';
 import { Room, type PlayerHandle } from '../room.js';
 
-beforeAll(async () => {
-  await Physics.initRapier();
-});
-
-function join(room: Room, id: string): PlayerHandle {
-  const handle: PlayerHandle = { id, name: id, carKind: 'patrol', send: () => {} };
+function joinedRoom(): { room: Room; messages: Net.ServerMessage[] } {
+  const room = new Room();
+  const messages: Net.ServerMessage[] = [];
+  const handle: PlayerHandle = {
+    id: 'p', name: 'p', carKind: 'patrol',
+    send: (bytes) => messages.push(Net.decodeServer(bytes)),
+  };
   room.addPlayer(handle);
-  return handle;
+  room.broadcastSnapshot();
+  return { room, messages };
 }
 
-function tick(room: Room, n: number): void {
-  for (let i = 0; i < n; i++) {
-    (room as unknown as { tickOnce(): void }).tickOnce();
-  }
+function latestState(messages: Net.ServerMessage[]): VehicleState {
+  const snapshots = messages.filter((m): m is Extract<Net.ServerMessage, { t: 'snapshot' }> => m.t === 'snapshot');
+  return snapshots[snapshots.length - 1]!.snap.players[0]!.vehicle;
 }
 
-describe('Room.applyInput hardening', () => {
-  it('neutralises NaN / Infinity input fields and keeps the body finite', () => {
-    const room = new Room();
-    join(room, 'p');
-    const hostile: PlayerInput = {
+describe('Room.applyVehicleState hardening', () => {
+  it('ignores a non-finite owner state', () => {
+    const { room, messages } = joinedRoom();
+    const before = latestState(messages);
+    room.applyVehicleState('p', {
       seq: 1,
-      throttle: NaN,
-      steer: Infinity,
-      brake: -Infinity,
-      handbrake: NaN,
-      buttons: 0,
-    };
-    room.applyInput('p', hostile);
-    tick(room, 30);
-    const t = room.world.vehicles.get('p')!.body.translation();
-    expect(Number.isFinite(t.x)).toBe(true);
-    expect(Number.isFinite(t.y)).toBe(true);
-    expect(Number.isFinite(t.z)).toBe(true);
+      vehicle: { ...before, position: { ...before.position, x: NaN } },
+    });
+    room.broadcastSnapshot();
+    expect(latestState(messages).position.x).toBe(before.position.x);
     room.stop();
-    room.world.dispose();
   });
 
-  it('ignores inputs with a non-integer seq instead of muting the player', () => {
-    const room = new Room();
-    join(room, 'p');
-    room.applyInput('p', { seq: NaN, throttle: 1, steer: 0, brake: 0, handbrake: 0, buttons: 0 });
-    room.applyInput('p', { seq: 1, throttle: 0.5, steer: 0, brake: 0, handbrake: 0, buttons: 0 });
-    tick(room, 60);
-    // The valid seq=1 input must still be applied: full throttle for a
-    // second moves the truck forward.
-    const v = room.world.vehicles.get('p')!.body.linvel();
-    expect(Math.hypot(v.x, v.z)).toBeGreaterThan(0.1);
+  it('accepts increasing sequences and ignores stale or non-integer ones', () => {
+    const { room, messages } = joinedRoom();
+    const before = latestState(messages);
+    room.applyVehicleState('p', {
+      seq: Number.NaN,
+      vehicle: { ...before, position: { ...before.position, x: 100 } },
+    });
+    room.applyVehicleState('p', {
+      seq: 2,
+      vehicle: { ...before, position: { ...before.position, x: 12 } },
+    });
+    room.applyVehicleState('p', {
+      seq: 1,
+      vehicle: { ...before, position: { ...before.position, x: 99 } },
+    });
+    room.broadcastSnapshot();
+    const snapshot = messages.filter((m): m is Extract<Net.ServerMessage, { t: 'snapshot' }> => m.t === 'snapshot').at(-1)!;
+    expect(snapshot.snap.players[0]!.stateSeq).toBe(2);
+    expect(snapshot.snap.players[0]!.vehicle.position.x).toBe(12);
     room.stop();
-    room.world.dispose();
   });
 });

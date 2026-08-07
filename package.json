@@ -9,20 +9,27 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "pnpm -r --parallel --filter './packages/*' run dev",
+    "dev": "pnpm -r --parallel --filter '@mydrunner/*' run dev",
     "dev:server": "pnpm --filter @mydrunner/server run dev",
     "dev:client": "pnpm --filter @mydrunner/client run dev",
-    "build": "pnpm -r --filter './packages/*' run build",
-    "typecheck": "pnpm -r --filter './packages/*' run typecheck",
+    "build": "pnpm -r --filter '@mydrunner/*' run build",
+    "typecheck": "pnpm -r --filter '@mydrunner/*' run typecheck",
     "test": "pnpm --filter @mydrunner/shared --filter @mydrunner/server --filter @mydrunner/client run test",
     "test:e2e": "pnpm --filter @mydrunner/e2e run test",
-    "lint": "pnpm -r --filter './packages/*' run lint",
+    "lint": "pnpm -r --filter '@mydrunner/*' run lint",
     "clean": "pnpm -r exec rm -rf dist node_modules/.vite .turbo"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2",
-    "tsx": "^4.19.2",
-    "vitest": "^2.1.8"
+    "tsx": "4.23.1",
+    "vitest": "4.1.10"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild": "0.28.1",
+      "postcss": "8.5.23",
+      "vite": "8.2.0"
+    }
   }
 }

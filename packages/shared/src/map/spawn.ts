@@ -1,6 +1,6 @@
 // Where a player starts.
 //
-// Extracted from Room so the authoritative server and the editor's offline
+// Extracted from Room so the multiplayer relay and the editor's offline
 // preview cannot drift apart: a preview that puts you somewhere the server
 // would not is a preview of a different map, and the divergence would only
 // show up as "it drove fine in the editor".

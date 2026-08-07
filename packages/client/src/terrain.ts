@@ -21,7 +21,7 @@ export class TerrainMesh {
   constructor(terrain: Physics.TerrainData) {
     // Shares the TerrainData instance generated once in main.ts. The game
     // never mutates it after generation, so the HUD surface lookup, the
-    // minimap and the prediction world can all read the same copy for the
+    // minimap and the owner-physics world can all read the same copy for the
     // whole session. The level editor DOES mutate it in place, which is
     // what updateHeights / updateSurfaces below are for — every reader
     // seeing the same array is the point there too.

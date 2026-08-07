@@ -1,25 +1,19 @@
 // The room loads its world from a map document.
 //
-// Two things need pinning. First, that the switch did not move the
-// shipped world: the default room must still build the exact ground the
-// generator call it replaced did, or every committed screenshot and
-// every "spawns are viable" property test is now describing a different
-// map than the one players drive on.
+// Two things need pinning. First, that the default room builds the map in
+// the shared registry, so the server and browser drive on the same authored
+// terrain even though they deploy independently.
 //
 // Second, that an authored map actually reaches the physics. The failure
 // mode is quiet — a room that composes the document for its terrain but
 // regenerates obstacles procedurally boots fine, looks fine, and puts
 // invisible rocks where the author deleted them.
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   Maps, Net, PROTOCOL_VERSION, Physics, fnv1aArray, type CarKind,
 } from '@mydrunner/shared';
 import { Room, type PlayerHandle } from '../room.js';
-
-beforeAll(async () => {
-  await Physics.initRapier();
-});
 
 function join(room: Room, id: string, carKind: CarKind = 'patrol'): Net.ServerMessage[] {
   const received: Net.ServerMessage[] = [];
@@ -35,31 +29,41 @@ function join(room: Room, id: string, carKind: CarKind = 'patrol'): Net.ServerMe
 
 function close(room: Room): void {
   room.stop();
-  room.world.dispose();
 }
 
-describe('the default room is still the shipped world', () => {
-  it('builds the terrain the generator does', () => {
+function welcomeSpawn(messages: Net.ServerMessage[]): Net.SpawnHandshake {
+  const welcome = messages.find((m): m is Extract<Net.ServerMessage, { t: 'welcome' }> => m.t === 'welcome');
+  if (!welcome) throw new Error('missing welcome');
+  return welcome.spawn;
+}
+
+describe('the default room uses the authored default map', () => {
+  it('builds the terrain in the registry', () => {
     const room = new Room();
-    const direct = Physics.generateTerrain();
-    expect(fnv1aArray(room.world.terrain.heights)).toBe(fnv1aArray(direct.heights));
-    expect(fnv1aArray(room.world.terrain.surfaces)).toBe(fnv1aArray(direct.surfaces));
+    const doc = Maps.getMap(Maps.DEFAULT_MAP_ID);
+    expect(doc).not.toBeNull();
+    const direct = Maps.applyMapDoc(doc!);
+    expect(fnv1aArray(room.map.terrain.heights)).toBe(fnv1aArray(direct.terrain.heights));
+    expect(fnv1aArray(room.map.terrain.surfaces)).toBe(fnv1aArray(direct.terrain.surfaces));
     close(room);
   });
 
-  it('builds the obstacle set the generator does', () => {
+  it('builds the authored obstacle set in the registry', () => {
     const room = new Room();
-    const direct = Physics.generateObstacles(Physics.generateTerrain());
-    expect(room.world.obstacles.map((o) => o.id)).toEqual(direct.map((o) => o.id));
+    const doc = Maps.getMap(Maps.DEFAULT_MAP_ID);
+    expect(doc).not.toBeNull();
+    const direct = Maps.applyMapDoc(doc!);
+    expect(room.map.obstacles.map((o) => o.id)).toEqual(direct.obstacles.map((o) => o.id));
+    expect(doc!.objects.added).toHaveLength(31);
+    expect(doc!.objects.removed).toHaveLength(55);
     close(room);
   });
 
   it('spawns the first player on the road grid', () => {
     const room = new Room();
-    join(room, 'p1');
-    const t = room.world.vehicles.get('p1')!.body.translation();
+    const t = welcomeSpawn(join(room, 'p1')).position;
     // The -X end of the main road: the grid fallback, unchanged.
-    expect(t.x).toBeCloseTo(-room.world.terrain.size / 2 + 24, 5);
+    expect(t.x).toBeCloseTo(-room.map.terrain.size / 2 + 24, 5);
     close(room);
   });
 });
@@ -71,7 +75,7 @@ describe('the welcome names the map', () => {
     expect(welcome).toMatchObject({
       t: 'welcome',
       protocolVersion: PROTOCOL_VERSION,
-      map: { id: Maps.PROCEDURAL_MAP_ID, rev: Maps.mapRevOf(Maps.PROCEDURAL_MAP_ID) },
+      map: { id: Maps.DEFAULT_MAP_ID, rev: Maps.mapRevOf(Maps.DEFAULT_MAP_ID) },
     });
     close(room);
   });
@@ -97,7 +101,7 @@ describe('an authored map reaches the physics', () => {
     const base = Maps.proceduralDoc();
     const victim = Maps.applyMapDoc(base).obstacles[7]!.id;
     const room = new Room({ ...base, objects: { ...base.objects, removed: [victim] } });
-    expect(room.world.obstacles.some((o) => o.id === victim)).toBe(false);
+    expect(room.map.obstacles.some((o) => o.id === victim)).toBe(false);
     close(room);
   });
 
@@ -113,10 +117,10 @@ describe('an authored map reaches the physics', () => {
       yaw: 0.4,
     };
     const room = new Room({ ...base, objects: { ...base.objects, added: [added] } });
-    const placed = room.world.obstacles.find((o) => o.id === 'authored-boulder');
+    const placed = room.map.obstacles.find((o) => o.id === 'authored-boulder');
     expect(placed).toBeDefined();
     // Seated on the composed ground, not left at y=0 under the terrain.
-    expect(placed!.y).toBeCloseTo(Physics.sampleHeightBilinear(room.world.terrain, 12, -8), 5);
+    expect(placed!.y).toBeCloseTo(Physics.sampleHeightBilinear(room.map.terrain, 12, -8), 5);
     close(room);
   });
 
@@ -127,13 +131,11 @@ describe('an authored map reaches the physics', () => {
       { x: -30, z: 10, yaw: Math.PI },
     ];
     const room = new Room({ ...base, spawns });
-    join(room, 'p1');
-    join(room, 'p2');
-    join(room, 'p3');
-    const at = (id: string): { x: number; z: number } => {
-      const t = room.world.vehicles.get(id)!.body.translation();
-      return { x: t.x, z: t.z };
-    };
+    const poses = new Map<string, Net.SpawnHandshake>();
+    poses.set('p1', welcomeSpawn(join(room, 'p1')));
+    poses.set('p2', welcomeSpawn(join(room, 'p2')));
+    poses.set('p3', welcomeSpawn(join(room, 'p3')));
+    const at = (id: string): { x: number; z: number } => poses.get(id)!.position;
     expect(at('p1').x).toBeCloseTo(-40, 5);
     expect(at('p2').x).toBeCloseTo(-30, 5);
     // Slot 2 wraps back onto the first authored point.
@@ -153,10 +155,10 @@ describe('an authored map reaches the physics', () => {
       spawns: [{ x: -40, z: 10, yaw: 0 }],
     });
     const baseline = Physics.generateTerrain().heights[idx]!;
-    expect(room.world.terrain.heights[idx]).toBeCloseTo(baseline + 5, 3);
+    expect(room.map.terrain.heights[idx]).toBeCloseTo(baseline + 5, 3);
     // And the spawn sits on top of the sculpt rather than buried in it.
-    join(room, 'p1');
-    expect(room.world.vehicles.get('p1')!.body.translation().y).toBeGreaterThan(baseline + 5);
+    const spawn = welcomeSpawn(join(room, 'p1'));
+    expect(spawn.position.y).toBeGreaterThan(baseline + 5);
     close(room);
   });
 });

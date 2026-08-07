@@ -33,49 +33,6 @@ export function saveJoin(choice: JoinChoice): void {
   }
 }
 
-const STYLE = `
-#join-overlay {
-  position: fixed; inset: 0; z-index: 10;
-  display: flex; align-items: center; justify-content: center;
-  background: radial-gradient(circle at 50% 35%, rgba(40,55,75,0.92), rgba(10,12,16,0.96));
-  font-family: ui-monospace, monospace; color: #eee;
-}
-#join-card {
-  background: #14181f; border: 1px solid #2a323d; border-radius: 10px;
-  padding: 28px 32px; width: min(560px, 92vw);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-}
-#join-card h1 { font-size: 20px; margin-bottom: 4px; letter-spacing: 0.06em; }
-#join-card .sub { font-size: 11px; opacity: 0.65; margin-bottom: 22px; }
-#join-card label { display: block; font-size: 11px; opacity: 0.7; margin-bottom: 6px; letter-spacing: 0.08em; }
-#join-name {
-  width: 100%; background: #0c0f14; color: #eee; border: 1px solid #2a323d; border-radius: 6px;
-  padding: 10px 12px; font-family: inherit; font-size: 14px; outline: none;
-}
-#join-name:focus { border-color: #d9531e; }
-#join-cars { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 18px 0 22px; }
-.join-car {
-  background: #0c0f14; border: 1px solid #2a323d; border-radius: 8px; padding: 14px;
-  cursor: pointer; transition: border-color 0.12s, transform 0.12s;
-  text-align: left;
-}
-.join-car:hover { border-color: #4a5568; transform: translateY(-1px); }
-.join-car.selected { border-color: #d9531e; background: #1a1410; }
-.join-car .name { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
-.join-car .desc { font-size: 11px; opacity: 0.65; line-height: 1.4; }
-.join-car .swatch {
-  width: 100%; height: 64px; border-radius: 4px; margin-bottom: 10px;
-  display: flex; align-items: center; justify-content: center; font-size: 28px;
-}
-#join-go {
-  width: 100%; padding: 12px; background: #d9531e; color: #fff;
-  border: none; border-radius: 6px; font-family: inherit; font-size: 14px;
-  font-weight: 600; letter-spacing: 0.05em; cursor: pointer; transition: background 0.12s;
-}
-#join-go:hover { background: #ec5e26; }
-#join-go:disabled { background: #444; cursor: not-allowed; }
-`;
-
 interface CarOption {
   kind: CarKind;
   name: string;
@@ -117,25 +74,35 @@ const CAR_OPTIONS: CarOption[] = [
 
 export function showJoinScreen(initial: Partial<JoinChoice>): Promise<JoinChoice> {
   return new Promise<JoinChoice>((resolve) => {
-    const style = document.createElement('style');
-    style.textContent = STYLE;
-    document.head.appendChild(style);
-
     const overlay = document.createElement('div');
     overlay.id = 'join-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'join-title');
 
     let selected: CarKind = initial.carKind ?? 'patrol';
 
-    const card = document.createElement('div');
+    const card = document.createElement('form');
     card.id = 'join-card';
     card.innerHTML = `
-      <h1>mydrunner</h1>
-      <div class="sub">name and rig — saved for next time</div>
-      <label for="join-name">DRIVER NAME</label>
-      <input id="join-name" type="text" maxlength="32" autocomplete="off" spellcheck="false" />
-      <label>VEHICLE</label>
-      <div id="join-cars"></div>
-      <button id="join-go">DRIVE</button>
+      <div class="join-eyebrow">Rugged rally dispatch</div>
+      <h1 id="join-title">mydrunner</h1>
+      <p class="sub">Sign on, select a trail rig, and report to the start line. Your briefing is saved for the next run.</p>
+      <div class="join-driver-row">
+        <div class="join-driver-field">
+          <label for="join-name">Driver call sign</label>
+          <input id="join-name" type="text" maxlength="32" autocomplete="nickname" spellcheck="false" placeholder="Enter driver name" />
+        </div>
+        <p class="join-driver-note">Online rally session<br />Four rigs available</p>
+      </div>
+      <fieldset id="join-rig-fieldset">
+        <legend>Choose your rig</legend>
+        <div id="join-cars" role="radiogroup" aria-label="Vehicle selection"></div>
+      </fieldset>
+      <div class="join-actions">
+        <span class="join-actions-note">Arrow keys select · Enter confirms</span>
+        <button id="join-go" type="submit">Drive</button>
+      </div>
     `;
     overlay.appendChild(card);
     document.body.appendChild(overlay);
@@ -145,34 +112,53 @@ export function showJoinScreen(initial: Partial<JoinChoice>): Promise<JoinChoice
 
     const carsEl = card.querySelector('#join-cars') as HTMLDivElement;
     const cardEls = new Map<CarKind, HTMLButtonElement>();
+    const selectCar = (kind: CarKind, focus = false): void => {
+      selected = kind;
+      for (const [k, el] of cardEls) {
+        const isSelected = k === selected;
+        el.classList.toggle('selected', isSelected);
+        el.setAttribute('aria-checked', String(isSelected));
+        el.tabIndex = isSelected ? 0 : -1;
+      }
+      if (focus) cardEls.get(kind)?.focus();
+    };
     for (const opt of CAR_OPTIONS) {
       const btn = document.createElement('button');
       btn.className = 'join-car';
       btn.type = 'button';
+      btn.dataset.carKind = opt.kind;
+      btn.setAttribute('role', 'radio');
+      btn.setAttribute('aria-checked', 'false');
       btn.innerHTML = `
-        <div class="swatch" style="background:${opt.swatchBg};color:#111;">${opt.glyph}</div>
+        <div class="swatch" style="--rig-colour:${opt.swatchBg};" aria-hidden="true">${opt.glyph}</div>
         <div class="name">${opt.name}</div>
         <div class="desc">${opt.desc}</div>
       `;
-      btn.addEventListener('click', () => {
-        selected = opt.kind;
-        for (const [k, el] of cardEls) el.classList.toggle('selected', k === selected);
+      btn.addEventListener('click', () => selectCar(opt.kind));
+      btn.addEventListener('keydown', (e) => {
+        const index = CAR_OPTIONS.findIndex(({ kind }) => kind === selected);
+        let nextIndex: number | null = null;
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') nextIndex = (index + 1) % CAR_OPTIONS.length;
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') nextIndex = (index - 1 + CAR_OPTIONS.length) % CAR_OPTIONS.length;
+        if (e.key === 'Home') nextIndex = 0;
+        if (e.key === 'End') nextIndex = CAR_OPTIONS.length - 1;
+        if (nextIndex === null) return;
+        e.preventDefault();
+        selectCar(CAR_OPTIONS[nextIndex]!.kind, true);
       });
       cardEls.set(opt.kind, btn);
       carsEl.appendChild(btn);
     }
-    cardEls.get(selected)?.classList.add('selected');
+    selectCar(selected);
 
-    const goBtn = card.querySelector('#join-go') as HTMLButtonElement;
     const submit = (): void => {
       const name = nameInput.value.trim().slice(0, 32) || `player-${Math.floor(Math.random() * 1000)}`;
       document.body.removeChild(overlay);
-      style.remove();
       resolve({ name, carKind: selected });
     };
-    goBtn.addEventListener('click', submit);
-    nameInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') submit();
+    card.addEventListener('submit', (e) => {
+      e.preventDefault();
+      submit();
     });
     setTimeout(() => nameInput.focus(), 0);
   });

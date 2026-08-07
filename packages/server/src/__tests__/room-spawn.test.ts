@@ -1,41 +1,27 @@
-// Reproduces the playwright scenario: add a player to a Room, run for a
-// few seconds with throttle held, and verify the vehicle ends up upright
-// on the road instead of underground.
+// A joining player receives a spawn, then its first client-owned state
+// replaces the room's placeholder and is relayed unchanged.
 
-import { describe, it, expect, beforeAll } from 'vitest';
-import { Physics, EMPTY_INPUT } from '@mydrunner/shared';
+import { describe, expect, it } from 'vitest';
+import { Net } from '@mydrunner/shared';
 import { Room } from '../room.js';
 
-beforeAll(async () => {
-  await Physics.initRapier();
-});
-
-describe('room spawn behavior', () => {
-  it('first player settles on the road, upright', () => {
+describe('room owner-state handoff', () => {
+  it('relays the state uploaded after welcome', () => {
     const room = new Room();
-    const sent: Uint8Array[] = [];
-    const handle = {
-      id: 'p1',
-      name: 'tester',
-      carKind: 'patrol' as const,
-      send: (m: Uint8Array) => sent.push(m),
-    };
-    room.addPlayer(handle);
-    // Drive forward.
-    for (let s = 1; s <= 240; s++) {
-      room.applyInput('p1', { ...EMPTY_INPUT, seq: s, throttle: 1 });
-      // Manually tick the room one step.
-      // tickOnce is private; use the public start/stop loop... but that
-      // uses real time. For tests, step the world directly via the room's
-      // exposed world.
-      room.world.step();
-    }
-    const v = room.world.vehicles.get('p1')!;
-    const s = v.getState();
-    expect(s.position.y, `final y was ${s.position.y}`).toBeGreaterThan(0);
-    expect(s.position.y).toBeLessThan(2);
-    expect(Math.abs(s.rotation.w)).toBeGreaterThan(0.5);
+    const received: Net.ServerMessage[] = [];
+    room.addPlayer({
+      id: 'p1', name: 'tester', carKind: 'patrol',
+      send: (bytes) => received.push(Net.decodeServer(bytes)),
+    });
+    room.broadcastSnapshot();
+    const initial = received.find((m): m is Extract<Net.ServerMessage, { t: 'snapshot' }> => m.t === 'snapshot')!
+      .snap.players[0]!.vehicle;
+    const moved = { ...initial, position: { x: initial.position.x + 8, y: 1.2, z: initial.position.z } };
+    room.applyVehicleState('p1', { seq: 1, vehicle: moved });
+    room.broadcastSnapshot();
+    const latest = received.filter((m): m is Extract<Net.ServerMessage, { t: 'snapshot' }> => m.t === 'snapshot').at(-1)!;
+    expect(latest.snap.players[0]!.stateSeq).toBe(1);
+    expect(latest.snap.players[0]!.vehicle.position).toEqual(moved.position);
     room.stop();
-    room.world.dispose();
   });
 });

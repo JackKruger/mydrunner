@@ -75,7 +75,7 @@ test.describe('driving', () => {
     // roundtrips, which time out on slow CI runners. We sample the rendered
     // mesh's wheel y-rotation directly: in scene.ts that's set to -steer
     // (mesh sign convention), so we negate to recover the player-intent
-    // sign that the original __prediction.state().wheels[0].steer reported.
+    // sign that the owner simulation's front-wheel steer reported.
     const samples: number[] = await page.evaluate(async () => {
       const w = window as unknown as { __scene?: { localId: string; vehicles: Map<string, { wheels: { rotation: { y: number } }[] }> } };
       const s = w.__scene!;

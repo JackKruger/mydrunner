@@ -1,8 +1,7 @@
 // Phase 2 wire-format coverage. The solid-axle vehicle exposes its two
 // kinematic DOFs (rideY, rollAngle) per axle; those values must
 // round-trip through getState -> JSON -> applyAxleSnaps so client
-// prediction can reconcile the local truck's flex pose against the
-// authoritative server state.
+// owner state can preserve the local truck's flex pose for remote visuals.
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Physics, EMPTY_INPUT, Net } from '@mydrunner/shared';
@@ -74,7 +73,7 @@ describe('axle wire round-trip', () => {
             name: 'p',
             carKind: 'patrol',
             vehicle: before,
-            lastAckSeq: 0,
+            stateSeq: 0,
           },
         ],
       },
@@ -93,9 +92,8 @@ describe('axle wire round-trip', () => {
   });
 
   it('reconciling axle snaps into a fresh vehicle matches the source axle pose', () => {
-    // Mimics what Prediction.reconcile does: capture authoritative axle
-    // pose, apply onto a separately-stepped sim, assert the axles match
-    // (modulo any continued world.step that comes after).
+    // State restoration still needs to preserve axle pose for recordings,
+    // debugging and future replay tooling.
     const a = makeWorld();
     const b = makeWorld();
     for (let i = 1; i <= 60; i++) {

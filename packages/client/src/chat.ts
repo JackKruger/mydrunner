@@ -2,55 +2,8 @@
 // an input field at the bottom that opens on T (or the on-screen
 // "chat" button on mobile). Submit on Enter, cancel on Escape.
 //
-// All DOM is created here so the host page only needs to call init().
-
-const STYLE = `
-#chat-log {
-  position: fixed;
-  top: 40px; left: 8px;
-  z-index: 5;
-  pointer-events: none;
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  max-width: min(540px, 80vw);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-#chat-log .line {
-  background: rgba(0, 0, 0, 0.55);
-  border-radius: 3px;
-  padding: 3px 8px;
-  color: #eee;
-  word-wrap: break-word;
-  overflow-wrap: anywhere;
-}
-#chat-log .name { color: #ffb27a; margin-right: 6px; }
-#chat-log .name.me { color: #7adfff; }
-#chat-log .system .name { color: #999; font-style: italic; }
-
-#chat-input-wrap {
-  position: fixed;
-  left: 8px; right: 8px;
-  bottom: 28px;
-  z-index: 6;
-  display: none;
-  justify-content: center;
-}
-#chat-input-wrap.open { display: flex; }
-#chat-input {
-  width: min(560px, 92vw);
-  background: rgba(0, 0, 0, 0.78);
-  color: #eee;
-  border: 1px solid #d9531e;
-  border-radius: 4px;
-  padding: 8px 12px;
-  font-family: ui-monospace, monospace;
-  font-size: 14px;
-  outline: none;
-}
-`;
+// All DOM is created here so the host page only needs to call init(). The
+// visual rules live in the shared player stylesheet.
 
 const MAX_VISIBLE = 5;
 const MAX_LEN = 200;
@@ -75,24 +28,46 @@ interface Hooks {
 }
 
 export function initChat(hooks: Hooks): ChatUI {
-  const style = document.createElement('style');
-  style.textContent = STYLE;
-  document.head.appendChild(style);
-
   const log = document.createElement('div');
   log.id = 'chat-log';
+  log.setAttribute('role', 'log');
+  log.setAttribute('aria-label', 'Team radio messages');
+  log.setAttribute('aria-live', 'polite');
+  log.setAttribute('aria-relevant', 'additions');
   document.body.appendChild(log);
 
   const inputWrap = document.createElement('div');
   inputWrap.id = 'chat-input-wrap';
+  inputWrap.className = 'instrument-panel';
+  inputWrap.setAttribute('role', 'group');
+  inputWrap.setAttribute('aria-label', 'Team radio');
+  const label = document.createElement('label');
+  label.className = 'chat-label';
+  label.htmlFor = 'chat-input';
+  label.textContent = 'Team radio // transmit';
   const input = document.createElement('input');
   input.id = 'chat-input';
   input.type = 'text';
   input.maxLength = MAX_LEN;
   input.autocomplete = 'off';
   input.spellcheck = false;
+  input.placeholder = 'Message the convoy…';
+  const hint = document.createElement('div');
+  hint.className = 'chat-hint';
+  hint.textContent = 'Enter sends · Esc cancels';
+  inputWrap.appendChild(label);
   inputWrap.appendChild(input);
+  inputWrap.appendChild(hint);
   document.body.appendChild(inputWrap);
+
+  const updateKeyboardOffset = (): void => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const obscured = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+    document.documentElement.style.setProperty('--chat-keyboard-offset', `${obscured}px`);
+  };
+  window.visualViewport?.addEventListener('resize', updateKeyboardOffset);
+  window.visualViewport?.addEventListener('scroll', updateKeyboardOffset);
 
   const entries: HTMLElement[] = [];
 
@@ -125,6 +100,7 @@ export function initChat(hooks: Hooks): ChatUI {
     inputWrap.classList.remove('open');
     input.value = '';
     input.blur();
+    document.documentElement.style.setProperty('--chat-keyboard-offset', '0px');
   };
 
   const submit = (): void => {
@@ -155,7 +131,10 @@ export function initChat(hooks: Hooks): ChatUI {
       open = true;
       inputWrap.classList.add('open');
       // Mobile: focusing the input opens the soft keyboard.
-      setTimeout(() => input.focus(), 0);
+      setTimeout(() => {
+        input.focus();
+        updateKeyboardOffset();
+      }, 0);
     },
     isOpen() {
       return open;

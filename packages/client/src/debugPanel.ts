@@ -1,10 +1,8 @@
 // Live tuning panel. Activated only when the player's saved name matches
 // "jack" (case-insensitive). Renders a side panel of sliders bound to
-// the shared TUNING object. The local prediction sim reads TUNING, so a
-// slider change is felt immediately on the local truck — but the server
-// keeps its own TUNING instance, so the two sims diverge until the values
-// are baked into constants.ts and the server restarts. The soft-correction
-// model absorbs that divergence as a steady pull; expected while tuning.
+// the shared TUNING object. LocalSimulation reads TUNING directly, so a
+// slider change is authoritative immediately. Copy settings to bake the
+// chosen values into constants for every newly loaded client.
 //
 // "Copy settings" serialises TUNING as a TypeScript snippet so the
 // values can be pasted into constants.ts as new defaults.

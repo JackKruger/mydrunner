@@ -3,11 +3,10 @@
 // Vehicle and tyre code reads from TUNING instead of the compile-time
 // constants in `constants.ts`; the constants seed the initial values.
 //
-// Each running process (client, server) has its own TUNING instance.
-// The debug panel is client-only, so mutations there don't propagate
-// to the server - some reconcile drift while tuning is the expected
-// trade-off. The "Copy settings" button serialises TUNING so the
-// values can be baked into constants.ts as new defaults.
+// Owner physics and the debug panel live in the same browser, so slider
+// changes apply immediately to the canonical truck. The "Copy settings"
+// button serialises TUNING so the values can be baked into constants.ts as
+// new defaults for every client build.
 
 import {
   AXLE,

@@ -9,12 +9,10 @@ import {
   PROTOCOL_VERSION,
   normalizeCarKind,
   Net,
-  Physics,
 } from '@mydrunner/shared';
 import { Room, type PlayerHandle } from './room.js';
 
 async function main(): Promise<void> {
-  await Physics.initRapier();
   const port = Number(process.env.PORT ?? DEFAULT_PORT);
   const room = new Room();
   room.start();
@@ -32,9 +30,9 @@ async function main(): Promise<void> {
   });
   // maxPayload bounds what a single unauthenticated socket can make us
   // allocate before decodeClient ever runs. The largest legitimate client
-  // message is a 200-char chat (CHAT_MAX_LEN); inputs and hello are well
-  // under 100 bytes. The `ws` default is 100 MB, which on a 256 MB VM is
-  // a one-frame memory exhaustion.
+  // message is a 200-char chat or one compact quantized vehicle state.
+  // The `ws` default is 100 MB, which on a 256 MB VM is a one-frame
+  // memory exhaustion.
   const wss = new WebSocketServer({ server: http, maxPayload: 4096 });
   http.listen(port);
 
@@ -115,9 +113,9 @@ async function main(): Promise<void> {
           joined = true;
           break;
         }
-        case 'input':
+        case 'state':
           if (!joined) return;
-          room.applyInput(id, msg.input);
+          room.applyVehicleState(id, msg.update);
           break;
         case 'ping':
           handle.send(

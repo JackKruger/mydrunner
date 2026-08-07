@@ -12,3 +12,4 @@ export * from './tire.js';
 export * from './objectCatalog.js';
 export * from './obstacles.js';
 export * from './landmarks.js';
+export * from './collisionGroups.js';

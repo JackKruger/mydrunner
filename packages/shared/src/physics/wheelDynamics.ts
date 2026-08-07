@@ -33,6 +33,28 @@ export interface WheelKinematic {
   surface: number;
   /** Vertical force from the suspension last tick (N). */
   lastForce?: number;
+  /** Ray depth after ledge-to-top continuity limiting. This is the depth
+   *  consumed by suspension forces and axle visuals; contactDepth remains
+   *  the raw geometric query result. */
+  resolvedDepth: number;
+  resolvedDepthInitialized: boolean;
+  /** True while resolvedDepth is converging after a steep contact. */
+  ledgeHandoff: boolean;
+  /** Short support bridge between corner contact and top-surface ray. */
+  ledgeHandoffGrace: number;
+  /** Whether the tyre-volume query found a steep face this tick. */
+  ledgeContact: boolean;
+  /** Internal diagnostics and integration-test observability. */
+  ledgeNormalForce: number;
+  ledgeLongForce: number;
+  /** Previous world-space wheel centre for swept tyre-volume queries. */
+  previousCenter: { x: number; y: number; z: number };
+  hasPreviousCenter: boolean;
+  /** Grip source for the support ray: terrain tuning or hit-collider
+   *  friction, selected after the raycast. */
+  supportGrip: number;
+  supportIsTerrain: boolean;
+  supportColliderFriction: number;
 }
 
 export function createWheelKinematic(): WheelKinematic {
@@ -46,6 +68,18 @@ export function createWheelKinematic(): WheelKinematic {
     contactNormal: { x: 0, y: 1, z: 0 },
     surface: 1,
     lastForce: 0,
+    resolvedDepth: 0,
+    resolvedDepthInitialized: false,
+    ledgeHandoff: false,
+    ledgeHandoffGrace: 0,
+    ledgeContact: false,
+    ledgeNormalForce: 0,
+    ledgeLongForce: 0,
+    previousCenter: { x: 0, y: 0, z: 0 },
+    hasPreviousCenter: false,
+    supportGrip: 1,
+    supportIsTerrain: true,
+    supportColliderFriction: 1,
   };
 }
 
@@ -56,6 +90,17 @@ export function resetWheelKinematic(w: WheelKinematic): void {
   w.contactDepth = 0;
   w.prevContactDepth = -1;
   w.lastForce = 0;
+  w.resolvedDepth = 0;
+  w.resolvedDepthInitialized = false;
+  w.ledgeHandoff = false;
+  w.ledgeHandoffGrace = 0;
+  w.ledgeContact = false;
+  w.ledgeNormalForce = 0;
+  w.ledgeLongForce = 0;
+  w.hasPreviousCenter = false;
+  w.supportGrip = 1;
+  w.supportIsTerrain = true;
+  w.supportColliderFriction = 1;
 }
 
 /** Integrate wheel angular velocity by net torque this tick.

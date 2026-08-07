@@ -29,12 +29,23 @@ interface SnapshotEntry {
   snap: WorldSnapshot;
 }
 
-/** The local truck's pose as the prediction sim last reported it. */
+/** The local truck's pose as the client-owned simulation last reported it. */
 interface LocalOverride {
   pos: { x: number; y: number; z: number };
   rot: { x: number; y: number; z: number; w: number };
   wheels: { steer: number; spin: number; suspensionLength: number }[];
   axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }];
+}
+
+/** The exact remote pose rendered this frame, reused by physics proxies. */
+export interface RemoteCollisionState {
+  id: PlayerId;
+  carKind: CarKind;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
+  linVel: { x: number; y: number; z: number };
+  angVel: { x: number; y: number; z: number };
+  recvAtMs: number;
 }
 
 interface VehicleVisual {
@@ -73,9 +84,8 @@ export class Scene {
     { rideY: 0, rollAngle: 0 },
     { rideY: 0, rollAngle: 0 },
   ];
-  // Last interpolated state for the local player. Kept around for the
-  // surface-name HUD lookup, the debug-panel axle readout, and e2e
-  // assertions - all of which used to read from prediction.state().
+  // Last rendered state for the local player. Kept around for the
+  // surface-name HUD lookup, debug-panel axle readout, and e2e assertions.
   private _localPos = { x: 0, y: 0, z: 0 };
   private _localSteer = 0;
   private _localAxlesLast: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] = [
@@ -83,16 +93,12 @@ export class Scene {
     { rideY: 0, rollAngle: 0 },
   ];
   private _localHasState = false;
-  // Visual override for the local truck's front-wheel steer angle. The
-  // server smooths input.steer toward maxSteer at TUNING.steerSpeed
-  // (~327 ms full-lock); rendering only off the snapshot stream meant
-  // the wheel mesh sat still for ~100-400 ms after a key press,
-  // which read as "is my input being registered?". Driven directly
-  // from input each render frame, the wheel snaps with the player and
-  // the chassis follow-through (server steer ramp + tire bite) reads
-  // as normal driving inertia rather than network lag.
+  // Immediate visual override for the local front-wheel steer angle. The
+  // physics steering rack still ramps toward lock; showing the sampled
+  // input immediately makes that mechanical response readable.
   private _localInputSteer = 0;
   private _present = new Set<PlayerId>();
+  private _remoteCollisionStates: RemoteCollisionState[] = [];
 
   constructor(canvasParent: HTMLElement) {
     // Renderer, lighting, sky, terrain, obstacles and landmarks all live
@@ -239,7 +245,7 @@ export class Scene {
   /** Read-only accessors used by the HUD (surface-under-truck lookup),
    *  the debug panel (axle DOF readout), and e2e tests. All sourced from
    *  the pose the vehicle was actually rendered with this frame - the
-   *  prediction override for the local truck when active, snapshot
+   *  owner-simulation override for the local truck when active, snapshot
    *  interpolation/extrapolation otherwise. */
   localPosition(): { x: number; y: number; z: number } | null {
     return this._localHasState ? this._localPos : null;
@@ -250,28 +256,12 @@ export class Scene {
   localAxles(): [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] | null {
     return this._localHasState ? this._localAxlesLast : null;
   }
-  /** Read the LATEST raw snapshot's server-side state for the local
-   *  player. Unlike localPosition()/localSteer() (which return
-   *  interp/extrapolation outputs) this exposes the unfiltered wire
-   *  values - used by the latency test to time when server-side state
-   *  transitions (currentSteer, angVel.y) actually arrive on the client. */
-  localServerState(): { steer: number; angVelY: number; yaw: number; recvAtMs: number } | null {
-    if (!this.localId || this.buffer.length === 0) return null;
-    const latest = this.buffer[this.buffer.length - 1]!;
-    const me = latest.snap.players.find((p) => p.id === this.localId);
-    if (!me) return null;
-    const q = me.vehicle.rotation;
-    const yaw = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y));
-    return {
-      steer: me.vehicle.wheels[0]?.steer ?? 0,
-      angVelY: me.vehicle.angVel.y,
-      yaw,
-      recvAtMs: latest.recvAtMs,
-    };
+  /** Remote chassis poses exactly as drawn on the previous render pass. */
+  remoteCollisionStates(): readonly RemoteCollisionState[] {
+    return this._remoteCollisionStates;
   }
   /** Push the latest sampled input steer (range -1..1) so the local
-   *  truck's front wheels can snap to the player's intent visually
-   *  even though the chassis pose still comes from snapshots. */
+   *  truck's front wheels can show the player's intent immediately. */
   setLocalInputSteer(steer: number): void {
     this._localInputSteer = Math.max(-1, Math.min(1, steer)) * VEHICLE.maxSteer;
   }
@@ -289,7 +279,7 @@ export class Scene {
     this._reviewCamLook = pos ? (lookAt ?? { x: 0, y: 0, z: 0 }) : null;
   }
 
-  /** Override the local truck's visuals from the prediction sim. When
+  /** Override the local truck's visuals from the owner simulation. When
    *  set, render() skips snapshot interp/extrapolation for the local
    *  truck and uses these values directly. Reset on disconnect by
    *  passing null. */
@@ -352,7 +342,7 @@ export class Scene {
     }
   }
 
-  /** Pose the local truck from the prediction override.
+  /** Pose the local truck from the owner-simulation override.
    *
    *  Shared by the snapshot path, where it overwrites the interpolated
    *  pose, and the preview path, where it is the only pose there is.
@@ -396,6 +386,7 @@ export class Scene {
     const pair = this.pickPair(renderAtMs);
     const present = this._present;
     present.clear();
+    this._remoteCollisionStates.length = 0;
 
     if (pair) {
       const { a, b, t } = pair;
@@ -421,7 +412,7 @@ export class Scene {
         // Snapshot interpolation pass: every vehicle is first posed from
         // the snapshot pair at RENDER_DELAY_MS in the past. For remote
         // vehicles this is final. For the LOCAL truck it is overwritten
-        // below by the prediction override (or, before the prediction's
+        // below by the owner override (or, before the simulation's
         // first state arrives, by extrapolation from the latest snapshot).
         vis.group.position.set(
           pa.vehicle.position.x + (pb.vehicle.position.x - pa.vehicle.position.x) * t,
@@ -473,11 +464,11 @@ export class Scene {
         }
 
         if (isLocal) {
-          // If the prediction sim has pushed an override this frame,
+          // If the owner simulation has pushed an override this frame,
           // use it directly: the local truck's pose comes from the
           // local Rapier sim, NOT from snapshot interp/extrapolation.
           // Otherwise fall back to extrapolating from the latest
-          // snapshot (used briefly before the first prediction state
+          // snapshot (used briefly before the first local state
           // arrives).
           const ov = this._localOverride;
           if (ov) {
@@ -512,6 +503,34 @@ export class Scene {
           }
           this._localSteer = pa.vehicle.wheels[0]?.steer ?? 0;
           this.finishLocal(vis);
+        } else {
+          const latestRecvAtMs = this.buffer[this.buffer.length - 1]!.recvAtMs;
+          this._remoteCollisionStates.push({
+            id: pb.id,
+            carKind: pb.carKind,
+            position: {
+              x: vis.group.position.x,
+              y: vis.group.position.y,
+              z: vis.group.position.z,
+            },
+            rotation: {
+              x: vis.group.quaternion.x,
+              y: vis.group.quaternion.y,
+              z: vis.group.quaternion.z,
+              w: vis.group.quaternion.w,
+            },
+            linVel: {
+              x: pa.vehicle.linVel.x + (pb.vehicle.linVel.x - pa.vehicle.linVel.x) * t,
+              y: pa.vehicle.linVel.y + (pb.vehicle.linVel.y - pa.vehicle.linVel.y) * t,
+              z: pa.vehicle.linVel.z + (pb.vehicle.linVel.z - pa.vehicle.linVel.z) * t,
+            },
+            angVel: {
+              x: pa.vehicle.angVel.x + (pb.vehicle.angVel.x - pa.vehicle.angVel.x) * t,
+              y: pa.vehicle.angVel.y + (pb.vehicle.angVel.y - pa.vehicle.angVel.y) * t,
+              z: pa.vehicle.angVel.z + (pb.vehicle.angVel.z - pa.vehicle.angVel.z) * t,
+            },
+            recvAtMs: latestRecvAtMs,
+          });
         }
       }
     } else if (this.localId && this._localOverride) {
@@ -560,7 +579,7 @@ export class Scene {
     this.particles.update(frameDt);
 
     // Minimap dots come from the posed visuals, so they show exactly what
-    // the player sees (prediction for the local truck, interp for remotes).
+    // the player sees (owner simulation locally, interpolation remotely).
     // Entries are recycled to keep the render loop allocation-free.
     let mi = 0;
     for (const [id, v] of this.vehicles) {

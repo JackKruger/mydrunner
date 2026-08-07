@@ -1,5 +1,5 @@
 // Shared vehicle interface that SolidAxleVehicle satisfies.
-// World.spawnVehicle returns this; consumers (Room, Prediction) program
+// World.spawnVehicle returns this; LocalSimulation and tests program
 // against it instead of the concrete class.
 
 import type RAPIER from '@dimforge/rapier3d-compat';
@@ -20,9 +20,7 @@ export interface VehicleLike {
   postStep(): void;
   getState(): VehicleState;
   dispose(): void;
-  /** Axle DOF state (rideY/rollAngle). The prediction sim snaps these to
-   *  the server's values on each snapshot because they're terrain-contact
-   *  driven: small, drifty, and invisible when corrected. */
+  /** Axle DOF state (rideY/rollAngle) for owner rendering and upload. */
   axleSnaps?(): [AxleSnap, AxleSnap];
   applyAxleSnaps?(snaps: [AxleSnap, AxleSnap]): void;
 }

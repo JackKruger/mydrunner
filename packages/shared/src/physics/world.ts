@@ -12,6 +12,7 @@ import type { VehicleLike, VehicleSpawn } from './vehicleTypes.js';
 import { generateTerrain, type TerrainData, type TerrainOptions } from './terrain.js';
 import { generateObstacles, spawnObstacleColliders, type Obstacle } from './obstacles.js';
 import { landmarksFor, spawnLandmarkColliders, type Landmarks } from './landmarks.js';
+import { COLLISION_GROUP_WORLD } from './collisionGroups.js';
 // Type-only: the map layer composes terrain from physics, so a value
 // import here would close the cycle.
 import type { MapWorld } from '../map/applyMapDoc.js';
@@ -65,6 +66,8 @@ export class World {
     this.obstacleBodies = spawnObstacleColliders(this.world, this.obstacles);
     this.landmarks = opts.map?.landmarks ?? landmarksFor(this.terrain);
     this.landmarkBodies = spawnLandmarkColliders(this.world, this.landmarks);
+    this.setStaticCollisionGroups(this.obstacleBodies);
+    this.setStaticCollisionGroups(this.landmarkBodies);
   }
 
   private buildTerrain(t: TerrainData): { body: RAPIER.RigidBody; collider: RAPIER.Collider } {
@@ -84,11 +87,19 @@ export class World {
       n - 1,
       transposed,
       scale,
-    ).setFriction(1.0);
+    ).setFriction(1.0).setCollisionGroups(COLLISION_GROUP_WORLD);
     const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
     const body = this.world.createRigidBody(bodyDesc);
     const collider = this.world.createCollider(colliderDesc, body);
     return { body, collider };
+  }
+
+  private setStaticCollisionGroups(bodies: RAPIER.RigidBody[]): void {
+    for (const body of bodies) {
+      for (let i = 0; i < body.numColliders(); i++) {
+        body.collider(i).setCollisionGroups(COLLISION_GROUP_WORLD);
+      }
+    }
   }
 
   spawnVehicle(id: string, spawn: VehicleSpawn, kind: CarKind = 'patrol'): VehicleLike {

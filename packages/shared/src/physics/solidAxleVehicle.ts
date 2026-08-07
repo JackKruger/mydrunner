@@ -23,6 +23,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import {
   ANTI_ROLL,
   FIXED_DT,
+  LEDGE_CONTACT,
   SUSPENSION,
   TIRE_LATERAL,
   TIRE_LONG_FRICTION,
@@ -63,6 +64,15 @@ import {
 } from './wheelDynamics.js';
 import type { VehicleLike, VehicleSpawn } from './vehicleTypes.js';
 import type { World } from './world.js';
+import { COLLISION_GROUP_OWNED_VEHICLE, COLLISION_GROUP_WHEEL_RAY } from './collisionGroups.js';
+import {
+  contactFrame,
+  cylinderRotation,
+  findSteepWheelContact,
+  wheelBasis,
+  type SteepWheelContact,
+  type WheelBasis,
+} from './wheelContact.js';
 
 type Vec3 = { x: number; y: number; z: number };
 
@@ -72,6 +82,7 @@ export class SolidAxleVehicle implements VehicleLike {
   readonly body: RAPIER.RigidBody;
   readonly chassis: RAPIER.Collider;
   readonly geom: VehicleGeom;
+  private readonly wheelShape: RAPIER.Cylinder;
 
   private input: PlayerInput = { ...EMPTY_INPUT };
   private currentSteer = 0;
@@ -82,18 +93,18 @@ export class SolidAxleVehicle implements VehicleLike {
   private engine: EngineState = createEngineState();
   private lastRpm = 0;
   private lastGear = 0;
+  private ledgeCrawlTicks = 0;
 
   // Reused scratch vectors so the per-tick force/torque loop doesn't
   // allocate. Contents are valid only for the duration of the call site
   // that wrote them; never store references to these.
-  private readonly _scratchFwd: Vec3 = { x: 0, y: 0, z: 0 };
-  private readonly _scratchRight: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly _scratchForce: Vec3 = { x: 0, y: 0, z: 0 };
 
   constructor(world: World, id: string, spawn: VehicleSpawn, kind: CarKind = 'patrol') {
     this.world = world;
     this.id = id;
     this.geom = geomFor(kind);
+    this.wheelShape = new RAPIER.Cylinder(this.geom.wheelWidth / 2, this.geom.wheelRadius);
 
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(spawn.position.x, spawn.position.y, spawn.position.z)
@@ -125,7 +136,8 @@ export class SolidAxleVehicle implements VehicleLike {
     const colDesc = RAPIER.ColliderDesc.roundCuboid(ext.x - r, colHalfH - r, ext.z - r, r)
       .setTranslation(0, colOffsetY, 0)
       .setDensity(kindMass / (8 * ext.x * ext.y * ext.z))
-      .setFriction(0.1);
+      .setFriction(0.1)
+      .setCollisionGroups(COLLISION_GROUP_OWNED_VEHICLE);
     this.chassis = world.world.createCollider(colDesc, this.body);
     // Same low CoM trick the legacy Vehicle uses: pull principal moments
     // toward a low centre so the chassis feels bottom-heavy and resists
@@ -174,6 +186,7 @@ export class SolidAxleVehicle implements VehicleLike {
     this.engine = createEngineState();
     this.lastRpm = 0;
     this.lastGear = 0;
+    this.ledgeCrawlTicks = 0;
   }
 
   preStep(): void {
@@ -194,6 +207,9 @@ export class SolidAxleVehicle implements VehicleLike {
     const fwd = rotateVecByQuat({ x: 0, y: 0, z: 1 }, r);
     const right = rotateVecByQuat({ x: 1, y: 0, z: 0 }, r);
     const up = rotateVecByQuat({ x: 0, y: 1, z: 0 }, r);
+    const wheelBases: Array<WheelBasis | null> = [null, null, null, null];
+    const ledgeContacts: Array<SteepWheelContact | null> = [null, null, null, null];
+    const ledgeLoads = [0, 0, 0, 0];
 
     // 2. Smooth steering.
     const targetSteer = this.input.steer * TUNING.maxSteer;
@@ -247,6 +263,89 @@ export class SolidAxleVehicle implements VehicleLike {
 
       wL.surface = sampleSurface(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
       wR.surface = sampleSurface(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
+      wL.supportGrip = wL.supportIsTerrain ? surfaceGrip(wL.surface) : wL.supportColliderFriction;
+      wR.supportGrip = wR.supportIsTerrain ? surfaceGrip(wR.surface) : wR.supportColliderFriction;
+
+      // A second, volumetric query catches faces the suspension-axis ray
+      // cannot see. It is based on the previous axle pose so the tyre starts
+      // touching a ledge when its circumference reaches it, not when the
+      // wheel centre has already crossed the face.
+      const basis = wheelBasis(
+        fwd,
+        right,
+        up,
+        axle.rollAngle,
+        ag.hasSteering ? -this.currentSteer : 0,
+      );
+      wheelBases[wIdxL] = basis;
+      wheelBases[wIdxR] = basis;
+      const volumeSides: Array<{ index: number; wheel: WheelKinematic; localX: number }> = [
+        { index: wIdxL, wheel: wL, localX: -ag.trackHalf },
+        { index: wIdxR, wheel: wR, localX: +ag.trackHalf },
+      ];
+      for (const volumeSide of volumeSides) {
+        const w = volumeSide.wheel;
+        const center = wheelCenterWorld(t, r, axle, volumeSide.localX);
+        const ledge = findSteepWheelContact(
+          this.world.world,
+          this.wheelShape,
+          w.hasPreviousCenter ? w.previousCenter : null,
+          center,
+          cylinderRotation(basis.axle),
+          this.geom.wheelRadius,
+          this.geom.wheelWidth / 2,
+          LEDGE_CONTACT.prediction,
+          LEDGE_CONTACT.maxSupportNormalY,
+          LEDGE_CONTACT.maxClimbHeight,
+          LEDGE_CONTACT.edgeAdvance,
+          basis.forward,
+          COLLISION_GROUP_WHEEL_RAY,
+        );
+        ledgeContacts[volumeSide.index] = ledge;
+        w.ledgeContact = ledge !== null;
+        w.ledgeNormalForce = 0;
+        w.ledgeLongForce = 0;
+        w.previousCenter.x = center.x;
+        w.previousCenter.y = center.y;
+        w.previousCenter.z = center.z;
+        w.hasPreviousCenter = true;
+
+        resolveSuspensionDepth(
+          w,
+          ledge,
+          ag.suspensionRestLength,
+          this.geom.wheelRadius,
+          center.y,
+          dt,
+        );
+        if (ledge) {
+          const normalSpeed = pointVelocityDot(lv, av, t, ledge.point, ledge.normal);
+          const correctionSpeed = Math.min(
+            LEDGE_CONTACT.maxNormalCorrectionSpeed,
+            ledge.penetration * LEDGE_CONTACT.normalCorrectionRate,
+          );
+          const normalForce = clamp(
+            (correctionSpeed - normalSpeed)
+              * (VEHICLE.mass * this.geom.massMult)
+              * LEDGE_CONTACT.normalMassFraction
+              / dt,
+            0,
+            LEDGE_CONTACT.maxForce,
+          );
+          ledgeLoads[volumeSide.index] = normalForce;
+          w.ledgeNormalForce = normalForce;
+          if (normalForce > 0) {
+            const sf = this._scratchForce;
+            sf.x = ledge.normal.x * normalForce * dt;
+            sf.y = ledge.normal.y * normalForce * dt;
+            sf.z = ledge.normal.z * normalForce * dt;
+            // Central impulse makes this a pure no-penetration constraint.
+            // The unsprung wheel/suspension moment is modelled separately by
+            // the tread and ride forces below.
+            this.body.applyImpulse(sf, true);
+          }
+        }
+      }
 
       // Update axle state (rideY tracks avgComp, rollAngle tracks slope).
       // We still use stepAxle for the kinematic axle bookkeeping that
@@ -261,10 +360,10 @@ export class SolidAxleVehicle implements VehicleLike {
       // moment that solid-axle vehicles get from their leaf-spring or
       // coilover mounts being attached at the axle ends, not the diff.
       const result = stepAxle(axle, {
-        leftDepth: wL.contactDepth,
-        rightDepth: wR.contactDepth,
-        leftContact: wL.contact,
-        rightContact: wR.contact,
+        leftDepth: wL.resolvedDepth,
+        rightDepth: wR.resolvedDepth,
+        leftContact: hasSuspensionSupport(wL, ledgeContacts[wIdxL] ?? null),
+        rightContact: hasSuspensionSupport(wR, ledgeContacts[wIdxR] ?? null),
         chassisVertVelAtAnchor: 0, // unused now; per-wheel damping below
         dt,
         rollStiffnessMult: at.rollStiffnessMult,
@@ -290,7 +389,11 @@ export class SolidAxleVehicle implements VehicleLike {
       for (const side of sides) {
         const w = side.wheel;
         w.lastForce = 0;
-        if (!w.contact) {
+        const virtualLedgeSupport = !w.contact
+          && w.ledgeHandoff
+          && w.ledgeHandoffGrace > 0
+          && w.resolvedDepth > 0;
+        if (!w.contact && !virtualLedgeSupport) {
           w.prevContactDepth = -1;
           continue;
         }
@@ -305,7 +408,7 @@ export class SolidAxleVehicle implements VehicleLike {
         // chassis off the slope quickly. Capped at restLength to bound
         // the force on degenerate ray reads (e.g. wheel-ray hitting a
         // vertical wall).
-        const comp = Math.min(ag.suspensionRestLength, Math.max(0, w.contactDepth));
+        const comp = Math.min(ag.suspensionRestLength, Math.max(0, w.resolvedDepth));
         if (comp <= 0) {
           w.prevContactDepth = -1;
           continue;
@@ -337,8 +440,11 @@ export class SolidAxleVehicle implements VehicleLike {
         // depth. Suspension only exerts force while compressed (comp > 0).
         const engagement = Math.min(1, comp / SUSPENSION.dampingEngageComp);
         // Per-wheel-end stiffness is HALF the axle's total.
-        const F = 0.5 * ag.rideStiffness * at.rideStiffnessMult * comp
-                + 0.5 * ag.rideDamping * at.rideDampingMult * engagement * compRate;
+        let F = 0.5 * ag.rideStiffness * at.rideStiffnessMult * comp
+              + 0.5 * ag.rideDamping * at.rideDampingMult * engagement * compRate;
+        if (w.ledgeContact || w.ledgeHandoff) {
+          F = Math.min(F, LEDGE_CONTACT.maxClimbSuspensionForce);
+        }
         w.lastForce = F;
         // Apply spring force along the CONTACT NORMAL (the direction the
         // ground actually pushes on the wheel), not chassis-up or world-up.
@@ -360,7 +466,10 @@ export class SolidAxleVehicle implements VehicleLike {
         const n = w.contactNormal;
         const sf = this._scratchForce;
         sf.x = n.x * F; sf.y = n.y * F; sf.z = n.z * F;
-        this.body.addForceAtPoint(sf, side.world, true);
+        const rideForcePoint = w.ledgeContact || w.ledgeHandoff
+          ? scaledMomentPoint(t, side.world, LEDGE_CONTACT.chassisMomentArmScale)
+          : side.world;
+        this.body.addForceAtPoint(sf, rideForcePoint, true);
         w.prevContactDepth = comp;
       }
 
@@ -438,6 +547,46 @@ export class SolidAxleVehicle implements VehicleLike {
     // 6. Per wheel tire forces + spin integration.
     const frontShare = VEHICLE.driveSplit.front;
     const rearShare = VEHICLE.driveSplit.rear;
+    // A transfer-case low range changes the ratio for the whole driveline,
+    // not just the tyre that happens to be touching the ledge. Boosting only
+    // the front contact produced a large upward force with too little rear
+    // push: the wall reaction sent the truck backwards and the nose kicked
+    // up. Keeping all driven wheels in the same crawl ratio lets the rear
+    // axle push the front hubs over the edge while the front tread climbs it.
+    if (ledgeContacts.some((contact) => contact !== null)) {
+      this.ledgeCrawlTicks = LEDGE_CONTACT.crawlHoldTicks;
+    } else if (this.ledgeCrawlTicks > 0) {
+      this.ledgeCrawlTicks--;
+    }
+    const crawlActive = this.ledgeCrawlTicks > 0;
+    const crawlRatio = crawlActive ? LEDGE_CONTACT.crawlTorqueMultiplier : 1;
+    if (crawlActive && Math.abs(longSpeed) > LEDGE_CONTACT.crawlMaxSpeed) {
+      const overspeed = Math.abs(longSpeed) - LEDGE_CONTACT.crawlMaxSpeed;
+      const governorForce = Math.min(
+        LEDGE_CONTACT.crawlMaxBrakeForce,
+        overspeed * LEDGE_CONTACT.crawlSpeedDamping,
+      );
+      const sign = Math.sign(longSpeed);
+      const sf = this._scratchForce;
+      sf.x = -fwd.x * governorForce * sign;
+      sf.y = -fwd.y * governorForce * sign;
+      sf.z = -fwd.z * governorForce * sign;
+      this.body.addForce(sf, true);
+    }
+    if (crawlActive) {
+      const pitchRate = av.x * right.x + av.y * right.y + av.z * right.z;
+      const pitchTorque = clamp(
+        LEDGE_CONTACT.crawlPitchStiffness * fwd.y
+          - LEDGE_CONTACT.crawlPitchDamping * pitchRate,
+        -LEDGE_CONTACT.crawlMaxPitchTorque,
+        LEDGE_CONTACT.crawlMaxPitchTorque,
+      );
+      const sf = this._scratchForce;
+      sf.x = right.x * pitchTorque;
+      sf.y = right.y * pitchTorque;
+      sf.z = right.z * pitchTorque;
+      this.body.addTorque(sf, true);
+    }
 
     for (let wIdx = 0; wIdx < 4; wIdx++) {
       const w = this.wheels[wIdx]!;
@@ -445,33 +594,7 @@ export class SolidAxleVehicle implements VehicleLike {
       const axle = isFront ? this.axles[0]! : this.axles[1]!;
       const ag = axle.geom;
 
-      // Wheel forward direction (steered for front wheels). Steering
-      // rotates fwd about chassis-up by -currentSteer. The sign matches
-      // what the legacy renderer applies to the wheel mesh and what
-      // Rapier's vehicle controller does internally given the (-1,0,0)
-      // axle convention - positive player intent (D / right arrow) yaws
-      // the chassis right via a force pointing into chassis-right.
-      let wheelFwd: Vec3 = fwd;
-      let wheelRight: Vec3 = right;
-      if (ag.hasSteering && Math.abs(this.currentSteer) > 1e-6) {
-        const ang = -this.currentSteer;
-        const c = Math.cos(ang);
-        const s = Math.sin(ang);
-        const upDotFwd = up.x * fwd.x + up.y * fwd.y + up.z * fwd.z;
-        const crossX = up.y * fwd.z - up.z * fwd.y;
-        const crossY = up.z * fwd.x - up.x * fwd.z;
-        const crossZ = up.x * fwd.y - up.y * fwd.x;
-        const wf = this._scratchFwd;
-        wf.x = fwd.x * c + crossX * s + up.x * upDotFwd * (1 - c);
-        wf.y = fwd.y * c + crossY * s + up.y * upDotFwd * (1 - c);
-        wf.z = fwd.z * c + crossZ * s + up.z * upDotFwd * (1 - c);
-        wheelFwd = wf;
-        const wr = this._scratchRight;
-        wr.x = up.y * wf.z - up.z * wf.y;
-        wr.y = up.z * wf.x - up.x * wf.z;
-        wr.z = up.x * wf.y - up.y * wf.x;
-        wheelRight = wr;
-      }
+      const basis = wheelBases[wIdx]!;
 
       const driveShare = (isFront ? frontShare : rearShare) * 0.5; // per wheel
       const driveTq = ag.hasDrive ? drivePerWheelTorque * driveShare : 0;
@@ -480,12 +603,6 @@ export class SolidAxleVehicle implements VehicleLike {
         + (isFront ? 0 : this.input.handbrake * TUNING.brakeForce * 1.5);
       const brakeTq = brakeForceN * this.geom.wheelRadius;
 
-      if (!w.contact) {
-        // No ground reaction on a free wheel - drive/brake/rolling only.
-        integrateWheelSpin(w, driveTq, brakeTq, 0, dt);
-        continue;
-      }
-
       // Surface-dependent rolling resistance. Mud and deep mud provide
       // significantly more drag than hard surfaces.
       let rollingMult = 1.0;
@@ -493,27 +610,58 @@ export class SolidAxleVehicle implements VehicleLike {
       else if (w.surface === Surface.DeepMud) rollingMult = WHEEL.rollingMultDeepMud;
       const rollingResistance = WHEEL.rollingResistance * rollingMult;
 
-      // Velocity of the chassis at the contact point.
-      const cp = w.contactPoint;
+      // Pick one torque-transmitting patch. A steep tyre-volume contact
+      // takes priority so drive torque acts up its tangent; the support ray
+      // still supplies suspension force but must not transmit the same drive
+      // torque a second time. A pure sidewall contact has no rolling frame
+      // and therefore falls back to the support patch.
+      let cp: Vec3;
+      let tireLong: Vec3;
+      let tireLat: Vec3;
+      let surfMult: number;
+      let normalLoad: number;
+      let contactInclineMult: number;
+      const appliedDriveTq = driveTq * crawlRatio;
+      const ledge = ledgeContacts[wIdx];
+      const ledgeFrame = ledge
+        ? contactFrame(ledge.normal, basis.axle, basis.forward)
+        : null;
+      if (ledge && ledgeFrame) {
+        cp = ledge.point;
+        tireLong = ledge.climbDirection ?? ledgeFrame.longitudinal;
+        tireLat = ledgeFrame.lateral;
+        surfMult = clamp(ledge.friction, 0, 2) * LEDGE_CONTACT.tractionMultiplier;
+        normalLoad = Math.max(LEDGE_CONTACT.minHookNormalLoad, ledgeLoads[wIdx]!);
+        // Incline assist compensates suspension load loss on long slopes. A
+        // wall contact has its own constraint load and must not receive it.
+        contactInclineMult = 1;
+      } else if (w.contact) {
+        const supportFrame = contactFrame(w.contactNormal, basis.axle, basis.forward);
+        cp = w.contactPoint;
+        tireLong = supportFrame?.longitudinal ?? basis.forward;
+        tireLat = supportFrame?.lateral ?? basis.axle;
+        surfMult = w.supportGrip;
+        normalLoad = Math.max(WHEEL.minNormalLoad, w.lastForce ?? 0);
+        contactInclineMult = inclineMult;
+      } else {
+        // No torque-transmitting patch on a free wheel.
+        integrateWheelSpin(w, appliedDriveTq, brakeTq, 0, dt);
+        continue;
+      }
+
+      // Velocity of the chassis at the selected contact point.
       const armX = cp.x - t.x;
       const armY = cp.y - t.y;
       const armZ = cp.z - t.z;
       const cvX = lv.x + av.y * armZ - av.z * armY;
       const cvY = lv.y + av.z * armX - av.x * armZ;
       const cvZ = lv.z + av.x * armY - av.y * armX;
-      const longV = cvX * wheelFwd.x + cvY * wheelFwd.y + cvZ * wheelFwd.z;
-      const latV = cvX * wheelRight.x + cvY * wheelRight.y + cvZ * wheelRight.z;
+      const longV = cvX * tireLong.x + cvY * tireLong.y + cvZ * tireLong.z;
+      const latV = cvX * tireLat.x + cvY * tireLat.y + cvZ * tireLat.z;
 
-      const surfMult = surfaceGrip(w.surface);
       const axleGripMult = isFront ? TUNING.frontGripMult : TUNING.rearGripMult;
-      // Normal load: the friction circle should use the actual vertical
-      // force the tire is pushing with. We take the dynamic suspension
-      // force (which can be 0 or negative during unweighting) and clamp
-      // it to a minimum to avoid zero-grip singularities while still
-      // allowing the car to slide when unweighted.
-      const normalLoad = Math.max(WHEEL.minNormalLoad, w.lastForce ?? 0);
       const longGripCap =
-        TIRE_LONG_FRICTION * surfMult * axleGripMult * inclineMult * normalLoad;
+        TIRE_LONG_FRICTION * surfMult * axleGripMult * contactInclineMult * normalLoad;
 
       // Friction circle (elliptical) coupling. We compute the forces
       // needed for zero longitudinal slip and zero lateral velocity,
@@ -556,17 +704,43 @@ export class SolidAxleVehicle implements VehicleLike {
         }
       }
 
+      if (ledge?.climbDirection && ledgeFrame) {
+        const targetClimbSpeed = Math.min(
+          LEDGE_CONTACT.edgeMotorMaxSpeed,
+          Math.max(0, w.angVel) * this.geom.wheelRadius,
+        );
+        const motorForce = clamp(
+          (targetClimbSpeed - longV)
+            * (VEHICLE.mass * this.geom.massMult)
+            * LEDGE_CONTACT.edgeMotorMassFraction
+            / dt,
+          -LEDGE_CONTACT.edgeMotorMaxForce,
+          LEDGE_CONTACT.edgeMotorMaxForce,
+        );
+        finalLongForce = clamp(
+          finalLongForce + motorForce,
+          -longGripCap,
+          longGripCap,
+        );
+      }
+
       // Update wheel angular velocity using the force actually transmitted
       // through the contact patch (impulse-clamped integration).
       const finalGroundTq = -finalLongForce * this.geom.wheelRadius;
-      integrateWheelSpin(w, driveTq, brakeTq, finalGroundTq, dt, rollingResistance);
+      integrateWheelSpin(w, appliedDriveTq, brakeTq, finalGroundTq, dt, rollingResistance);
+      if (ledge && ledgeFrame) {
+        w.ledgeLongForce = finalLongForce;
+      }
 
       // Apply combined tire force to chassis at contact point.
       const f = this._scratchForce;
-      f.x = wheelFwd.x * finalLongForce + wheelRight.x * finalLatForce;
-      f.y = wheelFwd.y * finalLongForce + wheelRight.y * finalLatForce;
-      f.z = wheelFwd.z * finalLongForce + wheelRight.z * finalLatForce;
-      this.body.addForceAtPoint(f, cp, true);
+      f.x = tireLong.x * finalLongForce + tireLat.x * finalLatForce;
+      f.y = tireLong.y * finalLongForce + tireLat.y * finalLatForce;
+      f.z = tireLong.z * finalLongForce + tireLat.z * finalLatForce;
+      const forcePoint = ledge && ledgeFrame
+        ? scaledMomentPoint(t, cp, LEDGE_CONTACT.chassisMomentArmScale)
+        : cp;
+      this.body.addForceAtPoint(f, forcePoint, true);
     }
   }
 
@@ -598,11 +772,11 @@ export class SolidAxleVehicle implements VehicleLike {
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i]!;
       const axle = i < 2 ? this.axles[0]! : this.axles[1]!;
-      const susp = Math.max(0, axle.geom.suspensionRestLength - w.contactDepth);
+      const susp = Math.max(0, axle.geom.suspensionRestLength - w.resolvedDepth);
       wheels.push({
         steer: i < 2 ? this.currentSteer : 0,
         spin: w.spin,
-        contact: w.contact,
+        contact: w.contact || w.ledgeContact,
         suspensionLength: susp,
         angVel: w.angVel,
       });
@@ -650,15 +824,33 @@ function castWheelRay(
   out: WheelKinematic,
 ): void {
   const ray = new world.rapier.Ray(origin, dir);
-  const hit = world.world.castRayAndGetNormal(
+  let hit = world.world.castRayAndGetNormal(
     ray,
     maxToi,
     true,
     undefined,
-    undefined,
+    COLLISION_GROUP_WHEEL_RAY,
     undefined,
     ownBody,
   );
+  // A pitched chassis-down ray can strike a vertical face before the ground
+  // underneath the tyre. That face belongs to the volumetric contact path;
+  // ignore its collider once and continue the support query behind it.
+  if (hit && hit.normal.y < LEDGE_CONTACT.maxSupportNormalY) {
+    const blockedCollider = hit.collider;
+    const fallback = world.world.castRayAndGetNormal(
+      ray,
+      maxToi,
+      true,
+      undefined,
+      COLLISION_GROUP_WHEEL_RAY,
+      blockedCollider,
+      ownBody,
+    );
+    hit = fallback && fallback.normal.y >= LEDGE_CONTACT.maxSupportNormalY
+      ? fallback
+      : null;
+  }
   if (hit) {
     const toi = hit.timeOfImpact;
     out.contact = true;
@@ -670,6 +862,8 @@ function castWheelRay(
       z: origin.z + dir.z * toi,
     };
     out.contactNormal = { x: hit.normal.x, y: hit.normal.y, z: hit.normal.z };
+    out.supportIsTerrain = hit.collider.handle === world.terrainCollider.handle;
+    out.supportColliderFriction = hit.collider.friction();
   } else {
     out.contact = false;
     out.contactDepth = 0;
@@ -679,7 +873,126 @@ function castWheelRay(
       z: origin.z + dir.z * maxToi,
     };
     out.contactNormal = { x: 0, y: 1, z: 0 };
+    out.supportIsTerrain = true;
+    out.supportColliderFriction = 1;
   }
+}
+
+function wheelCenterWorld(
+  bodyPosition: Vec3,
+  bodyRotation: { x: number; y: number; z: number; w: number },
+  axle: AxleState,
+  localX: number,
+): Vec3 {
+  const cr = Math.cos(axle.rollAngle);
+  const sr = Math.sin(axle.rollAngle);
+  const local = {
+    x: localX * cr,
+    y: axle.geom.centerLocalY - axle.geom.suspensionRestLength
+      + axle.rideY + localX * sr,
+    z: axle.geom.centerLocalZ,
+  };
+  return addVec(bodyPosition, rotateVecByQuat(local, bodyRotation));
+}
+
+function resolveSuspensionDepth(
+  wheel: WheelKinematic,
+  ledge: SteepWheelContact | null,
+  suspensionRestLength: number,
+  wheelRadius: number,
+  wheelCenterY: number,
+  dt: number,
+): void {
+  const raw = wheel.contact ? wheel.contactDepth : 0;
+  if (!wheel.resolvedDepthInitialized) {
+    wheel.resolvedDepth = raw;
+    wheel.resolvedDepthInitialized = true;
+  }
+
+  const maxDelta = LEDGE_CONTACT.depthCatchupRate * dt;
+  if (ledge) {
+    wheel.ledgeHandoff = true;
+    wheel.ledgeHandoffGrace = LEDGE_CONTACT.handoffGraceTicks;
+    // A reachable upper edge feeds the suspension in at tread speed instead
+    // of waiting for the hub to cross the face and then accepting a one-tick
+    // ray-depth jump. That makes wheel rotation visibly load and lift the
+    // axle. The global rate cap bounds spring/damper force even while the
+    // tyre is spinning much faster than crawling speed.
+    if (ledge.climbTopY !== null) {
+      const hubDeficit = Math.max(
+        0,
+        ledge.climbTopY + wheelRadius - wheelCenterY,
+      );
+      const climbTarget = Math.min(
+        suspensionRestLength,
+        wheel.resolvedDepth + hubDeficit,
+      );
+      const treadSpeed = Math.max(0, wheel.angVel) * wheelRadius;
+      const climbDelta = Math.min(LEDGE_CONTACT.climbCompressionRate, treadSpeed) * dt;
+      if (climbTarget > wheel.resolvedDepth && climbDelta > 0) {
+        wheel.resolvedDepth = moveToward(wheel.resolvedDepth, climbTarget, climbDelta);
+      } else if (climbTarget < wheel.resolvedDepth) {
+        wheel.resolvedDepth = moveToward(wheel.resolvedDepth, climbTarget, maxDelta);
+      }
+    } else if (raw < wheel.resolvedDepth) {
+      // Always permit unloading; only upward compression is synthesized.
+      wheel.resolvedDepth = moveToward(wheel.resolvedDepth, raw, maxDelta);
+    }
+  } else if (wheel.ledgeHandoff) {
+    if (wheel.contact) {
+      wheel.resolvedDepth = moveToward(wheel.resolvedDepth, raw, maxDelta);
+      if (Math.abs(wheel.resolvedDepth - raw) < 1e-6) {
+        wheel.ledgeHandoff = false;
+        wheel.ledgeHandoffGrace = 0;
+      }
+    } else if (wheel.ledgeHandoffGrace > 0) {
+      wheel.ledgeHandoffGrace--;
+    } else {
+      wheel.resolvedDepth = moveToward(wheel.resolvedDepth, 0, maxDelta);
+      if (wheel.resolvedDepth <= 1e-6) wheel.ledgeHandoff = false;
+    }
+  } else {
+    wheel.resolvedDepth = raw;
+  }
+}
+
+function pointVelocityDot(
+  linearVelocity: Vec3,
+  angularVelocity: Vec3,
+  bodyPosition: Vec3,
+  point: Vec3,
+  direction: Vec3,
+): number {
+  const armX = point.x - bodyPosition.x;
+  const armY = point.y - bodyPosition.y;
+  const armZ = point.z - bodyPosition.z;
+  const vx = linearVelocity.x + angularVelocity.y * armZ - angularVelocity.z * armY;
+  const vy = linearVelocity.y + angularVelocity.z * armX - angularVelocity.x * armZ;
+  const vz = linearVelocity.z + angularVelocity.x * armY - angularVelocity.y * armX;
+  return vx * direction.x + vy * direction.y + vz * direction.z;
+}
+
+function moveToward(current: number, target: number, maxDelta: number): number {
+  const delta = target - current;
+  if (Math.abs(delta) <= maxDelta) return target;
+  return current + Math.sign(delta) * maxDelta;
+}
+
+function hasSuspensionSupport(
+  wheel: WheelKinematic,
+  ledge: SteepWheelContact | null,
+): boolean {
+  return wheel.contact
+    || ledge !== null
+    || (wheel.ledgeHandoff && wheel.ledgeHandoffGrace > 0 && wheel.resolvedDepth > 0);
+}
+
+function scaledMomentPoint(origin: Vec3, point: Vec3, scale: number): Vec3 {
+  return {
+    x: origin.x + (point.x - origin.x) * scale,
+    y: origin.y + (point.y - origin.y) * scale,
+    z: origin.z + (point.z - origin.z) * scale,
+  };
 }
 
 function addVec(a: Vec3, b: Vec3): Vec3 {

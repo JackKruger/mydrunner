@@ -3,6 +3,28 @@
 This document is the snapshot of where the project is right now and what's
 next. Pair with `CLAUDE.md` (architecture + conventions) and the git log.
 
+## 2026-08-06 client-owned driving cutover
+
+- Each browser is now authoritative for its own truck. `LocalSimulation`
+  advances Rapier locally, interpolates completed fixed ticks for rendering,
+  and never accepts a pose/velocity correction from the network.
+- The client uploads a quantized `VehicleState` at 30 Hz. `Room` stores the
+  newest sequence and broadcasts aggregate snapshots; it no longer imports
+  Rapier or simulates player inputs.
+- Remote trucks render through the existing snapshot buffer. Their exact
+  drawn chassis poses become kinematic colliders in the owner world, giving
+  immediate player collisions without server latency. Collision groups keep
+  those proxies out of terrain, scenery, proxy-proxy and suspension-ray
+  interactions; stale proxies disable after 500 ms.
+- The local HUD, engine audio and camera read owner state. The off-map ejector
+  moved from the old server world into `LocalSimulation`.
+- `PROTOCOL_VERSION` is 4. Version 3 clients/servers are intentionally
+  incompatible with the owner-state message.
+
+Everything below this section predates the authority cutover. Treat its
+prediction/reconciliation notes as history; `CLAUDE.md` describes the live
+architecture.
+
 ## 2026-07-03 bug-fix + polish pass
 
 - **Fixed: carKind never reached the physics.** `Room.addPlayer` and the
@@ -329,11 +351,11 @@ visibly pulled with it, axle tilts, chassis can lean.
 
 ## How to debug live
 
-The client exposes `window.__scene` and `window.__prediction` in dev
+The client exposes `window.__scene` and `window.__localSimulation` in dev
 builds (guarded by `import.meta.env.DEV`). From a browser console:
 
 ```js
-__prediction.state()           // current predicted vehicle state
+__localSimulation.state()      // current owner-render vehicle state
 __scene.cameraYaw              // smoothed camera follow yaw
 __scene.cameraTarget.toArray() // current camera lookat target
 [...__scene.vehicles.keys()]   // all visible player ids
@@ -370,7 +392,7 @@ If a commit doesn't seem to have deployed, check:
 - Obstacle generator: `packages/shared/src/physics/obstacles.ts`.
 - Server room: `packages/server/src/room.ts`.
 - Client renderer: `packages/client/src/scene.ts`.
-- Client prediction: `packages/client/src/prediction.ts`.
+- Client owner physics: `packages/client/src/localSimulation.ts`.
 - Procedural car visual: `packages/client/src/carMesh.ts`.
 - Mud particles: `packages/client/src/particles.ts`.
 - Engine audio: `packages/client/src/engineAudio.ts`.

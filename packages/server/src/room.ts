@@ -1,20 +1,17 @@
-// A Room owns one World, all connected players, and the fixed-step loop.
-// Single-room MVP. Sharding into multiple rooms is a later concern.
+// A Room owns multiplayer membership and relays client-owned vehicle state.
+// It deliberately has no Rapier world: each browser is authoritative for
+// its own truck, while the room aggregates the latest owner states into the
+// snapshot stream consumed by remote interpolation.
 
 import {
-  FIXED_DT,
-  TICK_RATE,
   SNAPSHOT_INTERVAL_MS,
   PROTOCOL_VERSION,
-  EMPTY_INPUT,
-  VEHICLE,
-  TERRAIN,
   Maps,
   Net,
-  Physics,
   type PlayerId,
-  type PlayerInput,
   type PlayerSnapshot,
+  type VehicleState,
+  type VehicleStateUpdate,
   type WorldSnapshot,
   type CarKind,
 } from '@mydrunner/shared';
@@ -28,103 +25,51 @@ export interface PlayerHandle {
 
 interface InternalPlayer {
   handle: PlayerHandle;
-  vehicle: Physics.VehicleLike;
-  pendingInput: PlayerInput;
-  lastAckSeq: number;
+  state: VehicleState;
+  stateSeq: number;
   spawn: { position: { x: number; y: number; z: number }; yaw: number };
-  /** Index into the spawn grid. Freed implicitly when the player is
-   *  removed - takeSpawnSlot() derives occupancy from the live players. */
   slot: number;
-  /** Last chat broadcast time (server clock ms). Used for rate-limiting. */
   lastChatAtMs: number;
-  /** Latency trace state. Populated when input.steer transitions from
-   *  ~0 to a clear deflection; tickOnce() then records when the
-   *  vehicle's currentSteer and yaw rate cross diagnostic thresholds
-   *  and emits a one-shot stdout line. Used by tests/latency.spec.ts to
-   *  see the server-side budget unaffected by Playwright's CDP gap. */
-  trace: SteerTrace | null;
-}
-
-interface SteerTrace {
-  startMs: number;
-  startSteer: number;
-  startAngVelY: number;
-  t25Ms: number;
-  t50Ms: number;
-  tAngVelMs: number;
-  done: boolean;
 }
 
 export class Room {
-  readonly world: Physics.World;
   readonly map: Maps.MapWorld;
-  /** Content hash of the loaded document in THIS build. Rides on the
-   *  welcome so the client can catch the two bundles disagreeing. */
+  /** Content hash of the loaded document in this build. */
   readonly mapRev: number;
   private readonly players = new Map<PlayerId, InternalPlayer>();
   private tick = 0;
-  private startedAtMs = Date.now();
-  private snapAccumMs = 0;
+  private readonly startedAtMs = performance.now();
   private loopHandle: NodeJS.Timeout | null = null;
-  /** Wall-clock deadline for the next tick. The loop catches up by running
-   *  multiple tickOnce() calls in a row when behind, instead of slipping
-   *  one full tick on every overrun like the older
-   *  `setTimeout(loop, max(0, target-work))` did. Without this the
-   *  snapshot rate slipped from 30 Hz to ~20 Hz under load, which the
-   *  client reported as `gap mean=50ms` and growing prediction queue. */
-  private nextTickAtMs = 0;
-  private perf: PerfBucket = newPerfBucket();
-  private lastTickStartMs = 0;
+  private nextSnapshotAtMs = 0;
+  private relayUpdates = 0;
+  private snapshotBytes = 0;
+  private snapshotMaxBytes = 0;
+  private perfStartedAtMs = performance.now();
 
-  /** @param map an id in the compiled-in registry, or a document
-   *  directly. The default is the generated world, which composes
-   *  byte-for-byte identically to the generator call this used to make.
-   *  Taking a document as well as an id is what lets a test — or a
-   *  future load-from-file path — run a room on a map that was never
-   *  committed to the registry. */
-  constructor(map: string | Maps.MapDoc = Maps.PROCEDURAL_MAP_ID) {
+  constructor(map: string | Maps.MapDoc = Maps.DEFAULT_MAP_ID) {
     const doc = typeof map === 'string' ? Maps.getMap(map) : map;
     if (!doc) throw new Error(`Room: unknown map "${String(map)}"`);
-    // Default 'throw' on base drift: a map whose height edits were cut
-    // against ground the generator has since moved means something
-    // different from what was authored, and a server that silently
-    // serves it is worse than one that refuses to boot.
     this.map = Maps.applyMapDoc(doc);
-    // Hashed once here rather than per join: it canonical-stringifies
-    // the whole document, which for a baked map is ~65 KB.
     this.mapRev = Maps.mapDocRev(doc);
-    this.world = new Physics.World({ map: this.map });
   }
 
   start(): void {
     if (this.loopHandle) return;
-    this.nextTickAtMs = performance.now();
+    this.nextSnapshotAtMs = performance.now();
     this.runLoop();
   }
 
   private runLoop(): void {
-    // Catch up any ticks whose deadlines have passed. Cap the catch-up at
-    // 4 ticks per loop iteration so a single Node GC pause or a long tick
-    // doesn't burn the event loop replaying half a second of physics in
-    // one go - we'd rather drop the difference and resync than freeze.
-    let caught = 0;
-    let now = performance.now();
-    while (now >= this.nextTickAtMs && caught < 4) {
-      this.tickOnce();
-      this.nextTickAtMs += TARGET_TICK_MS;
-      caught += 1;
-      now = performance.now();
+    const now = performance.now();
+    if (now >= this.nextSnapshotAtMs) {
+      this.broadcastSnapshot();
+      this.tick += 1;
+      this.nextSnapshotAtMs += SNAPSHOT_INTERVAL_MS;
+      // Do not burst stale snapshots after a long event-loop pause.
+      if (now - this.nextSnapshotAtMs > 250) this.nextSnapshotAtMs = now + SNAPSHOT_INTERVAL_MS;
     }
-    // If we're more than 250 ms behind real time even after the catch-up
-    // budget, give up on the lost ticks and resync the deadline. Better
-    // to skip than to spiral.
-    if (now - this.nextTickAtMs > 250) {
-      this.nextTickAtMs = now;
-    }
-    const wait = Math.max(0, this.nextTickAtMs - now);
-    // setTimeout has ~1 ms minimum on Linux; that's fine because the
-    // deadline arithmetic above corrects for it. setImmediate would burn
-    // CPU when ahead of schedule.
+    if (now - this.perfStartedAtMs >= PERF_WINDOW_MS) this.flushPerf(now);
+    const wait = Math.max(0, this.nextSnapshotAtMs - performance.now());
     this.loopHandle = setTimeout(() => this.runLoop(), wait) as unknown as NodeJS.Timeout;
   }
 
@@ -134,14 +79,9 @@ export class Room {
   }
 
   private nowMs(): number {
-    return Date.now() - this.startedAtMs;
+    return performance.now() - this.startedAtMs;
   }
 
-  /** Where the next joiner starts.
-   *
-   *  The rule itself lives in Maps.resolveSpawn, shared with the editor's
-   *  offline preview so the two cannot drift. Only slot allocation is
-   *  Room's — the map has no idea who is already parked where. */
   private nextSpawn(
     kind: CarKind,
   ): { position: { x: number; y: number; z: number }; yaw: number; slot: number } {
@@ -149,18 +89,6 @@ export class Room {
     return { ...Maps.resolveSpawn(this.map, slot, kind), slot };
   }
 
-  /** Lowest slot in the spawn grid not held by a live player.
-   *
-   *  Occupancy is derived from `players` on each join rather than tracked
-   *  in a side set: joins are rare enough that the scan is free, and a
-   *  derived answer can't drift out of sync with who is actually in the
-   *  room. The previous `players.size % 16` meant any disconnect made the
-   *  next joiner reuse a live slot - A/B/C take 0/1/2, B leaves, size is
-   *  2, the next player spawns inside C, which is exactly the overlap the
-   *  5 m slot spacing in nextSpawn() exists to prevent.
-   *
-   *  Past 16 concurrent players every slot is live and an overlap is
-   *  unavoidable with this grid; wrapping beats refusing the connection. */
   private takeSpawnSlot(): number {
     const used = new Set<number>();
     for (const p of this.players.values()) used.add(p.slot);
@@ -172,13 +100,10 @@ export class Room {
 
   addPlayer(handle: PlayerHandle): void {
     const { slot, ...spawn } = this.nextSpawn(handle.carKind);
-    const vehicle = this.world.spawnVehicle(handle.id, spawn, handle.carKind);
     this.players.set(handle.id, {
       handle,
-      vehicle,
-      pendingInput: { ...EMPTY_INPUT },
-      lastAckSeq: 0,
-      trace: null,
+      state: initialVehicleState(spawn),
+      stateSeq: 0,
       spawn,
       slot,
       lastChatAtMs: 0,
@@ -197,155 +122,29 @@ export class Room {
   }
 
   removePlayer(id: PlayerId): void {
-    const p = this.players.get(id);
-    if (!p) return;
-    this.world.removeVehicle(id);
     this.players.delete(id);
   }
 
-  applyInput(id: PlayerId, input: PlayerInput): void {
+  /** Accept the newest canonical state from a vehicle's owning client. */
+  applyVehicleState(id: PlayerId, update: VehicleStateUpdate): void {
     const p = this.players.get(id);
-    if (!p) return;
-    // decodeClient already rejects malformed messages; this is defense in
-    // depth for the direct-call path (tests, future message types). A
-    // non-finite value here would feed NaN into the physics.
-    if (!Number.isSafeInteger(input.seq)) return;
-    if (input.seq <= p.lastAckSeq) return;
-    // Latency trace: detect a clear 0 -> deflection transition. Only
-    // arms when no trace is in flight, so a held input doesn't keep
-    // re-firing.
-    if (
-      p.trace === null &&
-      Math.abs(p.pendingInput.steer) < 0.05 &&
-      Math.abs(input.steer) >= 0.5
-    ) {
-      const st = p.vehicle.getState();
-      p.trace = {
-        startMs: performance.now(),
-        startSteer: st.wheels[0]?.steer ?? 0,
-        startAngVelY: st.angVel.y,
-        t25Ms: 0,
-        t50Ms: 0,
-        tAngVelMs: 0,
-        done: false,
-      };
-    }
-    p.pendingInput = {
-      seq: input.seq,
-      throttle: clamp(input.throttle, -1, 1),
-      steer: clamp(input.steer, -1, 1),
-      brake: clamp(input.brake, 0, 1),
-      handbrake: clamp(input.handbrake, 0, 1),
-      buttons: input.buttons | 0,
-    };
-    p.lastAckSeq = input.seq;
+    if (!p || !Number.isSafeInteger(update.seq) || update.seq <= p.stateSeq) return;
+    if (!isFiniteVehicleState(update.vehicle)) return;
+    p.state = update.vehicle;
+    p.stateSeq = update.seq;
+    this.relayUpdates += 1;
   }
 
-  private tickOnce(): void {
-    const tickStart = performance.now();
-    if (this.lastTickStartMs > 0) {
-      const interval = tickStart - this.lastTickStartMs;
-      const drift = Math.abs(interval - TARGET_TICK_MS);
-      this.perf.driftCount += 1;
-      this.perf.driftSumMs += drift;
-      if (drift > this.perf.driftMaxMs) this.perf.driftMaxMs = drift;
-      if (interval > TARGET_TICK_MS * 2) this.perf.lateFires += 1;
-    }
-    this.lastTickStartMs = tickStart;
-
-    for (const p of this.players.values()) {
-      if ((p.pendingInput.buttons & 1) !== 0) {
-        p.vehicle.resetTo(p.spawn);
-      }
-      p.vehicle.setInput(p.pendingInput);
-    }
-    this.world.step();
-    this.tick += 1;
-
-    // Latency trace: for any player whose trace is armed, record when
-    // server-side currentSteer crosses 25%/50% of maxSteer and when
-    // |angVel.y| crosses 0.1 rad/s, then emit a one-line summary.
-    for (const p of this.players.values()) {
-      const tr = p.trace;
-      if (!tr || tr.done) continue;
-      const elapsed = performance.now() - tr.startMs;
-      const st = p.vehicle.getState();
-      // Measure deltas from the trace's baseline so existing yaw drift
-      // (suspension oscillation while driving straight) doesn't trip the
-      // angVel threshold immediately.
-      const dSteer = Math.abs((st.wheels[0]?.steer ?? 0) - tr.startSteer);
-      const dAngVelY = Math.abs(st.angVel.y - tr.startAngVelY);
-      if (tr.t25Ms === 0 && dSteer > 0.25 * VEHICLE.maxSteer) tr.t25Ms = elapsed;
-      if (tr.t50Ms === 0 && dSteer > 0.5 * VEHICLE.maxSteer) tr.t50Ms = elapsed;
-      if (tr.tAngVelMs === 0 && dAngVelY > 0.3) tr.tAngVelMs = elapsed;
-      if (tr.t25Ms > 0 && tr.t50Ms > 0 && tr.tAngVelMs > 0) {
-        console.log(
-          `[mydrunner-server] [trace] steer25=${tr.t25Ms.toFixed(0)}ms ` +
-            `steer50=${tr.t50Ms.toFixed(0)}ms ` +
-            `dAngVelY>0.3=${tr.tAngVelMs.toFixed(0)}ms`,
-        );
-        tr.done = true;
-      } else if (elapsed > 1500) {
-        console.log(
-          `[mydrunner-server] [trace] player=${p.handle.id} INCOMPLETE ` +
-            `t25=${tr.t25Ms.toFixed(0)} t50=${tr.t50Ms.toFixed(0)} angVel=${tr.tAngVelMs.toFixed(0)}`,
-        );
-        tr.done = true;
-      }
-    }
-
-    this.ejectOffMapPlayers();
-
-    this.snapAccumMs += FIXED_DT * 1000;
-    if (this.snapAccumMs >= SNAPSHOT_INTERVAL_MS) {
-      // Subtract the interval rather than resetting to 0 so the fractional
-      // remainder carries forward; otherwise we lose ~0.5 ms per cycle
-      // and the broadcast cadence drifts off the intended 30 Hz over
-      // the course of a session.
-      this.snapAccumMs -= SNAPSHOT_INTERVAL_MS;
-      this.broadcastSnapshot();
-    }
-
-    const tickMs = performance.now() - tickStart;
-    this.perf.ticks += 1;
-    this.perf.tickSumMs += tickMs;
-    if (tickMs > this.perf.tickMaxMs) this.perf.tickMaxMs = tickMs;
-    if (tickMs > TARGET_TICK_MS) this.perf.tickOverBudget += 1;
-    if (tickMs > TARGET_TICK_MS * 2) this.perf.tickOver2x += 1;
-    if (tickStart - this.perf.startedAtMs >= PERF_WINDOW_MS) this.flushPerf();
-  }
-
-  private flushPerf(): void {
-    if (process.env.NODE_ENV === 'test') {
-      this.perf = newPerfBucket();
-      return;
-    }
-    const p = this.perf;
-    const meanTick = p.ticks > 0 ? p.tickSumMs / p.ticks : 0;
-    const meanDrift = p.driftCount > 0 ? p.driftSumMs / p.driftCount : 0;
-    const meanSnap = p.snaps > 0 ? p.snapSumBytes / p.snaps : 0;
-    const elapsedS = (performance.now() - p.startedAtMs) / 1000;
-    console.log(
-      `[mydrunner-server] perf ${elapsedS.toFixed(1)}s ` +
-        `players=${this.players.size} ` +
-        `tick mean=${meanTick.toFixed(2)}ms max=${p.tickMaxMs.toFixed(2)}ms ` +
-        `over16=${p.tickOverBudget} over33=${p.tickOver2x} ` +
-        `drift mean=${meanDrift.toFixed(2)}ms max=${p.driftMaxMs.toFixed(2)}ms ` +
-        `lateFires=${p.lateFires} ` +
-        `snaps=${p.snaps} meanBytes=${meanSnap.toFixed(0)} maxBytes=${p.snapMaxBytes}`,
-    );
-    this.perf = newPerfBucket();
-  }
-
-  private broadcastSnapshot(): void {
+  /** Exposed for deterministic tests; production calls it from runLoop. */
+  broadcastSnapshot(): void {
     const players: PlayerSnapshot[] = [];
     for (const p of this.players.values()) {
       players.push({
         id: p.handle.id,
         name: p.handle.name,
         carKind: p.handle.carKind,
-        vehicle: p.vehicle.getState(),
-        lastAckSeq: p.lastAckSeq,
+        vehicle: p.state,
+        stateSeq: p.stateSeq,
       });
     }
     const snap: WorldSnapshot = {
@@ -355,58 +154,15 @@ export class Room {
     };
     const msg = Net.encode({ t: 'snapshot', snap });
     for (const p of this.players.values()) p.handle.send(msg);
-    this.perf.snaps += 1;
-    this.perf.snapSumBytes += msg.length;
-    if (msg.length > this.perf.snapMaxBytes) this.perf.snapMaxBytes = msg.length;
+    this.snapshotBytes += msg.length;
+    if (msg.length > this.snapshotMaxBytes) this.snapshotMaxBytes = msg.length;
   }
 
-  /** MX-Unleashed-style off-map ejector. If a player gets past the
-   *  perimeter cliff wall (clipping, edge cases, fell through the
-   *  floor, etc.) they're fired into the air toward the world centre.
-   *  Cheap safety net: prevents players from escaping the world while
-   *  also being slightly entertaining when triggered. */
-  private ejectOffMapPlayers(): void {
-    const half = this.world.terrain.size / 2;
-    const margin = 6; // start ejecting once they're past the wall + a bit
-    for (const p of this.players.values()) {
-      const t = p.vehicle.body.translation();
-      const offX = Math.abs(t.x) > half - margin;
-      const offZ = Math.abs(t.z) > half - margin;
-      const fellThrough = t.y < -8;
-      if (!offX && !offZ && !fellThrough) continue;
-      // Aim at the world centre on the horizontal plane plus a strong
-      // upward component. Speed is fixed so the trajectory is
-      // predictable; the player will hopefully laugh and try not to
-      // do it again.
-      const dx = -t.x;
-      const dz = -t.z;
-      const len = Math.hypot(dx, dz) || 1;
-      const horizSpeed = 40;
-      const upSpeed = 35;
-      p.vehicle.body.setLinvel(
-        { x: (dx / len) * horizSpeed, y: upSpeed, z: (dz / len) * horizSpeed },
-        true,
-      );
-      // Reset angular velocity so they don't tumble out of control.
-      p.vehicle.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-      // If they really fell through, also lift their position a bit
-      // so they aren't stuck below the heightfield.
-      if (fellThrough) {
-        p.vehicle.body.setTranslation({ x: t.x, y: 5, z: t.z }, true);
-      }
-    }
-  }
-
-  /** Rate-limit + relay a chat message. Control-char stripping and length
-   *  clamping happen in Net.decodeClient (the trust boundary), so all this
-   *  adds is the per-sender cooldown: drop messages from a sender that
-   *  chatted within CHAT_MIN_INTERVAL_MS of their last broadcast. */
   broadcastChat(handle: PlayerHandle, text: string): void {
     const p = this.players.get(handle.id);
     if (!p) return;
     const now = this.nowMs();
-    if (now - p.lastChatAtMs < CHAT_MIN_INTERVAL_MS) return;
-    if (!text) return;
+    if (now - p.lastChatAtMs < CHAT_MIN_INTERVAL_MS || !text) return;
     p.lastChatAtMs = now;
     const msg = Net.encode({
       t: 'chat',
@@ -421,53 +177,64 @@ export class Room {
   get playerCount(): number {
     return this.players.size;
   }
+
+  private flushPerf(now: number): void {
+    const elapsedS = (now - this.perfStartedAtMs) / 1000;
+    console.log(
+      `[mydrunner-server] relay ${elapsedS.toFixed(1)}s ` +
+        `players=${this.players.size} updates=${this.relayUpdates} ` +
+        `bytes=${this.snapshotBytes} maxSnapshot=${this.snapshotMaxBytes}`,
+    );
+    this.relayUpdates = 0;
+    this.snapshotBytes = 0;
+    this.snapshotMaxBytes = 0;
+    this.perfStartedAtMs = now;
+  }
 }
 
-const CHAT_MIN_INTERVAL_MS = 800;
-
-const SPAWN_SLOTS = Maps.SPAWN_SLOTS;
-
-const TARGET_TICK_MS = 1000 / TICK_RATE;
-const PERF_WINDOW_MS = 5000;
-
-interface PerfBucket {
-  startedAtMs: number;
-  ticks: number;
-  tickSumMs: number;
-  tickMaxMs: number;
-  tickOverBudget: number;
-  tickOver2x: number;
-  driftCount: number;
-  driftSumMs: number;
-  driftMaxMs: number;
-  lateFires: number;
-  snaps: number;
-  snapSumBytes: number;
-  snapMaxBytes: number;
-}
-
-function newPerfBucket(): PerfBucket {
+function initialVehicleState(
+  spawn: { position: { x: number; y: number; z: number }; yaw: number },
+): VehicleState {
+  const half = spawn.yaw * 0.5;
   return {
-    startedAtMs: performance.now(),
-    ticks: 0,
-    tickSumMs: 0,
-    tickMaxMs: 0,
-    tickOverBudget: 0,
-    tickOver2x: 0,
-    driftCount: 0,
-    driftSumMs: 0,
-    driftMaxMs: 0,
-    lateFires: 0,
-    snaps: 0,
-    snapSumBytes: 0,
-    snapMaxBytes: 0,
+    position: { ...spawn.position },
+    rotation: { x: 0, y: Math.sin(half), z: 0, w: Math.cos(half) },
+    linVel: { x: 0, y: 0, z: 0 },
+    angVel: { x: 0, y: 0, z: 0 },
+    rpm: 0,
+    gear: 0,
+    throttle: 0,
+    wheels: Array.from({ length: 4 }, () => ({
+      steer: 0,
+      spin: 0,
+      contact: false,
+      suspensionLength: 0,
+      angVel: 0,
+    })),
+    axles: [
+      { rideY: 0, rollAngle: 0 },
+      { rideY: 0, rollAngle: 0 },
+    ],
   };
 }
 
-/** NaN-safe clamp: comparisons are false for NaN, so the naive ternary
- *  passes NaN straight through — and NaN input fields would corrupt the
- *  sender's rigid body. Non-finite maps to 0 (neutral input). */
-function clamp(v: number, lo: number, hi: number): number {
-  if (!Number.isFinite(v)) return 0;
-  return v < lo ? lo : v > hi ? hi : v;
+function isFiniteVehicleState(v: VehicleState): boolean {
+  const numbers = [
+    v.position.x, v.position.y, v.position.z,
+    v.rotation.x, v.rotation.y, v.rotation.z, v.rotation.w,
+    v.linVel.x, v.linVel.y, v.linVel.z,
+    v.angVel.x, v.angVel.y, v.angVel.z,
+    v.rpm, v.gear, v.throttle,
+  ];
+  for (const wheel of v.wheels) {
+    numbers.push(wheel.steer, wheel.spin, wheel.suspensionLength, wheel.angVel);
+  }
+  if (v.axles) {
+    for (const axle of v.axles) numbers.push(axle.rideY, axle.rollAngle);
+  }
+  return v.wheels.length === 4 && numbers.every(Number.isFinite);
 }
+
+const CHAT_MIN_INTERVAL_MS = 800;
+const SPAWN_SLOTS = Maps.SPAWN_SLOTS;
+const PERF_WINDOW_MS = 5000;

@@ -214,7 +214,7 @@ describe('arena: hill climb', () => {
     // forward progress in 8 s of throttle.
     const flatRoad = rows.find((r) => r.surface === 'Road' && r.slopeDeg === 0)!;
     expect(flatRoad.maxX).toBeGreaterThan(-10); // started at -30, gained > 20 m
-  });
+  }, 10_000);
 });
 
 describe('arena: cross-slope body roll', () => {

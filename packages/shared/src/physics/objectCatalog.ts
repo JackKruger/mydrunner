@@ -91,7 +91,7 @@ export interface ObjectInfo {
 // --- The table --------------------------------------------------------
 //
 // The five kinds below are the shipped world. Their collider geometry is
-// frozen: the server and every client's prediction sim build these
+// frozen: every owner client builds these independently
 // independently from the same map document, so a change here that is not
 // matched by a PROTOCOL_VERSION bump desyncs the two silently.
 // obstacleColliders.test.ts pins them.
@@ -605,7 +605,7 @@ export function isObstacleKind(v: string): v is ObstacleKind {
 
 /** Strict lookup. Unlike surfaceInfo's Dirt fallback this throws: a surface
  *  that guesses wrong tints a texel, an obstacle that guesses wrong gives
- *  the server and the prediction sim different collision geometry. */
+ *  different client builds different collision geometry. */
 export function objectInfo(kind: ObstacleKind): ObjectInfo {
   const info = OBJECT_INFO[kind];
   if (!info) throw new Error(`objectInfo: unknown obstacle kind "${String(kind)}"`);

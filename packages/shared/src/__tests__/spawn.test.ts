@@ -1,7 +1,7 @@
 // The spawn grid, pinned.
 //
 // This rule used to be private to Room. It moved to shared so the editor's
-// offline preview and the authoritative server answer "where do I start"
+// offline preview and the multiplayer relay answer "where do I start"
 // identically — and the moment two callers share it, the arithmetic needs a
 // test of its own rather than only the behavioural one in
 // server/room-spawn.test.ts ("ends up on the road, upright"), which would

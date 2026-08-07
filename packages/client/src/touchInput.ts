@@ -51,11 +51,13 @@ function bindHoldButton(el: HTMLElement, key: 'throttle' | 'brake' | 'handbrake'
     e.preventDefault();
     state[key] = 1;
     el.classList.add('pressed');
+    el.setAttribute('aria-pressed', 'true');
   };
   const release = (e: Event): void => {
     e.preventDefault();
     state[key] = 0;
     el.classList.remove('pressed');
+    el.setAttribute('aria-pressed', 'false');
   };
   el.addEventListener('pointerdown', press);
   el.addEventListener('pointerup', release);
@@ -73,6 +75,7 @@ function bindToggleButton(el: HTMLElement, key: 'handbrake'): void {
     e.preventDefault();
     state[key] = state[key] === 1 ? 0 : 1;
     el.classList.toggle('pressed', state[key] === 1);
+    el.setAttribute('aria-pressed', String(state[key] === 1));
   });
   el.addEventListener('contextmenu', (e) => e.preventDefault());
 }
@@ -81,9 +84,13 @@ function bindEdgeButton(el: HTMLElement, name: Edge): void {
   el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     el.classList.add('pressed');
+    el.setAttribute('aria-pressed', 'true');
     fireEdge(name);
   });
-  const release = (): void => el.classList.remove('pressed');
+  const release = (): void => {
+    el.classList.remove('pressed');
+    el.setAttribute('aria-pressed', 'false');
+  };
   el.addEventListener('pointerup', release);
   el.addEventListener('pointercancel', release);
   el.addEventListener('pointerleave', release);
@@ -100,6 +107,7 @@ function bindSteerPad(pad: HTMLElement, knob: HTMLElement): void {
     const clamped = Math.max(-radius, Math.min(radius, dx));
     state.steer = clamped / radius;
     knob.style.transform = `translateX(${clamped}px)`;
+    pad.setAttribute('aria-valuenow', String(Math.round(state.steer * 100)));
   };
 
   const reset = (): void => {
@@ -107,6 +115,7 @@ function bindSteerPad(pad: HTMLElement, knob: HTMLElement): void {
     state.steer = 0;
     knob.style.transform = '';
     pad.classList.remove('active');
+    pad.setAttribute('aria-valuenow', '0');
   };
 
   pad.addEventListener('pointerdown', (e) => {

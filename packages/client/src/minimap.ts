@@ -7,22 +7,6 @@ import { Physics } from '@mydrunner/shared';
 
 const SIZE_PX = 168;
 
-const STYLE = `
-#minimap {
-  position: fixed;
-  top: 8px; right: 8px;
-  width: ${SIZE_PX}px; height: ${SIZE_PX}px;
-  z-index: 5;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: 6px;
-  opacity: 0.88;
-  pointer-events: none;
-  background: #111;
-}
-/* Touch layout parks its aux buttons in the top-right corner. */
-body.touch #minimap { top: 96px; }
-`;
-
 export interface MinimapPlayer {
   x: number;
   z: number;
@@ -38,18 +22,47 @@ export class Minimap {
   private worldSize = 1;
 
   constructor() {
-    const style = document.createElement('style');
-    style.textContent = STYLE;
-    document.head.appendChild(style);
+    const wrap = document.createElement('aside');
+    wrap.id = 'minimap-wrap';
+    wrap.className = 'instrument-panel';
+    wrap.setAttribute('aria-label', 'Stage minimap');
+    wrap.innerHTML = `
+      <div class="minimap-header">
+        <span class="minimap-title">Stage map</span>
+        <span class="minimap-compass" aria-hidden="true">N ↑</span>
+      </div>
+    `;
     this.canvas = document.createElement('canvas');
     this.canvas.id = 'minimap';
     this.canvas.width = SIZE_PX;
     this.canvas.height = SIZE_PX;
-    // Hidden until terrain arrives - an empty black square during the
-    // join/connect phase reads as a broken UI element.
-    this.canvas.style.visibility = 'hidden';
-    document.body.appendChild(this.canvas);
+    this.canvas.setAttribute('aria-label', 'Terrain and player positions');
+    wrap.appendChild(this.canvas);
+    document.body.appendChild(wrap);
     this.ctx = this.canvas.getContext('2d')!;
+    this.drawStandby();
+  }
+
+  private drawStandby(): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = '#151713';
+    ctx.fillRect(0, 0, SIZE_PX, SIZE_PX);
+    ctx.strokeStyle = 'rgba(170, 169, 157, 0.12)';
+    ctx.lineWidth = 1;
+    for (let p = 0; p <= SIZE_PX; p += 24) {
+      ctx.beginPath();
+      ctx.moveTo(p, 0);
+      ctx.lineTo(p, SIZE_PX);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, p);
+      ctx.lineTo(SIZE_PX, p);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#8f9186';
+    ctx.font = '700 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('AWAITING STAGE DATA', SIZE_PX / 2, SIZE_PX / 2);
   }
 
   /** Paint the static base map from terrain data. Call once per welcome -
@@ -79,7 +92,7 @@ export class Minimap {
     base.height = n;
     base.getContext('2d')!.putImageData(img, 0, 0);
     this.base = base;
-    this.canvas.style.visibility = 'visible';
+    document.getElementById('minimap-wrap')?.classList.add('ready');
   }
 
   /** Redraw base + player dots. Call once per render frame. */

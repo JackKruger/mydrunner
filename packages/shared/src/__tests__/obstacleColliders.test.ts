@@ -8,7 +8,7 @@
 //
 // Both halves have to hold for the "client and server build the same world
 // from the same document" guarantee. Obstacle colliders are built
-// independently on the server and in the client's prediction sim, so a
+// independently in every owner's local simulation, so a
 // change here that is not matched by a PROTOCOL_VERSION bump desyncs the two
 // with no error — the local truck climbs a rock the server says is not there.
 //

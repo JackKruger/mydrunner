@@ -27,7 +27,7 @@ test.describe('@screenshot', () => {
     await page.waitForTimeout(800);
     const diag = await page.evaluate(() => {
       const out: Record<string, unknown> = {};
-      const w = window as unknown as { __scene?: any; __prediction?: any };
+      const w = window as unknown as { __scene?: any; __localSimulation?: any };
       out.hud = (document.querySelector('#hud') as HTMLElement | null)?.textContent;
       if (w.__scene) {
         const s = w.__scene;
@@ -40,8 +40,8 @@ test.describe('@screenshot', () => {
         out.vehicleIds = ids;
         out.localId = s.localId;
       }
-      if (w.__prediction) {
-        out.predState = w.__prediction.state?.();
+      if (w.__localSimulation) {
+        out.localState = w.__localSimulation.state?.();
       }
       return out;
     });

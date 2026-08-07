@@ -12,18 +12,18 @@ Vehicles are procedural Three.js silhouettes with per-kind physics geometry (`ve
 - **Ute** — Falcon-style flat-tray ute (Patrol physics, different silhouette).
 - **Motorbike** — dual-sport bike silhouette; half the mass, 1.4× power (still simulated as a 4-wheel chassis).
 
-The player's chosen kind is spawned on the server (`Room.addPlayer` passes `handle.carKind`) **and** in the client's local prediction world — the two must stay in sync or the soft corrections fight the local sim.
+The owning client constructs the chosen kind in its local Rapier world. The server keeps the kind as relay metadata so every remote client builds the matching mesh and collision proxy.
 
 Rollover is intentionally a real risk on slopes and at-speed turns into ruts — it's tuned to be controllable on the road but punishing off it. There is also an incline-traction assist (`INCLINE_ASSIST_MAX`) so the truck can actually climb the rocky path up the mountain.
 
 ## Stack
 
 - **TypeScript everywhere**, ESM, Node 22+, pnpm workspaces.
-- **Physics:** Rapier (`@dimforge/rapier3d-compat`, WASM). Lives in `packages/shared/src/physics/`. The server is authoritative; the client ALSO runs a local Rapier world for the local truck's prediction (see below).
-- **Client:** Vite + Three.js. No React. Render loop is `requestAnimationFrame` driving `Scene.render()` in `packages/client/src/scene.ts`. Remote vehicles interpolate from snapshots ~100 ms behind the server clock; the local truck renders from the prediction sim so it responds within one tick.
-- **Server:** Node + `ws` + `http`. Single authoritative `Room` running a fixed 60Hz physics loop, broadcasting 30Hz snapshots. Lives in `packages/server/src/`.
+- **Physics:** Rapier (`@dimforge/rapier3d-compat`, WASM). Lives in `packages/shared/src/physics/` and runs in each owning browser. The server does not simulate vehicles.
+- **Client:** Vite + Three.js. No React. `requestAnimationFrame` drives fixed-step owner physics plus `Scene.render()`. Remote vehicles interpolate from relayed snapshots ~100 ms behind; the local truck interpolates its two latest 60 Hz physics poses at display rate.
+- **Server:** Node + `ws` + `http`. A single `Room` allocates spawns, stores the newest owner state and broadcasts 30 Hz aggregate snapshots. Lives in `packages/server/src/`.
 - **Wire format:** MessagePack binary with quantized snapshots (cm positions, int16 quats, millirad angles — see the scale constants in `packages/shared/src/net/messages.ts`). All encode/decode is centralised there; bump `SNAPSHOT_SCHEMA` if the per-player tuple changes (`decodeServer` throws on an unknown one — the tuple is positional, so a stale decoder would otherwise read every field as its neighbour). Wheel `spin` crosses the wire wrapped mod 2π — consumers must lerp along the shortest wrapped arc.
-- **Protocol version:** `PROTOCOL_VERSION` (`constants.ts`) rides on `hello` and `welcome`. Client and server deploy independently (Pages / Railway) and *both* build the world and the vehicle locally from the map the server names, so a mismatched pair silently builds different terrain and a different truck. `index.ts` refuses the join with a `bye`; the client shows the reason and stops retrying. **Bump it for any change that would make two builds disagree** — wire layout, terrain or obstacle generation, vehicle geometry, or a physics constant the prediction sim reads.
+- **Protocol version:** `PROTOCOL_VERSION` (`constants.ts`) rides on `hello` and `welcome`. Client and server deploy independently, so `index.ts` refuses incompatible wire versions with a visible `bye`. Bump it for wire/message-layout changes. Map content compatibility is guarded separately by the map revision.
 - **Map revision:** the second half of that guard, and the one `PROTOCOL_VERSION` cannot cover — *editing a map changes no code either side compiles*. `welcome` carries `{ id, rev }`; the client resolves the id in its own compiled-in registry and compares revisions (`client/src/mapLoad.ts`), refusing the session on a mismatch. Bump nothing by hand: `rev` is the document's content hash.
 - **Tests:** Vitest for unit + Rapier integration; Playwright for browser smoke + multiplayer.
 
@@ -70,52 +70,51 @@ Playwright browsers: in sandboxed environments without internet, the config auto
 ```
 packages/
   shared/   types, constants, net protocol, World+Vehicle+terrain+obstacles physics
-  server/   WS+HTTP entry point, Room (one world, all players, fixed loop)
+  server/   WS+HTTP entry point, Room (membership, spawns, state relay)
   client/   Vite app: input + touch -> NetClient -> Scene (Three.js) + ChaseCamera
-            + Prediction (local Rapier sim for the local truck)
+            + LocalSimulation (canonical owner Rapier sim + remote proxies)
   e2e/      Playwright tests + screenshot capture (boots client + server via webServer config)
 ```
 
 `shared` is consumed via TypeScript source (`"main": "./src/index.ts"`) — no build step needed for inter-package use during dev.
 
-### Server-authoritative + soft-correction local prediction
+### Client-owned vehicle physics + state relay
 
-The server is the source of truth for physics. Each tick (60 Hz):
+Each browser is the sole authority for its own truck:
 
-1. Read pending input for each player.
-2. `vehicle.preStep()` applies steer/throttle/brake, performs **per-wheel surface lookup** (sample terrain texel under each wheel → modulate friction slip), applies spring/tire forces to the chassis.
-3. `world.step()` advances Rapier.
-4. `vehicle.postStep()` accumulates wheel spin for visuals.
-5. Every other tick (30 Hz), broadcast a `WorldSnapshot` to every player.
+1. Sample input and advance `LocalSimulation` at a fixed 60 Hz.
+2. Keep the previous/current completed physics poses and interpolate between them at display rate.
+3. Upload the canonical `VehicleState` at 30 Hz using the quantized `state` message.
+4. `Room` keeps only the newest sequence per owner and broadcasts aggregate snapshots at 30 Hz.
+5. `Scene` interpolates remote vehicles from the snapshot buffer. The pose it draws is also fed back to `LocalSimulation` as a kinematic chassis proxy, so player collisions happen immediately in owner physics with no server round trip.
 
-The client samples input at 60 Hz, ships each `PlayerInput` to the server, AND steps a local Rapier sim (`packages/client/src/prediction.ts`) with the same input so the local truck responds within one tick. Snapshots are treated as **soft corrections**: each one nudges the local body a fraction (`PREDICTION.softCorrectionBlend`) toward the (velocity-extrapolated) server pose, with the delta absorbed by a decaying visual offset — there is no input queue, no snap-and-replay reconcile, no replay death spiral. Divergences past `PREDICTION.hardSnapDistance` hard-snap. Remote vehicles have no local sim; `Scene.render()` interpolates them from the snapshot pair surrounding `now - RENDER_DELAY_MS`.
-
-History: v1 prediction was snap-and-replay and caused every netcode bug we hit (reconcile heartbeat, partial-replay drift, replay spiral); it was removed entirely for a while (pure interpolation, ~100 ms input lag), then re-introduced as the current soft-correction model. If prediction misbehaves, the pure-interpolation fallback is: don't construct `Prediction` in `main.ts` — the scene falls back to snapshot extrapolation for the local truck automatically.
+Snapshots never mutate the locally owned body. Remote proxies collide only with the owner chassis; collision groups exclude terrain, scenery, other proxies and suspension rays. A proxy older than 500 ms is disabled so a stalled connection cannot leave an invisible wall.
 
 ### Key files
 
 Shared:
 
-- `packages/shared/src/constants.ts` — every compile-time tunable: `PROTOCOL_VERSION`, tick rate, vehicle mass / axle springs / drive split, surface friction, anti-roll bar, `PREDICTION` correction rates, camera spring, incline assist, and the `TERRAIN.default*` that define the production world. Tuning lives here, code does not.
-- `packages/shared/src/tuning.ts` — `TUNING`: the live-mutable runtime surface the physics actually reads for tunable values, seeded from `constants.ts`. Client and server each have their own instance; the client debug panel mutates only the client's (divergence absorbed by soft corrections until values are baked back into constants). Suspension rates are the exception: they are per-`CarKind` (`vehicleGeom.ts`), so `TUNING.axleFront` / `axleRear` hold **multipliers** on the geom's rates (1.0 = constants as shipped) rather than absolutes, which would flatten the per-kind differences. Anything added to `TUNING` must have a reader in physics — a field nothing reads is a slider that silently does nothing.
+- `packages/shared/src/constants.ts` — every compile-time tunable: protocol/tick rates, vehicle mass / axle springs / drive split, surface friction, anti-roll bar, camera spring, incline assist, and the `TERRAIN.default*` that define the production world. Tuning lives here, code does not.
+- `packages/shared/src/tuning.ts` — `TUNING`: live-mutable values read by owner physics and seeded from `constants.ts`. The client debug panel mutates its local instance immediately. Suspension rates are per-`CarKind`, so `TUNING.axleFront` / `axleRear` are multipliers rather than absolutes.
 - `packages/shared/src/types.ts` — `PlayerInput`, `VehicleState`, `WorldSnapshot`, `CarKind` (+ `normalizeCarKind`). Wire-shape contract.
 - `packages/shared/src/net/messages.ts` — `ClientMessage` / `ServerMessage` discriminated unions, `encode` / `decode*`. `decodeClient` strictly validates shape and rejects non-finite numbers — it is the trust boundary for everything a client can send. Welcome carries a `MapHandshake { id, rev }` + spawn pose + `protocolVersion`; `hello` carries name + carKind + `v`; snapshots include each player's `carKind`. A version mismatch is *not* thrown in `decodeClient` — it decodes normally and `index.ts` answers with a `bye`, because a throw there is swallowed by the ws handler and the player would sit on a dead socket with nothing on screen.
 - `packages/shared/src/physics/world.ts` — `World` wraps a `RAPIER.World`, owns the heightfield collider + map of vehicles + obstacles + landmarks. **Note: heights are transposed before being handed to Rapier** (Rapier reads column-major; our generator is row-major).
-- `packages/shared/src/physics/solidAxleVehicle.ts` — `SolidAxleVehicle`: custom solid-axle vehicle model (the only vehicle model; legacy raycast path was deleted in Phase 4). `preStep` does per-wheel-end raycasts, spring/damper forces, anti-roll bar, engine + gearbox, diff lock, and friction-circle tire forces.
+- `packages/shared/src/physics/solidAxleVehicle.ts` — `SolidAxleVehicle`: custom solid-axle vehicle model (the only vehicle model; legacy raycast path was deleted in Phase 4). `preStep` does per-wheel-end support rays plus hybrid ledge contacts, spring/damper forces, anti-roll bar, engine + gearbox, diff lock, and friction-circle tire forces.
+- `packages/shared/src/physics/wheelContact.ts` — exact tyre-cylinder queries for sharp faces, reachable-top probing, corner contact frames, and the face-to-top climb direction used by the controlled-crawl path. Ordinary terrain support remains ray-based.
 - `packages/shared/src/physics/axle.ts` — kinematic axle state (rideY + rollAngle DOFs, articulation cap). Pure functions, no Rapier handles.
 - `packages/shared/src/physics/wheelDynamics.ts` — per-wheel angular-velocity integrator (drive/brake/ground/rolling torques on wheel inertia). Pure functions.
 - `packages/shared/src/physics/engine.ts` — engine + automatic gearbox: torque curve, RPM smoothing, chassis-speed-based shift logic (immune to wheel-slip gear hunting).
 - `packages/shared/src/physics/vehicleGeom.ts` — per-`CarKind` physics identity: axle placement, spring rates, mass/power multipliers, `spawnYAboveGround`, `restWheelPositions`.
 - `packages/shared/src/physics/tire.ts` — slip-curve helpers. Half-live: `slipAngle` + `lateralGripFromSlipAngle` feed the friction-circle model's lateral force; `gripFromSlip` / `slipRatio` and the `TIRE` slip constants are unused, kept as tested building blocks.
 - `packages/shared/src/physics/terrain.ts` — deterministic FBM-noise heightmap + Surface enum + `SURFACE_INFO` (the single label/friction-key/minimap-colour table; `surfaceInfo(id)` falls back to Dirt) + hill-climb trail layers. Rolling hills, one Gaussian mountain peak, scattered mud bogs, graded switchback trail. Multiple roads: main asphalt strip, north loop (dirt circuit), south bog trail, east gravel connector, plus the mountain-trail dirt connector.
-- `packages/shared/src/physics/objectCatalog.ts` — `OBJECT_INFO`: what a placeable object *is*, one entry per kind (label, palette group, per-kind defaults and slider limits, what `size`/`height`/`length` mean for it, and its collider parts). `ObstacleKind` is `keyof` the table, so completeness is free. `Obstacle` and `rampTransform` live here too — the table has to name them and `obstacles.ts` has to read the table, so the other direction is a cycle; `obstacles.ts` re-exports both. `resolveColliders(o)` turns a kind's semantic parts (`boulder` / `post` / `box` / `drum` / `plank`) into world-space shapes, Rapier-free so it can be tested without a physics world. **The five original kinds' collider geometry is frozen** — the server and every client's prediction sim build these independently, so changing one without a `PROTOCOL_VERSION` bump desyncs them silently. `obstacleColliders.test.ts` pins it.
+- `packages/shared/src/physics/objectCatalog.ts` — `OBJECT_INFO`: one source of truth for placeable object metadata and collider parts. Every owner client builds these independently, so collider-layout changes require a protocol bump to keep connected client builds compatible.
 - `packages/shared/src/physics/obstacles.ts` — deterministic rock + tree placement. Three passes: medium scatter, dense small-rock detail, and a corridor of boulders along the rocky hill climb up the mountain. `spawnObstacleColliders` is a loop over the catalog, and leaves each body at the origin with the colliders carrying full world transforms: Rapier stores both as f32, so anchor-plus-offset rounds twice and moved a dozen rocks 0.1 mm off the pre-table behaviour.
-- `packages/shared/src/map/spawn.ts` — `gridSpawn` / `resolveSpawn`: where a player starts. Extracted from `Room` so the authoritative server and the editor's offline preview cannot answer differently. Slot *allocation* stays in `Room` — who is parked where is not the map's business.
+- `packages/shared/src/map/spawn.ts` — `gridSpawn` / `resolveSpawn`: where a player starts. Extracted from `Room` so the multiplayer relay and the editor's offline preview cannot answer differently. Slot *allocation* stays in `Room` — who is parked where is not the map's business.
 - `packages/shared/src/physics/landmarks.ts` — deterministic landmark spec (petrol station, flagpoles, summit lookout) + colliders.
 - `packages/shared/src/physics/ruts.ts` — `RutBuffer` accumulates per-cell erosion, capped at `RUT_MAX_DEPTH`. Only Mud / DeepMud cells erode. **Not wired into anything** — the wire message, `World.rebuildTerrain`, the client apply path and Room's flush loop were deleted; this class plus its unit test survive as the building block for a re-implementation. See the RUT_RATE comment in `constants.ts` for the two problems to solve first.
 - `packages/shared/src/physics/util.ts` — small shared helpers (currently `rotateVecByQuat`).
 
-Map (`packages/shared/src/map/`) — the level format. Everything that builds a world goes through it: `Room`, the game client, the prediction sim, the editor, the tests.
+Map (`packages/shared/src/map/`) — the level format. The relay composes it for identity/spawns; the game client composes it for visuals and owner physics; the editor and tests use the same path.
 
 - `mapDoc.ts` — the `MapDoc` type: a procedural base (`{ seed, size, resolution }` plus the road / bog / pad data that used to be hardcoded) with a height delta, surface override, and object / spawn / marker lists layered on top. Delta form is what makes generator improvements flow into existing maps for free, and it is the format's one hazard — a delta only means anything against the base it was cut on. `decodeMapDoc` is a trust boundary in the same posture as `decodeClient`: documents come from files a user picked.
 - `applyMapDoc.ts` — composes a document into a `MapWorld { terrain, obstacles, landmarks, spawns, markers }`. `applyMapDoc(proceduralDoc())` reproduces `generateTerrain()` byte for byte, which is what let the document path replace the old one without moving the map anyone drives on. Throws `BaseDriftError` when the generator has moved under a document's edits; the editor passes `onBaseDrift: 'ignore'` to open it anyway and offer a rebase or a bake.
@@ -124,17 +123,17 @@ Map (`packages/shared/src/map/`) — the level format. Everything that builds a 
 
 Server:
 
-- `packages/server/src/room.ts` — owns `World`, 60Hz deadline-based tick loop with catch-up, 30Hz snapshots, per-kind spawns on the road grid, off-map ejector, chat relay, perf counters. Builds its world by composing a map document (`Maps.applyMapDoc`), defaulting to the `procedural` map — whose base is `TERRAIN.default*`, so the constants still *are* the production world (they used to disagree: constants said 200 m while Room hardcoded 320 m, and the ratios below them made those two different maps). Spawns come from the document when it authors any, otherwise the road grid. `production-world.test.ts` covers the shipped geometry; `map-load.test.ts` pins that the document path did not move it.
+- `packages/server/src/room.ts` — composes the selected map, allocates spawn slots, accepts increasing owner-state sequences, broadcasts aggregate snapshots, relays chat and records relay diagnostics. It owns no Rapier world.
 - `packages/server/src/index.ts` — HTTP+WS bootstrap, route messages into `Room`, heartbeat ghost-cleanup, expose `/health`.
 
 Client:
 
-- `packages/client/src/main.ts` — entry point: join screen, net wiring, 60 Hz input accumulator, composes the shared `MapWorld` once per welcome, owns the `Prediction` instance, HUD.
+- `packages/client/src/main.ts` — entry point: join screen, net wiring, 60 Hz input accumulator, 30 Hz owner-state uploader, composes one shared `MapWorld`, owns `LocalSimulation`, HUD.
 - `packages/client/src/mapLoad.ts` — resolves the welcome's `MapHandshake` against the compiled-in registry. Split out of `main.ts` so the two refusal paths (unknown id, revision mismatch) are testable without a socket.
-- `packages/client/src/scene.ts` — snapshot interpolation (remote) + prediction override (local), per-player vehicle visuals, mud splatter particles, minimap feed. Exposes `localPosition()` / `localSteer()` / `localAxles()` for HUD + debug + e2e to read the rendered local-truck state. Camera state is delegated to `ChaseCamera`; everything world-shaped is delegated to `WorldView`.
+- `packages/client/src/scene.ts` — snapshot interpolation (remote) + owner override (local), per-player visuals, mud particles and minimap. It exports the exact drawn remote chassis poses for collision proxies.
 - `packages/client/src/worldView.ts` — renderer, lighting, fog, sky, terrain mesh, obstacles, landmarks: the world as seen, with no camera and no render loop of its own (both callers pass their own camera to `render()`). Exists so the level editor renders the world the game actually ships rather than a lookalike — `terrainShader.ts` re-implements Lambert and fog with its own copies of the sun direction and fog range, so a hand-built second scene would light the ground differently from everything standing on it and only a screenshot would catch it.
 - `packages/client/src/three/dispose.ts` — `disposeObject3D` / `disposeMaterial`. Three frees nothing on `scene.remove()`, and `Material.dispose()` does not touch textures.
-- `packages/client/src/prediction.ts` — local Rapier sim for the local truck; soft-correction model (see architecture section above). Blend rates / decay / snap threshold come from `PREDICTION` in `constants.ts`.
+- `packages/client/src/localSimulation.ts` — canonical owner Rapier world, fixed-step render interpolation, off-map ejector and kinematic remote chassis proxies.
 - `packages/client/src/net.ts` — thin WebSocket wrapper around the shared protocol; reconnect-safe socket identity checks.
 - `packages/client/src/input.ts` / `touchInput.ts` — keyboard (+ handbrake toggle) and on-screen analog steer pad / pedals; both merge in `sampleInput()`.
 - `packages/client/src/camera.ts` — `ChaseCamera`: chase-cam yaw spring with corner swing, pitch-aware lookAt for hill driving, hood cam, sky cam.
@@ -161,13 +160,13 @@ Authored maps are committed as `.ts` modules and added to `AUTHORED` in `map/reg
 
 ### Determinism note
 
-Rapier in single-threaded mode is deterministic given identical inputs and step order. The shared physics package is the only physics path now (server-only), but the determinism property still matters: it means the same inputs replayed against the same seed produce the same trajectory, which is what makes server-side recording / replay / regression tests viable. Do not introduce non-deterministic state (`Date.now()` inside `step`, unseeded `Math.random()`, floating-point reductions across non-deterministic iteration order) inside `World.step()` or `Vehicle.preStep()/postStep()`.
+Rapier in single-threaded mode is deterministic given identical inputs and step order. Owner physics is client-only, but determinism still matters for recording, replay and regression tests. Do not introduce non-deterministic state inside `World.step()` or `Vehicle.preStep()/postStep()`.
 
-`packages/server/src/__tests__/prediction.test.ts` enforces this with a "two worlds, same seed, same inputs → same state" assertion. (Name is a leftover from when the client also ran a sim; the test is still valid as a determinism guard.)
+`packages/server/src/__tests__/owner-determinism.test.ts` enforces this with a “two worlds, same map, same inputs → same state” assertion.
 
 ## Conventions
 
-- **Tunables in `constants.ts`.** Magic numbers in physics or networking code are bugs in waiting. Values a tester might twist at runtime are mirrored onto `TUNING` (`tuning.ts`), seeded from the constants — physics code reads `TUNING` for those. This includes values the *server* never sees: the client prediction rates live in `PREDICTION` for the same reason.
+- **Tunables in `constants.ts`.** Magic numbers in physics or networking code are bugs in waiting. Values a tester might twist at runtime are mirrored onto `TUNING`; owner physics reads those values directly.
 - **One lookup per concept.** `SURFACE_INFO` (`terrain.ts`) is the model: label, friction key and minimap colour for every `Surface` in one `Record`, so a new surface is a compile error until it's complete. `OBJECT_INFO` (`objectCatalog.ts`) is the second instance, and the cautionary tale: the five object kinds were hand-copied into five places with the compiler checking one, and adding a sixth meant finding the other four from memory. If you find yourself adding a parallel switch keyed on an existing enum, extend the table instead.
 - **Deploy:** exactly one workflow publishes to the `github-pages` environment (`deploy.yml`). Two of them raced for a while and the live site was whichever finished last. Don't add a second.
 - **Shared types are the wire contract.** When you change `PlayerInput` or `VehicleState`, both client and server pick it up via TypeScript.
@@ -200,7 +199,7 @@ This file should be updated when the architecture changes. If you (future Claude
 
 ## Roadmap
 
-The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4 with AWD physics on procedural terrain → cross mud at low traction → climb the rocky hill route up the mountain → see every truck (yours and remotes') interpolated smoothly from the same authoritative snapshot stream. The local truck responds within one tick via the soft-correction prediction sim; remotes render ~100 ms behind. Next priorities, roughly in order:
+The MVP loop is complete: connect → pick a rig → run canonical local physics → upload owner state → see remote trucks through buffered interpolation and collide through local kinematic proxies.
 
 ### Shipped
 - Surface-name HUD.
@@ -213,7 +212,8 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - Hill-climb traction assist, wider surface friction contrast.
 - Minimap / map overview.
 - Text chat (T to open; rate-limited + sanitised server-side).
-- Soft-correction client prediction for the local truck.
+- Client-owned vehicle physics with fixed-tick render interpolation.
+- Local player-collision proxies aligned to rendered remote poses.
 - Mountain switchback trail with per-traverse features (whoops, rocky step, mud puddle).
 - Multiple roads: north loop (dirt circuit), south bog trail, east gravel connector.
 - Procedural sky dome: gradient + warm horizon band + 5-octave FBM clouds + sun disc with glow.
@@ -222,7 +222,7 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - Single Pages deploy workflow (the scaffold `static.yml` raced it and shipped the raw repo).
 - `SURFACE_INFO`: one table replacing three parallel per-surface lookups.
 - Production-world test coverage at the shipped 320 m / res-128 geometry.
-- Map documents: the level format, loaded by the server, the client and the prediction sim alike, with a map-revision handshake refusing mismatched bundles.
+- Map documents loaded by the relay, owner client and editor, with a revision handshake refusing mismatched bundles.
 - Level editor at `/editor.html`: sculpt / smooth / flatten / paint brushes, object and spawn placement, undo, and JSON / `.ts`-module export.
 - `OBJECT_INFO`: one catalog replacing five hand-copied kind lists, and 40 placeable objects on top of it (natural, trail, props, markers).
 - Placement ghost: a translucent copy of the object under the cursor, aimed with the wheel or `[` / `]`, built by the same mesh path as the real thing.
@@ -234,7 +234,7 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 
 ### Multiplayer depth
 - Lobby / room codes (currently single global room).
-- Lag compensation for inputs the server processes (server interpolates back).
+- Tune adaptive remote interpolation delay for real-world jitter.
 - Voice chat (scoped and shelved — WebRTC P2P + WS signaling is the chosen approach).
 
 ### Wire-format optimisation
@@ -246,7 +246,7 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - Destructible terrain features (trees, fences) on top of mud-deformation.
 - Physics-driven water bodies that the chassis floats in / bogs down in.
 - Day/night cycle + headlight illumination.
-- Re-enable ruts: needs higher heightfield resolution (or a sub-cell visual deformation overlay decoupled from the collider). Note the client prediction world must also receive rut deltas, or the local sim drives on stale terrain and rubber-bands on mud. `RutBuffer` is still there and tested; the transport is a clean sheet.
+- Re-enable ruts: needs higher heightfield resolution or a sub-cell visual deformation overlay. Each owner would need the same persistent rut deltas for collision consistency.
 
 ## How to add a feature, end to end
 
@@ -263,11 +263,10 @@ The MVP loop is **complete**: connect → pick name + rig → drive a lifted 4x4
 - **`@dimforge/rapier3d-compat 0.14` exposes `setWheelRollInfluence` in TypeScript types but the WASM binding throws at runtime.** Don't use it; tune via CoM offset, track width, friction multipliers, and steer rate instead.
 - **Rapier heightfield is column-major.** `World.buildTerrain()` transposes our row-major heights before calling `ColliderDesc.heightfield`. If you change the generator's indexing, update the transpose.
 - **Single global room.** `Room` is instantiated once in `index.ts`. Sharding requires a `RoomManager` — straightforward but unbuilt.
-- **Tick loop is deadline-based `setTimeout` with catch-up** (up to 4 ticks per iteration, resync past 250 ms behind). Snapshot cadence carries its fractional remainder so 30 Hz doesn't drift. If perf logs show `lateFires` climbing, look at GC pressure before touching the loop.
-- **Inputs are shape-validated at decode (`decodeClient`) and clamped server-side** (`Room.applyInput`), but otherwise trusted. No anti-cheat beyond range clamping.
+- **Relay loop is deadline-based `setTimeout` at 30 Hz.** It drops missed broadcasts after a long pause rather than bursting stale snapshots.
+- **Owner state is quantized and shape-validated at decode.** The room ignores stale/non-finite direct updates; there is intentionally no anti-cheat simulation.
 - **Rapier `compat` build bundles WASM as base64.** This is why `optimizeDeps.exclude` is set in `vite.config.ts`. Don't switch to `@dimforge/rapier3d` (non-compat) without revisiting Vite config.
-- **The local truck's kind must match on server and prediction sim.** `Room.addPlayer` and `main.ts` both spawn from the same `choice.carKind`; a mismatch means different mass/power/geometry and the soft corrections permanently fight the local sim.
-- **Prediction fallback:** if the soft-correction model misbehaves, don't construct `Prediction` in `main.ts` — the scene automatically falls back to snapshot extrapolation for the local truck (~100 ms input lag, but rock-solid).
+- **Remote collision proxies use the drawn remote pose.** Do not add a second extrapolation path or collisions will occur away from visible trucks.
 
 ## Operating notes
 

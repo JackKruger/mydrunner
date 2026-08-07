@@ -4,7 +4,7 @@
 // message handler would crash the whole room.
 
 import { describe, expect, it } from 'vitest';
-import { encode as msgpackEncode } from '@msgpack/msgpack';
+import { encode as msgpackEncode, decode as msgpackDecode } from '@msgpack/msgpack';
 import {
   CHAT_MAX_LEN,
   NAME_MAX_LEN,
@@ -14,8 +14,30 @@ import {
   encode,
 } from '../net/messages.js';
 import { PROTOCOL_VERSION } from '../constants.js';
+import type { VehicleState } from '../types.js';
 
 const raw = (obj: unknown): Uint8Array => msgpackEncode(obj);
+
+const vehicle: VehicleState = {
+  position: { x: 1.234, y: 2, z: -3 },
+  rotation: { x: 0, y: 0, z: 0, w: 1 },
+  linVel: { x: 4, y: 0, z: 1 },
+  angVel: { x: 0, y: 0.2, z: 0 },
+  rpm: 900,
+  gear: 2,
+  throttle: 0.5,
+  wheels: Array.from({ length: 4 }, () => ({
+    steer: 0,
+    spin: 0,
+    contact: true,
+    suspensionLength: 0.3,
+    angVel: 0,
+  })),
+  axles: [
+    { rideY: 0, rollAngle: 0 },
+    { rideY: 0, rollAngle: 0 },
+  ],
+};
 
 describe('decodeClient validation', () => {
   it('round-trips a valid hello', () => {
@@ -41,10 +63,11 @@ describe('decodeClient validation', () => {
     }
   });
 
-  it('round-trips a valid input', () => {
-    const input = { seq: 42, throttle: 1, steer: -0.5, brake: 0, handbrake: 0, buttons: 1 };
-    const msg = decodeClient(encode({ t: 'input', input }));
-    expect(msg).toEqual({ t: 'input', input });
+  it('round-trips a valid quantized owner state', () => {
+    const msg = decodeClient(encode({ t: 'state', update: { seq: 42, vehicle } }));
+    if (msg.t !== 'state') throw new Error('expected state');
+    expect(msg.update.seq).toBe(42);
+    expect(msg.update.vehicle.position.x).toBeCloseTo(1.23, 2);
   });
 
   it('rejects hello with a non-string name', () => {
@@ -56,31 +79,27 @@ describe('decodeClient validation', () => {
     expect(() => decodeClient(raw({ t: 'chat', text: { a: 1 } }))).toThrow();
   });
 
-  it('rejects input with NaN / Infinity fields', () => {
-    const base = { seq: 1, throttle: 0, steer: 0, brake: 0, handbrake: 0, buttons: 0 };
-    expect(() => decodeClient(raw({ t: 'input', input: { ...base, throttle: NaN } }))).toThrow();
-    expect(() => decodeClient(raw({ t: 'input', input: { ...base, steer: Infinity } }))).toThrow();
-    expect(() => decodeClient(raw({ t: 'input', input: { ...base, brake: 'x' } }))).toThrow();
+  it('rejects owner state with non-finite tuple fields', () => {
+    const packed = msgpackDecode(encode({ t: 'state', update: { seq: 1, vehicle } })) as Record<string, unknown>;
+    const tuple = [...(packed.V as number[])];
+    tuple[0] = NaN;
+    expect(() => decodeClient(raw({ ...packed, V: tuple }))).toThrow();
+    tuple[0] = Infinity;
+    expect(() => decodeClient(raw({ ...packed, V: tuple }))).toThrow();
   });
 
-  it('rejects input with a missing or non-integer seq', () => {
-    const base = { throttle: 0, steer: 0, brake: 0, handbrake: 0, buttons: 0 };
-    expect(() => decodeClient(raw({ t: 'input', input: base }))).toThrow();
-    expect(() => decodeClient(raw({ t: 'input', input: { ...base, seq: 1.5 } }))).toThrow();
-    expect(() => decodeClient(raw({ t: 'input', input: { ...base, seq: '9' } }))).toThrow();
+  it('rejects owner state with a missing or non-integer sequence', () => {
+    const packed = msgpackDecode(encode({ t: 'state', update: { seq: 1, vehicle } })) as Record<string, unknown>;
+    expect(() => decodeClient(raw({ ...packed, Q: undefined }))).toThrow();
+    expect(() => decodeClient(raw({ ...packed, Q: 1.5 }))).toThrow();
+    expect(() => decodeClient(raw({ ...packed, Q: '9' }))).toThrow();
   });
 
-  it('rejects missing input payload and unknown message types', () => {
-    expect(() => decodeClient(raw({ t: 'input' }))).toThrow();
+  it('rejects malformed state payloads and unknown message types', () => {
+    expect(() => decodeClient(raw({ t: 'state', s: SNAPSHOT_SCHEMA, Q: 1 }))).toThrow();
+    expect(() => decodeClient(raw({ t: 'state', s: SNAPSHOT_SCHEMA + 1, Q: 1, V: [] }))).toThrow();
     expect(() => decodeClient(raw({ t: 'nope' }))).toThrow();
     expect(() => decodeClient(raw('just a string'))).toThrow();
-  });
-
-  it('coerces a non-numeric buttons field to 0 instead of throwing', () => {
-    const input = { seq: 2, throttle: 0, steer: 0, brake: 0, handbrake: 0, buttons: 'x' };
-    const msg = decodeClient(raw({ t: 'input', input }));
-    if (msg.t !== 'input') throw new Error('expected input');
-    expect(msg.input.buttons).toBe(0);
   });
 });
 
@@ -96,27 +115,8 @@ describe('decodeServer schema guard', () => {
         id: 'p1',
         name: 'jack',
         carKind: 'patrol' as const,
-        lastAckSeq: 3,
-        vehicle: {
-          position: { x: 1, y: 2, z: 3 },
-          rotation: { x: 0, y: 0, z: 0, w: 1 },
-          linVel: { x: 0, y: 0, z: 0 },
-          angVel: { x: 0, y: 0, z: 0 },
-          rpm: 900,
-          gear: 2,
-          throttle: 0.5,
-          wheels: Array.from({ length: 4 }, () => ({
-            steer: 0,
-            spin: 0,
-            contact: true,
-            suspensionLength: 0.3,
-            angVel: 0,
-          })),
-          axles: [
-            { rideY: 0, rollAngle: 0 },
-            { rideY: 0, rollAngle: 0 },
-          ] as [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
-        },
+        stateSeq: 3,
+        vehicle,
       },
     ],
   };
@@ -125,7 +125,7 @@ describe('decodeServer schema guard', () => {
     const out = decodeServer(encode({ t: 'snapshot', snap }));
     if (out.t !== 'snapshot') throw new Error('expected snapshot');
     expect(out.snap.tick).toBe(7);
-    expect(out.snap.players[0]!.vehicle.position.x).toBeCloseTo(1, 2);
+    expect(out.snap.players[0]!.vehicle.position.x).toBeCloseTo(vehicle.position.x, 2);
   });
 
   it('rejects a snapshot from an unknown schema version', () => {

@@ -1,5 +1,5 @@
 import { encode as msgpackEncode, decode as msgpackDecode } from '@msgpack/msgpack';
-import type { CarKind, PlayerId, PlayerInput, PlayerSnapshot, VehicleState, WheelState, WorldSnapshot } from '../types.js';
+import type { CarKind, PlayerId, PlayerSnapshot, VehicleState, VehicleStateUpdate, WheelState, WorldSnapshot } from '../types.js';
 
 // Client -> Server
 export type ClientMessage =
@@ -8,7 +8,7 @@ export type ClientMessage =
    *  decodeClient reports it as 0 so the server can refuse it with a
    *  reason rather than admitting a client that would rubber-band. */
   | { t: 'hello'; name: string; carKind?: CarKind; v: number }
-  | { t: 'input'; input: PlayerInput }
+  | { t: 'state'; update: VehicleStateUpdate }
   | { t: 'ping'; clientTimeMs: number }
   | { t: 'chat'; text: string };
 
@@ -62,10 +62,9 @@ export type ServerMessage =
 // is unchanged.
 //
 // Quantization is lossy by design - millimetre / centimetre / millirad
-// precision is well below human-visible error, and the values are only
-// consumed by visuals + the prediction's soft-correction target. They
-// never feed back into Rapier on either side, so determinism (client/
-// server prediction lockstep on full-precision floats) is preserved.
+// precision is well below human-visible error. The owning client keeps its
+// full-precision state; only remote visuals and collision proxies consume
+// the relay's quantized copy.
 type Wire = string | Uint8Array | ArrayBuffer;
 
 function toBytes(raw: Wire): Uint8Array {
@@ -94,13 +93,10 @@ function q(v: number, scale: number): number {
   return Math.round(v * scale) | 0;
 }
 
-function packPlayer(p: PlayerSnapshot): unknown[] {
-  const v = p.vehicle;
-  const out: (number | string)[] = [
-    p.id,
-    p.name,
-    CAR_KIND_TO_IDX[p.carKind] ?? 0,
-    p.lastAckSeq | 0,
+const VEHICLE_TUPLE_LENGTH = 40;
+
+function packVehicle(v: VehicleState): number[] {
+  const out: number[] = [
     q(v.position.x, POS_SCALE),
     q(v.position.y, POS_SCALE),
     q(v.position.z, POS_SCALE),
@@ -138,12 +134,11 @@ function packPlayer(p: PlayerSnapshot): unknown[] {
   return out;
 }
 
-function unpackPlayer(arr: unknown[]): PlayerSnapshot {
+function unpackVehicle(arr: unknown[]): VehicleState {
+  if (arr.length !== VEHICLE_TUPLE_LENGTH || arr.some((v) => !isFiniteNum(v))) {
+    throw new Error('vehicle state: malformed tuple');
+  }
   let i = 0;
-  const id = arr[i++] as PlayerId;
-  const name = arr[i++] as string;
-  const carKind = CAR_KIND_FROM_IDX[arr[i++] as number] ?? 'patrol';
-  const lastAckSeq = arr[i++] as number;
   const px = (arr[i++] as number) / POS_SCALE;
   const py = (arr[i++] as number) / POS_SCALE;
   const pz = (arr[i++] as number) / POS_SCALE;
@@ -174,7 +169,7 @@ function unpackPlayer(arr: unknown[]): PlayerSnapshot {
     { rideY: (arr[i++] as number) / RIDEY_SCALE, rollAngle: (arr[i++] as number) / ROLL_SCALE },
     { rideY: (arr[i++] as number) / RIDEY_SCALE, rollAngle: (arr[i++] as number) / ROLL_SCALE },
   ];
-  const vehicle: VehicleState = {
+  return {
     position: { x: px, y: py, z: pz },
     rotation: { x: rx, y: ry, z: rz, w: rw },
     linVel: { x: lvx, y: lvy, z: lvz },
@@ -185,7 +180,33 @@ function unpackPlayer(arr: unknown[]): PlayerSnapshot {
     wheels,
     axles,
   };
-  return { id, name, carKind, vehicle, lastAckSeq };
+}
+
+function packPlayer(p: PlayerSnapshot): unknown[] {
+  return [
+    p.id,
+    p.name,
+    CAR_KIND_TO_IDX[p.carKind] ?? 0,
+    p.stateSeq | 0,
+    ...packVehicle(p.vehicle),
+  ];
+}
+
+function unpackPlayer(arr: unknown[]): PlayerSnapshot {
+  if (
+    arr.length !== VEHICLE_TUPLE_LENGTH + 4 ||
+    typeof arr[0] !== 'string' ||
+    typeof arr[1] !== 'string' ||
+    !isFiniteNum(arr[2]) ||
+    !Number.isSafeInteger(arr[3])
+  ) {
+    throw new Error('snapshot: malformed player tuple');
+  }
+  const id = arr[0] as PlayerId;
+  const name = arr[1] as string;
+  const carKind = CAR_KIND_FROM_IDX[arr[2] as number] ?? 'patrol';
+  const stateSeq = arr[3] as number;
+  return { id, name, carKind, vehicle: unpackVehicle(arr.slice(4)), stateSeq };
 }
 
 /** Per-player tuple layout version. Bump whenever packPlayer's field
@@ -214,6 +235,15 @@ function unpackSnapshot(obj: { T: number; M: number; P: unknown[][] }): WorldSna
 export function encode(msg: ClientMessage | ServerMessage): Uint8Array {
   if ((msg as ServerMessage).t === 'snapshot') {
     return msgpackEncode(packSnapshot((msg as { snap: WorldSnapshot }).snap));
+  }
+  if ((msg as ClientMessage).t === 'state') {
+    const update = (msg as { t: 'state'; update: VehicleStateUpdate }).update;
+    return msgpackEncode({
+      t: 'state',
+      s: SNAPSHOT_SCHEMA,
+      Q: update.seq,
+      V: packVehicle(update.vehicle),
+    });
   }
   return msgpackEncode(msg);
 }
@@ -290,8 +320,8 @@ export function sanitiseUserText(raw: string, maxLen: number): string {
  *  AND on wrong-shaped-but-valid msgpack: this is the trust boundary for
  *  everything a client can send, and a thrown TypeError further in (e.g.
  *  `name.slice` on a number) would escape the ws message handler and
- *  crash the whole room. NaN/Infinity in input fields are rejected here
- *  too — a NaN throttle would otherwise poison the sender's Rapier body. */
+ *  crash the whole room. NaN/Infinity in owner state is rejected here so
+ *  malformed state cannot poison every remote renderer. */
 export function decodeClient(raw: Wire): ClientMessage {
   const m = msgpackDecode(toBytes(raw)) as Record<string, unknown> | null;
   if (m === null || typeof m !== 'object') throw new Error('client message: not an object');
@@ -307,31 +337,14 @@ export function decodeClient(raw: Wire): ClientMessage {
       const v = Number.isSafeInteger(m.v) ? (m.v as number) : 0;
       return { t: 'hello', name: sanitiseUserText(m.name, NAME_MAX_LEN), carKind, v };
     }
-    case 'input': {
-      const i = m.input as Record<string, unknown> | null | undefined;
-      if (i === null || i === undefined || typeof i !== 'object') {
-        throw new Error('input: missing payload');
+    case 'state': {
+      if (m.s !== SNAPSHOT_SCHEMA) {
+        throw new Error(`state: unsupported schema ${String(m.s)}`);
       }
-      if (
-        !Number.isSafeInteger(i.seq) ||
-        !isFiniteNum(i.throttle) ||
-        !isFiniteNum(i.steer) ||
-        !isFiniteNum(i.brake) ||
-        !isFiniteNum(i.handbrake)
-      ) {
-        throw new Error('input: non-finite field');
+      if (!Number.isSafeInteger(m.Q) || !Array.isArray(m.V)) {
+        throw new Error('state: malformed payload');
       }
-      return {
-        t: 'input',
-        input: {
-          seq: i.seq as number,
-          throttle: i.throttle,
-          steer: i.steer,
-          brake: i.brake,
-          handbrake: i.handbrake,
-          buttons: isFiniteNum(i.buttons) ? i.buttons | 0 : 0,
-        },
-      };
+      return { t: 'state', update: { seq: m.Q as number, vehicle: unpackVehicle(m.V) } };
     }
     case 'ping': {
       if (!isFiniteNum(m.clientTimeMs)) throw new Error('ping: clientTimeMs must be a number');

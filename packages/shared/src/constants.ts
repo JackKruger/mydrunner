@@ -13,15 +13,17 @@
 // mismatch refuses the join with a reason the player can act on. Bump it
 // whenever a change would make two builds disagree - the wire tuple
 // layout, terrain or obstacle generation, vehicle geometry, or any
-// physics constant the prediction sim reads.
+// shared wire or map rule.
 // 2: dropped the `rut` message and TerrainHandshake.rutVersion.
 // 3: welcome carries a MapHandshake { id, rev } instead of the seed
 //    triple. The world is a map document now, and its seed/size/
 //    resolution live in the document both sides compile in.
-export const PROTOCOL_VERSION = 3;
+// 4: clients own vehicle physics and upload canonical VehicleState; the
+//    server relays it instead of simulating and correcting player bodies.
+export const PROTOCOL_VERSION = 4;
 
 // Tick rates and timing - all simulation runs at fixed step.
-// FIXED_DT must be identical on client (prediction) and server (authoritative).
+// The client-owned vehicle simulation advances at this fixed cadence.
 export const TICK_RATE = 60;
 export const FIXED_DT = 1 / TICK_RATE;
 export const SNAPSHOT_RATE = 30;
@@ -287,6 +289,76 @@ export const SUSPENSION = {
   dampingEngageComp: 0.05,
 } as const;
 
+// Sharp-edge tyre contacts. Suspension rays remain the source of vertical
+// support on ordinary terrain, but a ray has no volume and cannot see a
+// kerb/rock face until the axle centre has crossed it. The hybrid wheel
+// contact path represents each tyre as a cylinder for steep-face queries,
+// then transfers the collision and drive reactions to the chassis.
+export const LEDGE_CONTACT = {
+  // `contactShape` reports contacts up to this separation so the velocity
+  // damper can begin resisting a face before the visual tyre penetrates it.
+  prediction: 0.015,
+  // Normal velocity is resolved inelastically (no spring energy to rebound
+  // from). Each of a usual two-wheel axle contact owns half the sprung mass.
+  normalMassFraction: 0.5,
+  normalCorrectionRate: 5,
+  maxNormalCorrectionSpeed: 0.15,
+  maxForce: 45_000,
+  // A deformable off-road tread can hook a sharp corner more strongly than
+  // rigid face friction alone. This multiplier is ledge-only; ordinary
+  // terrain keeps its existing friction and incline-assist tuning.
+  tractionMultiplier: 1.5,
+  // The automatic gearbox has no separate transfer-case low range. Supply
+  // that missing crawl ratio only while a tread is hooked on a steep face.
+  crawlTorqueMultiplier: 1.5,
+  crawlMaxSpeed: 1.0,
+  crawlSpeedDamping: 10_000,
+  crawlMaxBrakeForce: 18_000,
+  crawlPitchStiffness: 30_000,
+  crawlPitchDamping: 12_000,
+  crawlMaxPitchTorque: 24_000,
+  // Keep low range engaged while the wheelbase passes the same obstacle;
+  // otherwise the front clears, normal gearing accelerates the chassis, and
+  // the rear axle strikes the face at road speed.
+  crawlHoldTicks: 180,
+  edgeMotorMaxSpeed: 0.35,
+  edgeMotorMaxForce: 2_500,
+  edgeMotorMassFraction: 0.25,
+  // A sharp corner keys into deformable tread before a rigid-cylinder
+  // penalty solver develops much face-normal load. This floor models that
+  // mechanical hook; low-friction colliders still reduce the resulting cap.
+  minHookNormalLoad: 1_500,
+  // The crawler assist only engages if a downward probe just beyond the
+  // face finds an actual upper surface within this hub-rise. Tall walls do
+  // not become driveable simply because the tyre touches them.
+  maxClimbHeight: 0.9,
+  // Aim slightly beyond the top edge so the drive reaction has a forward
+  // component and carries the hub onto the upper support surface.
+  edgeAdvance: 0.08,
+  // The software wheel has no unsprung rigid body or suspension links to
+  // absorb contact torque. Transfer only this fraction of the raw tread
+  // moment arm to the chassis; forces and wheel slip still use the real
+  // contact point. This prevents a sharp face from acting like a lever that
+  // instantly stuffs the bumper down or wheelies the whole vehicle.
+  chassisMomentArmScale: 0.1,
+  // Rate at which positive wheel rotation can wind the axle up toward a
+  // detected upper surface. Kept below the handoff rate so the spring and
+  // damper load progressively instead of recreating the original launch.
+  climbCompressionRate: 0.1,
+  maxClimbSuspensionForce: 6_000,
+  // Keep the last validated edge support briefly while the cylinder normal
+  // rotates through pure-up and the chassis-axis ray has not yet moved over
+  // the top. This bridges query representations, not arbitrary air time.
+  handoffGraceTicks: 12,
+  // Contacts flatter than this remain the suspension ray's responsibility.
+  // 0.65 is approximately a 49 degree maximum support slope.
+  maxSupportNormalY: 0.65,
+  // A ledge-to-top transition may change the downward-ray depth by the full
+  // obstacle height in one tick. Limit that handoff instead of teleporting
+  // the axle and feeding the discontinuity into the spring/damper.
+  depthCatchupRate: 0.8,
+} as const;
+
 // Anti-roll bar: chassis-frame torque proportional to world-roll about
 // the chassis-forward axis. The per-wheel-end ride forces already give
 // static roll stability, but hard cornering unloads (or lifts) the
@@ -331,40 +403,6 @@ export const CAMERA = {
 // Networking
 export const DEFAULT_PORT = 2567;
 export const INTERPOLATION_DELAY_MS = 100;
-
-// Client-side prediction: how hard each snapshot pulls the local sim
-// toward the server. These decide whether the game rubber-bands, so they
-// belong here rather than buried in prediction.ts - which is where they
-// lived, as `private static readonly` fields and two inline literals.
-//
-// NOT mirrored into TUNING: a TUNING field with no debug-panel slider is
-// a knob that silently does nothing. Wire the slider first if you want
-// to twist these live.
-export const PREDICTION = {
-  /** Fraction of the way the body moves toward the server pose on each
-   *  snapshot. Combined with visualOffsetDecay this converges in ~5
-   *  snapshots (~150 ms) after a small divergence. */
-  softCorrectionBlend: 0.12,
-  /** Per-step decay of the rendered-position offset toward zero.
-   *  0.85 ~= 110 ms half-life at 60 Hz, so a single soft correction is
-   *  invisible within a few frames. */
-  visualOffsetDecay: 0.85,
-  /** Beyond this separation (m) the divergence is too big for smoothing
-   *  to absorb without a metres-long visual slide; accept a visible pop
-   *  and converge instantly instead. */
-  hardSnapDistance: 5.0,
-  /** Rotation correction per snapshot. Small enough not to fight the
-   *  predicted yaw on a fresh input, cumulative enough to bound
-   *  long-term drift to <1 degree. */
-  rotationBlend: 0.04,
-  /** Linear + angular velocity blend per snapshot. Keeps a divergent
-   *  velocity from compounding into position drift faster than
-   *  softCorrectionBlend can absorb. */
-  velocityBlend: 0.08,
-  /** Skip the rotation correction below this quaternion dot product
-   *  (~1 degree) so the smooth steady state isn't constantly nudged. */
-  rotationDeadbandDot: 0.99996,
-} as const;
 
 // Terrain generation tunables.
 export const TERRAIN = {
@@ -562,7 +600,7 @@ export const TRAIL_FEATURES = {
 //      much wider than a tyre, so a wheel pass sinks a large patch
 //      instead of carving a track. Needs higher resolution, or a
 //      sub-cell visual overlay decoupled from the collider.
-//   2. The client's prediction world runs its own copy of the terrain and
+//   2. Each owner's local world runs its own copy of the terrain and
 //      would need the deltas too, or the local sim drives on stale ground
 //      and rubber-bands on mud.
 export const RUT_RATE = 0.0035;        // m per tick at full slip

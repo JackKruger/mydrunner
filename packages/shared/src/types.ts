@@ -82,10 +82,8 @@ export interface WheelState {
   spin: number; // accumulated wheel rotation (radians)
   contact: boolean;
   suspensionLength: number;
-  /** Angular velocity of the wheel in rad/s. Sent in snapshots so the
-   *  prediction can snap wheel spin rates during reconcile; without this
-   *  the tire-force integrator starts from the wrong angVel and diverges
-   *  over the replay window, producing the large reconcile pops. */
+  /** Angular velocity of the wheel in rad/s. Relayed for remote wheel
+   *  animation, audio/particles and collision presentation. */
   angVel: number;
 }
 
@@ -94,8 +92,14 @@ export interface PlayerSnapshot {
   name: string;
   carKind: CarKind;
   vehicle: VehicleState;
-  // Last input seq the server has consumed for this player.
-  lastAckSeq: number;
+  // Newest owner-state sequence the relay has accepted for this player.
+  stateSeq: number;
+}
+
+/** Canonical vehicle state uploaded by the client that owns the vehicle. */
+export interface VehicleStateUpdate {
+  seq: number;
+  vehicle: VehicleState;
 }
 
 export interface WorldSnapshot {

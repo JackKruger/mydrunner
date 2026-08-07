@@ -8,7 +8,7 @@ import { dirname, join } from 'path';
 import { writeFileSync, mkdirSync } from 'fs';
 import { generateTerrain, asciiSurfaceMap, asciiHeightMap } from './physics/terrain.js';
 
-// No overrides: the TERRAIN defaults ARE the authoritative server world
+// No overrides: the TERRAIN defaults are the production client world
 // (Room constructs its World the same way), so this dump can never drift
 // from the map players drive on.
 const terrain = generateTerrain();

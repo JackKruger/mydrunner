@@ -1,6 +1,6 @@
 // Tiny client wrapper around the shared message protocol.
 
-import { Net, INTERPOLATION_DELAY_MS, PROTOCOL_VERSION, type CarKind, type WorldSnapshot, type PlayerInput, type PlayerId } from '@mydrunner/shared';
+import { Net, INTERPOLATION_DELAY_MS, PROTOCOL_VERSION, type CarKind, type WorldSnapshot, type VehicleStateUpdate, type PlayerId } from '@mydrunner/shared';
 import type { MapHandshake, SpawnHandshake } from '@mydrunner/shared/net';
 
 export interface NetEvents {
@@ -98,9 +98,9 @@ export class NetClient {
     this.events.onClose(reason, true);
   }
 
-  sendInput(input: PlayerInput): void {
+  sendVehicleState(update: VehicleStateUpdate): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(Net.encode({ t: 'input', input }));
+    this.ws.send(Net.encode({ t: 'state', update }));
   }
 
   sendChat(text: string): void {

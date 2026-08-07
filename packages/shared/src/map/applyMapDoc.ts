@@ -1,12 +1,11 @@
 // Compose a map document into everything a world needs.
 //
-// One function used identically by the server room, the game client, the
-// client's prediction sim, the editor and the tests. Before this existed
-// each of those assembled the world its own way — the client regenerated
-// terrain from the seed, Obstacles regenerated its own obstacle list, and
-// Prediction built a third World — which was fine only because every one
-// of them was guaranteed to reach the same answer procedurally. An
-// authored map removes that guarantee, so the composition happens once.
+// One function used by the relay, owner client, editor and tests. These
+// callers once assembled the map separately: the client regenerated terrain
+// from the seed, Obstacles regenerated its own list, and the local physics
+// path built another World. That was safe only while all content was purely
+// procedural. Authored maps remove that guarantee, so composition has one
+// canonical path.
 
 import { TERRAIN } from '../constants.js';
 import { fnv1aArray } from '../hash.js';

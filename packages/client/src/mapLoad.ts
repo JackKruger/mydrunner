@@ -3,7 +3,7 @@
 // The client and the server deploy independently (Pages / Railway) and
 // both compile the map registry in, so a half-finished deploy leaves two
 // builds holding different versions of the same map id. Nothing errors:
-// the terrain mesh, the obstacle colliders and the prediction sim all
+// the terrain mesh, owner physics and collision proxies all
 // come out subtly different from the server's, and the player sees a
 // truck that fights its own corrections forever.
 //
