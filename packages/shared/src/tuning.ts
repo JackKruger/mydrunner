@@ -61,6 +61,13 @@ export interface Tuning {
   // Lateral grip stiffness for the new model (N per m/s of lateral
   // velocity, before friction-circle clamp).
   tireLatStiffness: number;
+  // Water, as multipliers on the WATER block. All three interact
+  // strongly - more buoyancy means less tyre load means the current
+  // moves you further - so they are the three knobs a crossing gets
+  // tuned on, live, while driving it.
+  waterBuoyancy: number;
+  waterDrag: number;
+  waterFlowScale: number;
 }
 
 export const TUNING: Tuning = {
@@ -86,4 +93,7 @@ export const TUNING: Tuning = {
   diffLockFront: AXLE.front.diffLocked,
   diffLockRear: AXLE.rear.diffLocked,
   tireLatStiffness: TIRE_LATERAL.stiffness,
+  waterBuoyancy: 1,
+  waterDrag: 1,
+  waterFlowScale: 1,
 };

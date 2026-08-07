@@ -388,6 +388,85 @@ export const ANTI_ROLL = {
 // and keeps the rocky-hill route climbable.
 export const INCLINE_ASSIST_MAX = 2.5;
 
+// Water: buoyancy, drag, current and drowning.
+//
+// The model is four-corner Archimedes on a box hull plus a single drag
+// term taken against the *relative* velocity of vehicle and water. That
+// one term is both the drag and the current: a stationary truck in
+// flowing water is pushed, one already moving with the flow feels
+// nothing, and neither needs its own coefficient.
+//
+// Do not be tempted to express any of this as rigid-body linearDamping.
+// That knob is velocity-proportional rather than aerodynamic, applies
+// in all directions equally, and is already tuned for air (see the note
+// in solidAxleVehicle's constructor).
+export const WATER = {
+  /** kg/m^3. Fresh water; the number is here so the buoyancy formula
+   *  reads as physics rather than as a magic scale factor. */
+  density: 1000,
+
+  /** Displacement of the hull box, m^3. The chassis box is 1.7 x 0.9 x
+   *  3.8 = 5.81 m^3, which at 1000 kg/m^3 would lift 5.8 tonnes against
+   *  a 1.5 t truck - a beach ball. Real 4x4s are mostly air but they are
+   *  also mostly *open* to the water: engine bay, cab, wheel wells and
+   *  chassis rails all flood. This is the sealed fraction, tuned so a
+   *  fully submerged truck floats just barely (buoyancy a little over
+   *  weight) rather than bobbing on the surface. */
+  hullVolume: 1.9,
+
+  /** Vertical extent over which a hull sample goes from dry to fully
+   *  submerged, m. Softens the step as the waterline crosses a corner;
+   *  without it the four corner forces switch on and off discretely and
+   *  the truck buzzes at the waterline. */
+  sampleDepthSpan: 0.5,
+
+  /** Quadratic drag: 0.5 * rho * Cd * A, pre-multiplied, N per (m/s)^2.
+   *  Lateral is much higher than longitudinal because a truck presents
+   *  its whole flank sideways and its bonnet forward - that ratio is
+   *  what makes angling upstream a real technique instead of a cosmetic
+   *  one. Vertical is high on purpose: it is the main thing stopping a
+   *  buoyant box from oscillating. */
+  dragLong: 900,
+  dragLat: 2600,
+  dragVert: 3200,
+
+  /** Angular drag while submerged, N*m per (rad/s). The rotational half
+   *  of the anti-bob damping - a floating box that is free to spin picks
+   *  up yaw from the current and never sheds it. */
+  dragAngular: 4200,
+
+  /** Grip multiplier for a fully submerged tyre. Water between the tread
+   *  and the bed is the classic way to lose a crossing. */
+  wheelGripFloor: 0.45,
+  /** Depth at which a wheel counts as fully submerged for grip, relative
+   *  to wheel radius. Above the hub is plenty. */
+  wheelGripDepthRatio: 1.6,
+  /** Extra rolling resistance from a fully submerged wheel, as a
+   *  multiplier on WHEEL.rollingResistance. Wading is heavy. */
+  wheelDragMult: 6.0,
+
+  /** Ticks the air intake must be continuously underwater before the
+   *  engine floods. At 60 Hz this is a third of a second, so a splash
+   *  cresting the bonnet does not kill it but a real submersion does. */
+  drownTicks: 20,
+  /** Ticks the starter cranks before it catches. Long enough to hear and
+   *  to feel like a recovery, short enough not to be a punishment. */
+  crankTicks: 45,
+
+  /** Seconds of continuous submersion to fully swamp the hull, and the
+   *  fraction of displacement lost when fully swamped.
+   *
+   *  This is what gives "swept away" an ending: a floating truck slowly
+   *  takes on water, settles, grounds on the bed, and becomes a recovery
+   *  problem rather than drifting downstream forever. Set swampLoss to 0
+   *  to disable. */
+  swampSeconds: 18,
+  swampLoss: 0.55,
+  /** Seconds to drain back out once clear of the water. Faster than
+   *  swamping so one bad crossing does not sour the next. */
+  drainSeconds: 6,
+} as const;
+
 // Chase camera. Lives shared-side because the constants describe the
 // game's feel, not anything client-internal. The chase yaw uses an
 // under-damped spring (overshoots a touch through corners) plus a

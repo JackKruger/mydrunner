@@ -45,6 +45,15 @@ export interface VehicleGeom {
   /** Multiplier on the engine's torque-at-wheels output for this kind.
    *  1.0 = unchanged. Higher values give snappier acceleration. */
   powerMult: number;
+  /** Chassis-local Y of the air intake. Once this point goes under the
+   *  water surface the engine floods (see WATER.drownTicks).
+   *
+   *  This is the number that makes the Patrol's modelled snorkel mean
+   *  something and the bike's lack of one hurt: same river, different
+   *  outcome. Measured from the chassis body origin, which sits at the
+   *  middle of the 0.9 m-tall chassis box - so 0 is roughly bonnet-line
+   *  and the cabin roof is at VEHICLE.cabinRoofY. */
+  airIntakeY: number;
 }
 
 const patrolGeom: VehicleGeom = {
@@ -55,6 +64,9 @@ const patrolGeom: VehicleGeom = {
   rear: { ...AXLE.rear },
   massMult: 1.0,
   powerMult: 1.0,
+  // Snorkel: the intake runs up the A-pillar to just under the roof
+  // line, which is the whole point of fitting one.
+  airIntakeY: 1.05,
 };
 
 // Hilux: ute proportions = longer wheelbase (rear axle pushed back to
@@ -75,6 +87,8 @@ const hiluxGeom: VehicleGeom = {
   },
   massMult: 1.0,
   powerMult: 1.0,
+  // Factory intake behind the grille, about bonnet height.
+  airIntakeY: 0.30,
 };
 
 // Ute (Falcon-style flat-tray): same wheelbase as Patrol but slightly
@@ -88,6 +102,8 @@ const uteGeom: VehicleGeom = {
   rear: { ...AXLE.rear },
   massMult: 1.0,
   powerMult: 1.0,
+  // Low-slung sedan-derived front end: sits lower than the Hilux.
+  airIntakeY: 0.20,
 };
 
 // Motorbike: chassis extents + trackHalf are shared with Patrol so the
@@ -105,6 +121,8 @@ const motorbikeGeom: VehicleGeom = {
   rear: { ...AXLE.rear },
   massMult: 0.5,
   powerMult: 1.4,
+  // Airbox under the tank, and nothing sealed around it. First to drown.
+  airIntakeY: -0.05,
 };
 
 export const VEHICLE_GEOM: Record<CarKind, VehicleGeom> = {

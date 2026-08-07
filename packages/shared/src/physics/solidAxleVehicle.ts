@@ -28,6 +28,7 @@ import {
   TIRE_LATERAL,
   TIRE_LONG_FRICTION,
   VEHICLE,
+  WATER,
   WHEEL,
 } from '../constants.js';
 import { TUNING } from '../tuning.js';
@@ -39,6 +40,11 @@ import {
   type WheelState,
 } from '../types.js';
 import { Surface, sampleSurface, surfaceInfo } from './terrain.js';
+import {
+  computeWaterLoad, createWaterLoad, createWaterState, hasWater,
+  resetWaterState, sampleWaterDepth, wetGripMult, wheelSubmersion,
+  type WaterLoad, type WaterState,
+} from './water.js';
 import { createEngineState, stepEngine, type EngineState } from './engine.js';
 // slipRatio / gripFromSlip kept in tire.ts for tests; not used here since
 // the impulse-clamped integrator below replaced the Pacejka groundTq path.
@@ -94,6 +100,14 @@ export class SolidAxleVehicle implements VehicleLike {
   private lastRpm = 0;
   private lastGear = 0;
   private ledgeCrawlTicks = 0;
+
+  private readonly water: WaterState = createWaterState();
+  private readonly waterLoad: WaterLoad = createWaterLoad();
+  /** Whether this world's map has any water at all. Cached: the terrain
+   *  collider is built once and never swapped, so a map that is dry now
+   *  is dry for the session, and this keeps the whole water path off the
+   *  hot loop for every existing map. */
+  private readonly worldHasWater: boolean;
 
   // Reused scratch vectors so the per-tick force/torque loop doesn't
   // allocate. Contents are valid only for the duration of the call site
@@ -160,6 +174,7 @@ export class SolidAxleVehicle implements VehicleLike {
       createWheelKinematic(),
       createWheelKinematic(),
     ];
+    this.worldHasWater = hasWater(world.terrain);
   }
 
   setInput(input: PlayerInput): void {
@@ -187,6 +202,7 @@ export class SolidAxleVehicle implements VehicleLike {
     this.lastRpm = 0;
     this.lastGear = 0;
     this.ledgeCrawlTicks = 0;
+    resetWaterState(this.water);
   }
 
   preStep(): void {
@@ -265,6 +281,17 @@ export class SolidAxleVehicle implements VehicleLike {
       wR.surface = sampleSurface(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
       wL.supportGrip = wL.supportIsTerrain ? surfaceGrip(wL.surface) : wL.supportColliderFriction;
       wR.supportGrip = wR.supportIsTerrain ? surfaceGrip(wR.surface) : wR.supportColliderFriction;
+
+      // Water between the tread and the bed, on top of whatever the bed
+      // itself grips at. Keeping the bed surface is the reason water is
+      // its own grid rather than a Surface: a gravel ford and a
+      // mud-bottom crossing should not feel the same.
+      if (this.worldHasWater) {
+        wL.waterDepth = sampleWaterDepth(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
+        wR.waterDepth = sampleWaterDepth(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
+        wL.supportGrip *= wetGripMult(wL.waterDepth, this.geom.wheelRadius);
+        wR.supportGrip *= wetGripMult(wR.waterDepth, this.geom.wheelRadius);
+      }
 
       // A second, volumetric query catches faces the suspension-axis ray
       // cannot see. It is based on the previous axle pose so the tyre starts
@@ -515,6 +542,42 @@ export class SolidAxleVehicle implements VehicleLike {
       this.body.addTorque(sf, true);
     }
 
+    // 3c. Water: buoyancy, drag and current.
+    //
+    //     Sits here, after the suspension and anti-roll and before the
+    //     engine, for two reasons. The chassis pose, lv, av and the
+    //     basis vectors are all already in scope from the single read at
+    //     the top of preStep (determinism rule 1), and the engine has
+    //     not run yet, so a drowned intake can cut the drive before any
+    //     torque is computed rather than after.
+    //
+    //     Buoyancy is applied as four separate corner forces rather than
+    //     one resultant at the centre of buoyancy. Unequal corner lift
+    //     IS the righting moment, so pitch and roll response fall out
+    //     for free and there is no second torque term to keep in sync.
+    //
+    //     Nothing here unloads the springs by hand: the suspension force
+    //     computed above becomes the tyre's normal load further down, so
+    //     a chassis being lifted by water automatically loses grip.
+    if (this.worldHasWater) {
+      const wl = computeWaterLoad(
+        this.world.terrain, this.geom, this.water,
+        { t, r, lv, av }, dt, this.waterLoad,
+      );
+      if (wl.submergedFrac > 0) {
+        for (const s of wl.samples) {
+          if (s.force.y === 0) continue;
+          this.body.addForceAtPoint(s.force, s.point, true);
+        }
+        this.body.addForce(wl.drag, true);
+        this.body.addTorque(wl.dragTorque, true);
+      }
+    } else {
+      this.waterLoad.submergedFrac = 0;
+      this.waterLoad.intakeSubmerged = false;
+      this.waterLoad.drowned = false;
+    }
+
     // 4. Engine + gearbox.
     const avgAngVel = (this.wheels[0]!.angVel + this.wheels[1]!.angVel + this.wheels[2]!.angVel + this.wheels[3]!.angVel) / 4;
     const longSpeed = lv.x * fwd.x + lv.y * fwd.y + lv.z * fwd.z;
@@ -608,6 +671,11 @@ export class SolidAxleVehicle implements VehicleLike {
       let rollingMult = 1.0;
       if (w.surface === Surface.Mud) rollingMult = WHEEL.rollingMultMud;
       else if (w.surface === Surface.DeepMud) rollingMult = WHEEL.rollingMultDeepMud;
+      // Wading is heavy. Additive on top of the bed's own resistance, so
+      // a submerged mud bog is worse than either alone.
+      if (w.waterDepth > 0) {
+        rollingMult += (WATER.wheelDragMult - 1) * wheelSubmersion(w.waterDepth, this.geom.wheelRadius);
+      }
       const rollingResistance = WHEEL.rollingResistance * rollingMult;
 
       // Pick one torque-transmitting patch. A steep tyre-volume contact
@@ -796,6 +864,33 @@ export class SolidAxleVehicle implements VehicleLike {
         { rideY: aFront.rideY, rollAngle: aFront.rollAngle },
         { rideY: aRear.rideY, rollAngle: aRear.rollAngle },
       ],
+    };
+  }
+
+  /** Water state as of the last preStep, for the HUD and the renderer.
+   *
+   *  Deliberately not on VehicleState and not on the wire: a drowned
+   *  engine already reads as rpm 0 / gear 0 through the existing tuple,
+   *  and a remote truck's spray can be derived from its transmitted
+   *  position against the water height both ends compute from the same
+   *  map document. Adding a field would have cost a SNAPSHOT_SCHEMA bump
+   *  for information both sides already have. */
+  waterStatus(): {
+    submerged: number;
+    wheelDepths: [number, number, number, number];
+    intakeSubmerged: boolean;
+    drowned: boolean;
+    flood: number;
+  } {
+    return {
+      submerged: this.waterLoad.submergedFrac,
+      wheelDepths: [
+        this.wheels[0]!.waterDepth, this.wheels[1]!.waterDepth,
+        this.wheels[2]!.waterDepth, this.wheels[3]!.waterDepth,
+      ],
+      intakeSubmerged: this.waterLoad.intakeSubmerged,
+      drowned: this.waterLoad.drowned,
+      flood: this.water.floodFrac,
     };
   }
 

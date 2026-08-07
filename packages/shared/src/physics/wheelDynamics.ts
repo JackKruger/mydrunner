@@ -55,6 +55,10 @@ export interface WheelKinematic {
   supportGrip: number;
   supportIsTerrain: boolean;
   supportColliderFriction: number;
+  /** Metres of water over this wheel's contact point, 0 on dry ground.
+   *  Feeds both the grip multiplier and the extra rolling resistance of
+   *  wading, and is read by the renderer for wheel spray. */
+  waterDepth: number;
 }
 
 export function createWheelKinematic(): WheelKinematic {
@@ -80,6 +84,7 @@ export function createWheelKinematic(): WheelKinematic {
     supportGrip: 1,
     supportIsTerrain: true,
     supportColliderFriction: 1,
+    waterDepth: 0,
   };
 }
 
@@ -101,6 +106,7 @@ export function resetWheelKinematic(w: WheelKinematic): void {
   w.supportGrip = 1;
   w.supportIsTerrain = true;
   w.supportColliderFriction = 1;
+  w.waterDepth = 0;
 }
 
 /** Integrate wheel angular velocity by net torque this tick.

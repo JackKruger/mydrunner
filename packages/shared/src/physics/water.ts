@@ -7,8 +7,12 @@
 // thing the simulation needs from water is "how deep, and moving which
 // way, at this point".
 
+import { GRAVITY_Y, WATER } from '../constants.js';
+import { TUNING } from '../tuning.js';
 import { WATER_NONE, isWet, type TerrainData } from './terrain.js';
 import { sampleHeightBilinear } from './terrain.js';
+import { rotateVecByQuat } from './util.js';
+import type { VehicleGeom } from './vehicleGeom.js';
 
 export interface Vec2 {
   x: number;
@@ -117,4 +121,253 @@ export function hasWater(t: TerrainData): boolean {
     if (isWet(t.waterLevel[i]!)) return true;
   }
   return false;
+}
+
+// --- Force model -----------------------------------------------------
+
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface Quat {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+}
+
+/** Per-vehicle water state that survives between ticks. Owned by the
+ *  vehicle, reset by resetTo. */
+export interface WaterState {
+  /** 0..1, how much of the hull's displacement has been lost to flooding.
+   *  Ramps up while the intake is under, drains when it is clear. */
+  floodFrac: number;
+  /** Consecutive ticks the air intake has been submerged. */
+  intakeTicks: number;
+}
+
+export function createWaterState(): WaterState {
+  return { floodFrac: 0, intakeTicks: 0 };
+}
+
+export function resetWaterState(s: WaterState): void {
+  s.floodFrac = 0;
+  s.intakeTicks = 0;
+}
+
+/** One buoyancy force and the world point it acts at. */
+export interface WaterSample {
+  point: Vec3;
+  force: Vec3;
+}
+
+export interface WaterLoad {
+  /** Four corner buoyancy forces. Applying them at their own points is
+   *  what produces the righting moment — there is no separate torque
+   *  term for roll or pitch because unequal corner lift already is one. */
+  samples: WaterSample[];
+  /** Whole-body drag, which is also the current: it is computed against
+   *  the velocity of the vehicle *relative to the water*. */
+  drag: Vec3;
+  /** Angular drag, chassis-independent (world frame). */
+  dragTorque: Vec3;
+  /** 0..1 mean submersion across the hull samples. Drives the drag
+   *  scaling and is what the HUD and effects read. */
+  submergedFrac: number;
+  /** True while the air intake is below the water surface. */
+  intakeSubmerged: boolean;
+  /** True once the intake has been under for WATER.drownTicks. */
+  drowned: boolean;
+}
+
+/** Reusable output, so the per-tick physics path allocates nothing. */
+export function createWaterLoad(): WaterLoad {
+  return {
+    samples: [
+      { point: { x: 0, y: 0, z: 0 }, force: { x: 0, y: 0, z: 0 } },
+      { point: { x: 0, y: 0, z: 0 }, force: { x: 0, y: 0, z: 0 } },
+      { point: { x: 0, y: 0, z: 0 }, force: { x: 0, y: 0, z: 0 } },
+      { point: { x: 0, y: 0, z: 0 }, force: { x: 0, y: 0, z: 0 } },
+    ],
+    drag: { x: 0, y: 0, z: 0 },
+    dragTorque: { x: 0, y: 0, z: 0 },
+    submergedFrac: 0,
+    intakeSubmerged: false,
+    drowned: false,
+  };
+}
+
+const _flow: Vec2 = { x: 0, z: 0 };
+const _corner: Vec3 = { x: 0, y: 0, z: 0 };
+
+/** Hull corner offsets in chassis-local space, as fractions of the
+ *  chassis half-extents. The four bottom corners: sampling the bottom
+ *  face rather than the centroid is what makes a nose-down truck feel
+ *  its nose lift first. */
+const CORNERS: ReadonlyArray<readonly [number, number]> = [
+  [-1, 1], [1, 1], [-1, -1], [1, -1],
+];
+
+/**
+ * Buoyancy, drag and current for one vehicle, for one tick.
+ *
+ * Pure apart from the WaterState it advances: takes the pose the caller
+ * already read (the vehicle reads its body once per preStep and this
+ * must not read it again) and writes into a reusable WaterLoad.
+ */
+export function computeWaterLoad(
+  terrain: TerrainData,
+  geom: VehicleGeom,
+  state: WaterState,
+  pose: { t: Vec3; r: Quat; lv: Vec3; av: Vec3 },
+  dt: number,
+  out: WaterLoad,
+): WaterLoad {
+  const ext = geom.chassisHalfExtents;
+  const span = WATER.sampleDepthSpan;
+
+  // --- Buoyancy, one force per hull corner ---------------------------
+  let fracSum = 0;
+  // Displacement lost to flooding. A swamped hull displaces less, so it
+  // sits lower, so it swamps no faster — the ramp is in floodFrac, not
+  // in a runaway feedback loop.
+  const volume = WATER.hullVolume * TUNING.waterBuoyancy * (1 - state.floodFrac * WATER.swampLoss);
+  const perCorner = WATER.density * -GRAVITY_Y * (volume / CORNERS.length);
+
+  for (let i = 0; i < CORNERS.length; i++) {
+    const [sx, sz] = CORNERS[i]!;
+    _corner.x = sx * ext.x;
+    _corner.y = -ext.y;
+    _corner.z = sz * ext.z;
+    const w = rotateVecByQuat(_corner, pose.r);
+    const px = pose.t.x + w.x;
+    const py = pose.t.y + w.y;
+    const pz = pose.t.z + w.z;
+
+    const level = sampleWaterLevel(terrain, px, pz);
+    // Fraction of this corner's share that is under water: 0 at the
+    // surface, 1 once it is a full span below.
+    const frac = isWet(level) ? clamp01((level - py) / span) : 0;
+    fracSum += frac;
+
+    const s = out.samples[i]!;
+    s.point.x = px;
+    s.point.y = py;
+    s.point.z = pz;
+    s.force.x = 0;
+    s.force.y = perCorner * frac;
+    s.force.z = 0;
+  }
+  const submerged = fracSum / CORNERS.length;
+  out.submergedFrac = submerged;
+
+  // --- Drag, which is also the current -------------------------------
+  //
+  // One term against the relative velocity. A truck sitting still in a
+  // river is pushed downstream; a truck already drifting at the flow
+  // speed feels nothing; a truck driving upstream fights the full
+  // relative speed. Modelling the current as a separate additive force
+  // would get the first case right and the other two wrong.
+  out.drag.x = 0;
+  out.drag.y = 0;
+  out.drag.z = 0;
+  out.dragTorque.x = 0;
+  out.dragTorque.y = 0;
+  out.dragTorque.z = 0;
+
+  if (submerged > 0) {
+    sampleWaterFlow(terrain, pose.t.x, pose.t.z, _flow);
+    const flowScale = TUNING.waterFlowScale;
+    const relX = pose.lv.x - _flow.x * flowScale;
+    const relY = pose.lv.y;
+    const relZ = pose.lv.z - _flow.z * flowScale;
+
+    // Split the horizontal relative velocity into the chassis's own
+    // forward and right axes so the flank can drag harder than the nose.
+    const fwd = rotateVecByQuat({ x: 0, y: 0, z: 1 }, pose.r);
+    const right = rotateVecByQuat({ x: 1, y: 0, z: 0 }, pose.r);
+    // Flatten to horizontal: a pitched-up chassis should not turn
+    // longitudinal drag into lift.
+    const fLen = Math.hypot(fwd.x, fwd.z) || 1;
+    const rLen = Math.hypot(right.x, right.z) || 1;
+    const fx = fwd.x / fLen, fz = fwd.z / fLen;
+    const rx = right.x / rLen, rz = right.z / rLen;
+
+    const vLong = relX * fx + relZ * fz;
+    const vLat = relX * rx + relZ * rz;
+
+    const k = submerged * TUNING.waterDrag;
+    const fLong = -WATER.dragLong * k * Math.abs(vLong) * vLong;
+    const fLat = -WATER.dragLat * k * Math.abs(vLat) * vLat;
+    const fVert = -WATER.dragVert * k * Math.abs(relY) * relY;
+
+    out.drag.x = fLong * fx + fLat * rx;
+    out.drag.z = fLong * fz + fLat * rz;
+    out.drag.y = fVert;
+
+    const ka = WATER.dragAngular * k;
+    out.dragTorque.x = -ka * pose.av.x;
+    out.dragTorque.y = -ka * pose.av.y;
+    out.dragTorque.z = -ka * pose.av.z;
+  }
+
+  // --- Air intake ----------------------------------------------------
+  _corner.x = 0;
+  _corner.y = geom.airIntakeY;
+  _corner.z = 0;
+  const iw = rotateVecByQuat(_corner, pose.r);
+  const ix = pose.t.x + iw.x;
+  const iy = pose.t.y + iw.y;
+  const iz = pose.t.z + iw.z;
+  const intakeLevel = sampleWaterLevel(terrain, ix, iz);
+  const intakeSubmerged = isWet(intakeLevel) && intakeLevel > iy;
+  out.intakeSubmerged = intakeSubmerged;
+
+  state.intakeTicks = intakeSubmerged ? state.intakeTicks + 1 : 0;
+  out.drowned = state.intakeTicks >= WATER.drownTicks;
+
+  // --- Swamping ------------------------------------------------------
+  //
+  // Flooding is driven by hull submersion, NOT by the air intake. They
+  // are different holes: water enters the body through the floor pan,
+  // doors and vents, while the intake is only what drowns the engine.
+  // Gating both on the intake meant a floating Patrol - whose snorkel
+  // sits well clear of the waterline exactly as intended - could never
+  // take on water and would drift downstream forever.
+  //
+  // Scaling by submergedFrac is what keeps an ordinary ford harmless: a
+  // truck 30% in the water for eight seconds gains ~0.13 of flood, worth
+  // a few per cent of displacement, while one floating fully takes on
+  // water in WATER.swampSeconds and settles onto the bed.
+  if (submerged > 0) {
+    if (WATER.swampSeconds > 0) {
+      state.floodFrac = Math.min(1, state.floodFrac + (submerged * dt) / WATER.swampSeconds);
+    }
+  } else if (WATER.drainSeconds > 0) {
+    state.floodFrac = Math.max(0, state.floodFrac - dt / WATER.drainSeconds);
+  }
+
+  return out;
+}
+
+/** Grip multiplier for a wheel sitting in `depth` metres of water.
+ *  1 on dry ground, falling to WATER.wheelGripFloor once the water is
+ *  well over the hub. */
+export function wetGripMult(depth: number, wheelRadius: number): number {
+  if (depth <= 0) return 1;
+  const full = wheelRadius * WATER.wheelGripDepthRatio;
+  const t = clamp01(depth / full);
+  return 1 + (WATER.wheelGripFloor - 1) * t;
+}
+
+/** How submerged a wheel is, 0..1, for scaling rolling resistance. */
+export function wheelSubmersion(depth: number, wheelRadius: number): number {
+  if (depth <= 0) return 0;
+  return clamp01(depth / (wheelRadius * WATER.wheelGripDepthRatio));
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
