@@ -10,6 +10,7 @@ import {
   DEFAULT_CAR_KIND,
   type CarKind,
   type PlayerSnapshot,
+  type VehicleState,
   type WorldSnapshot,
   type PlayerId,
 } from '@mydrunner/shared';
@@ -96,6 +97,7 @@ export class Scene {
   // physics steering rack still ramps toward lock; showing the sampled
   // input immediately makes that mechanical response readable.
   private _localInputSteer = 0;
+  private _localState: VehicleState | null = null;
   private _present = new Set<PlayerId>();
   private _remoteCollisionStates: RemoteCollisionState[] = [];
 
@@ -291,6 +293,16 @@ export class Scene {
     axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
   ): void {
     this._localOverride = { pos, rot, wheels, axles };
+  }
+
+  /** The owner simulation's canonical state.
+   *
+   *  Only used offline: effects normally ride the snapshot stream, which
+   *  carries the local player back too, so online needs nothing extra.
+   *  In preview there is no stream at all and this is the only source of
+   *  the velocities and wheel contacts the effects read. */
+  setLocalVehicleState(state: VehicleState): void {
+    this._localState = state;
   }
 
   /** Pose the two axle groups from per-axle (rideY, rollAngle) state.
@@ -548,6 +560,12 @@ export class Scene {
       this.applyLocalOverride(vis, ov);
       this._localSteer = ov.wheels[0]?.steer ?? 0;
       this.finishLocal(vis);
+      // Effects hang off snapshot arrival, and there are no snapshots
+      // here — without this you could author a river in the editor, hit
+      // Preview, drive through it and see no spray at all.
+      if (this._localState) {
+        this.effects.spawnLocal(this.localCarKind, this._localState, vis.group, nowMs);
+      }
     }
 
     // Camera follows local vehicle in the chosen mode, unless a debug

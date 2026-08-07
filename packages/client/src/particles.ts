@@ -13,6 +13,24 @@ interface Particle {
   ageMs: number;
   lifeMs: number;
   active: boolean;
+  /** Base size this particle was emitted at; the fade scales around it. */
+  scale: number;
+}
+
+/** Per-emission overrides. Everything defaults to the mud behaviour. */
+export interface EmitOptions {
+  /** Horizontal velocity spread, m/s. */
+  spread?: number;
+  /** Minimum upward velocity, m/s. */
+  rise?: number;
+  /** Extra random upward velocity on top of `rise`. */
+  riseVar?: number;
+  /** Directional push, e.g. spray thrown along the wheel's travel. */
+  biasX?: number;
+  biasZ?: number;
+  lifeMs?: number;
+  lifeVarMs?: number;
+  scale?: number;
 }
 
 export class ParticleSystem {
@@ -43,27 +61,36 @@ export class ParticleSystem {
         ageMs: 0,
         lifeMs: 0,
         active: false,
+        scale: 1,
       });
     }
   }
 
-  /** Emit one particle at world position with a random upward velocity. */
-  emit(x: number, y: number, z: number, color = 0x3a2618): void {
+  /** Emit one particle at a world position.
+   *
+   *  `opts` exists for water spray, which needs a lighter, faster, more
+   *  short-lived particle than a clod of mud. Defaults reproduce the
+   *  original mud behaviour exactly. */
+  emit(x: number, y: number, z: number, color = 0x3a2618, opts: EmitOptions = {}): void {
+    const spread = opts.spread ?? 3;
+    const rise = opts.rise ?? 2;
+    const riseVar = opts.riseVar ?? 3;
     const p = this.pool[this.cursor]!;
     this.cursor = (this.cursor + 1) % MAX_PARTICLES;
     p.mesh.position.set(x, y, z);
     p.vel.set(
-      (Math.random() - 0.5) * 3,
-      2 + Math.random() * 3,
-      (Math.random() - 0.5) * 3,
+      (Math.random() - 0.5) * spread + (opts.biasX ?? 0),
+      rise + Math.random() * riseVar,
+      (Math.random() - 0.5) * spread + (opts.biasZ ?? 0),
     );
     p.ageMs = 0;
-    p.lifeMs = 600 + Math.random() * 400;
+    p.lifeMs = (opts.lifeMs ?? 600) + Math.random() * (opts.lifeVarMs ?? 400);
     p.active = true;
     p.mesh.visible = true;
+    p.scale = opts.scale ?? 1;
     (p.mesh.material as THREE.MeshStandardMaterial).color.setHex(color);
     (p.mesh.material as THREE.MeshStandardMaterial).opacity = 1;
-    p.mesh.scale.setScalar(1);
+    p.mesh.scale.setScalar(p.scale);
   }
 
   /** Step the active particles forward. */
@@ -83,7 +110,7 @@ export class ParticleSystem {
       p.mesh.position.add(this.tmp);
       const alpha = 1 - p.ageMs / p.lifeMs;
       (p.mesh.material as THREE.MeshStandardMaterial).opacity = alpha;
-      p.mesh.scale.setScalar(0.6 + alpha * 0.6);
+      p.mesh.scale.setScalar(p.scale * (0.6 + alpha * 0.6));
     }
   }
 

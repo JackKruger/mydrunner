@@ -31,16 +31,30 @@ export type PoseLookup = (id: PlayerId) => EffectPose | null;
 
 const MUD_COLOR = 0x3a2618;
 const DEEP_MUD_COLOR = 0x1a0d05;
+const SPRAY_COLOR = 0xd8e8ee;
+const FOAM_COLOR = 0xf0f6f8;
 
 /** A wheel must out-run the chassis by this much (m/s) before it is
  *  considered to be spinning rather than rolling. */
 const SLIP_THRESHOLD = 1.5;
+
+/** Preview-mode emit cadence, matching the online snapshot rate so the
+ *  two look the same. */
+const LOCAL_EMIT_INTERVAL_MS = 1000 / 30;
+
+/** Below this ground speed a wheel in water makes ripples, not spray. */
+const SPRAY_MIN_SPEED = 1.2;
+
+/** Past this depth the wheel is submerged rather than ploughing, and a
+ *  submerged wheel throws nothing — the spray comes off the waterline. */
+const SPRAY_MAX_DEPTH = 0.9;
 
 export class VehicleEffects {
   readonly group = new THREE.Group();
   private particles = new ParticleSystem();
   private terrain: Physics.TerrainData | null = null;
   private lastSnapMs = -1;
+  private lastLocalMs = -1;
 
   constructor() {
     this.group.add(this.particles.group);
@@ -63,7 +77,107 @@ export class VehicleEffects {
     for (const p of snap.players) {
       const pose = poseOf(p.id);
       if (!pose) continue;
-      this.spawnMud(p.carKind, p.vehicle, pose);
+      this.spawnFor(p.carKind, p.vehicle, pose);
+    }
+  }
+
+  /** Emit for the locally owned truck when there is no snapshot stream at
+   *  all — the offline editor preview.
+   *
+   *  Without this the whole effects path is unreachable in preview mode,
+   *  because it hangs off snapshot arrival. You could author a river,
+   *  hit Preview, drive through it and see nothing.
+   *
+   *  Rate-limited on wall clock at the snapshot rate rather than gated on
+   *  a snapshot, so preview emits at the same density the online game
+   *  does instead of scaling with the display's frame rate. */
+  spawnLocal(carKind: CarKind, vehicle: VehicleState, pose: EffectPose, nowMs: number): void {
+    if (!this.terrain) return;
+    if (nowMs - this.lastLocalMs < LOCAL_EMIT_INTERVAL_MS) return;
+    this.lastLocalMs = nowMs;
+    this.spawnFor(carKind, vehicle, pose);
+  }
+
+  private spawnFor(carKind: CarKind, vehicle: VehicleState, pose: EffectPose): void {
+    this.spawnMud(carKind, vehicle, pose);
+    this.spawnWater(carKind, vehicle, pose);
+  }
+
+  /** Wheel spray and the bow wave.
+   *
+   *  Derived entirely from the transmitted pose against the water height
+   *  this client computes from the same map document, so remote trucks
+   *  throw spray with no extra field on the wire. */
+  private spawnWater(carKind: CarKind, vehicle: VehicleState, pose: EffectPose): void {
+    const terrain = this.terrain!;
+    const wheelPositions = Physics.restWheelPositions(carKind);
+    const vx = vehicle.linVel.x;
+    const vz = vehicle.linVel.z;
+    const groundSpeed = Math.hypot(vx, vz);
+    if (groundSpeed < SPRAY_MIN_SPEED) return;
+    const t = pose.position;
+    const q = pose.quaternion;
+
+    for (let i = 0; i < 4; i++) {
+      const wp = wheelPositions[i]!;
+      const local = { x: wp.x, y: wp.y - VEHICLE.wheelRadius * 0.6, z: wp.z };
+      const v = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
+      const wx = t.x + v.x;
+      const wz = t.z + v.z;
+      const depth = Physics.sampleWaterDepth(terrain, wx, wz);
+      if (depth <= 0.03) continue;
+
+      const level = Physics.sampleWaterLevel(terrain, wx, wz);
+      // Spray leaves the waterline, not the contact patch: a wheel in
+      // half a metre of water throws off the surface it is breaking.
+      const wy = level;
+
+      // A wheel ploughing shallow water throws the most; once it is
+      // fully under, the surface above it barely breaks.
+      const plough = 1 - Math.min(1, depth / SPRAY_MAX_DEPTH);
+      const intensity = Math.min(1, (groundSpeed - SPRAY_MIN_SPEED) / 6) * plough;
+      if (intensity <= 0.05) continue;
+
+      const count = Math.max(1, Math.round(intensity * 3));
+      for (let n = 0; n < count; n++) {
+        this.particles.emit(wx, wy, wz, SPRAY_COLOR, {
+          spread: 1.6,
+          rise: 1.2 + intensity * 1.8,
+          riseVar: 1.4,
+          // Thrown backwards along travel, the way a wheel actually
+          // sheets water.
+          biasX: -vx * 0.22,
+          biasZ: -vz * 0.22,
+          lifeMs: 260,
+          lifeVarMs: 220,
+          scale: 0.75,
+        });
+      }
+    }
+
+    // Bow wave off the front of the chassis while it is pushing water.
+    const nose = Physics.rotateVecByQuat(
+      { x: 0, y: -0.2, z: VEHICLE.chassisHalfExtents.z },
+      { x: q.x, y: q.y, z: q.z, w: q.w },
+    );
+    const nx = t.x + nose.x;
+    const nz = t.z + nose.z;
+    const noseDepth = Physics.sampleWaterDepth(terrain, nx, nz);
+    if (noseDepth > 0.15 && groundSpeed > 2) {
+      const level = Physics.sampleWaterLevel(terrain, nx, nz);
+      const count = Math.min(3, Math.round(groundSpeed / 4));
+      for (let n = 0; n < count; n++) {
+        this.particles.emit(nx, level, nz, FOAM_COLOR, {
+          spread: 2.4,
+          rise: 1.0,
+          riseVar: 1.2,
+          biasX: vx * 0.14,
+          biasZ: vz * 0.14,
+          lifeMs: 320,
+          lifeVarMs: 260,
+          scale: 1.1,
+        });
+      }
     }
   }
 

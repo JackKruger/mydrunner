@@ -518,6 +518,7 @@ function frame(): void {
   if (localSimulation) {
     const ps = localSimulation.state(inputAcc / FIXED_DT);
     scene.setLocalVehiclePose(ps.position, ps.rotation, ps.wheels, ps.axles);
+    if (previewMode) scene.setLocalVehicleState(localSimulation.vehicleState());
     updateAxleDebug(ps.axles[0], ps.axles[1]);
     const telemetry = localSimulation.telemetry();
     lastSpeed = telemetry.speed;
