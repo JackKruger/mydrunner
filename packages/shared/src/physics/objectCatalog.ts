@@ -54,11 +54,11 @@ export interface Obstacle {
  *  The vocabulary is semantic rather than arithmetic — "a post standing
  *  `stand` tall" instead of a capsule half-height — so the table never has
  *  to spell out `(height - 2*size)/2`, and so the three legacy shapes stay
- *  expressible without leaking their derivations into 35 entries. */
+ *  expressible without leaking their derivations into every table entry. */
 export type ColliderPart =
   /** Sphere of `radius`, centre lifted `radius * sink` above the anchor, so
    *  a rock sits part-buried rather than balanced on a point. */
-  | { shape: 'boulder'; radius: number; sink: number }
+  | { shape: 'boulder'; radius: number; sink: number; x?: number; z?: number }
   /** Upright capsule standing `stand` tall from the anchor. */
   | { shape: 'post'; radius: number; stand: number; x?: number; z?: number }
   /** Box. `y` is the base above the anchor unless the entry says otherwise. */
@@ -91,8 +91,8 @@ export interface ObjectInfo {
 // --- The table --------------------------------------------------------
 //
 // The five kinds below are the shipped world. Their collider geometry is
-// frozen: every owner client builds these independently
-// independently from the same map document, so a change here that is not
+// frozen: every owner client builds these independently from the same map
+// document, so a change here that is not
 // matched by a PROTOCOL_VERSION bump desyncs the two silently.
 // obstacleColliders.test.ts pins them.
 
@@ -219,6 +219,27 @@ const OBJECT_TABLE = {
     dims: { size: 'trunk radius', height: 'total height' },
     friction: 0.6,
     colliders: (o) => [{ shape: 'post', radius: o.size, stand: o.height }],
+  },
+
+  cactus: {
+    label: 'Cactus',
+    group: 'natural',
+    defaults: { size: 0.28, height: 3.2 },
+    limits: { size: [0.12, 0.8], height: [1, 8] },
+    dims: { size: 'stem radius', height: 'total height' },
+    friction: 0.65,
+    colliders: (o) => [{ shape: 'post', radius: o.size, stand: o.height }],
+  },
+
+  reeds: {
+    label: 'Reeds',
+    group: 'natural',
+    defaults: { size: 1, height: 1.4 },
+    limits: { size: [0.3, 3], height: [0.4, 3] },
+    dims: { size: 'clump radius', height: 'stalk height' },
+    // Like bushes, reeds are vegetation the truck should brush through.
+    friction: 0.6,
+    colliders: () => [],
   },
 
   rockStep: {
@@ -361,6 +382,84 @@ const OBJECT_TABLE = {
       // One flat slab: the bars are a visual. A collider per bar would let
       // a wheel drop between them, which is realistic and miserable.
       { shape: 'box', hx: (o.length ?? 3) / 2, hy: 0.05, hz: o.size, y: o.height },
+    ],
+  },
+
+  stairSteps: {
+    label: 'Stair steps',
+    group: 'trail',
+    defaults: { size: 1.5, height: 1.2, length: 4.5 },
+    limits: { size: [0.7, 4], height: [0.3, 3], length: [2, 10] },
+    dims: { size: 'half-width', height: 'total rise', length: 'run' },
+    friction: 0.95,
+    colliders: (o) => {
+      const count = 6;
+      const run = o.length ?? 4.5;
+      const tread = run / count;
+      return Array.from({ length: count }, (_, i) => {
+        const h = o.height * (i + 1) / count;
+        return {
+          shape: 'box' as const,
+          hx: tread / 2, hy: h / 2, hz: o.size,
+          x: -run / 2 + tread * (i + 0.5), y: h / 2,
+        };
+      });
+    },
+  },
+
+  rockGarden: {
+    label: 'Rock garden',
+    group: 'trail',
+    defaults: { size: 1.6, height: 0.45, length: 6 },
+    limits: { size: [0.8, 4], height: [0.18, 1.2], length: [3, 14] },
+    dims: { size: 'half-width', height: 'rock radius', length: 'run' },
+    friction: 0.95,
+    colliders: (o) => {
+      const run = o.length ?? 6;
+      const layout = [
+        [-0.42, -0.42, 0.82], [-0.29, 0.38, 1.08], [-0.12, -0.08, 0.9],
+        [0.05, 0.48, 1.18], [0.2, -0.5, 1], [0.36, 0.16, 0.86], [0.46, -0.28, 1.12],
+      ] as const;
+      return layout.map(([tx, tz, scale]) => ({
+        shape: 'boulder' as const,
+        radius: o.height * scale,
+        sink: 0.62,
+        x: tx * run,
+        z: tz * o.size * 1.5,
+      }));
+    },
+  },
+
+  washboard: {
+    label: 'Washboard',
+    group: 'trail',
+    defaults: { size: 1.6, height: 0.22, length: 5 },
+    limits: { size: [0.7, 4], height: [0.08, 0.6], length: [2, 12] },
+    dims: { size: 'half-width', height: 'ridge radius', length: 'run' },
+    friction: 0.9,
+    colliders: (o) => {
+      const run = o.length ?? 5;
+      const count = Math.max(4, Math.round(run / 0.7));
+      return Array.from({ length: count }, (_, i) => ({
+        shape: 'drum' as const,
+        radius: o.height,
+        halfLength: o.size,
+        axis: 'z' as const,
+        x: count === 1 ? 0 : -run / 2 + i * run / (count - 1),
+        y: o.height * 0.65,
+      }));
+    },
+  },
+
+  sandbagWall: {
+    label: 'Sandbag wall',
+    group: 'trail',
+    defaults: { size: 0.38, height: 0.9, length: 4 },
+    limits: { size: [0.2, 1], height: [0.3, 2], length: [1, 12] },
+    dims: { size: 'half-depth', height: 'wall height', length: 'wall length' },
+    friction: 0.85,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 4) / 2, hy: o.height / 2, hz: o.size, y: o.height / 2 },
     ],
   },
 
@@ -536,6 +635,177 @@ const OBJECT_TABLE = {
     ],
   },
 
+  fuelPump: {
+    label: 'Fuel pump',
+    group: 'props',
+    defaults: { size: 0.38, height: 1.7, length: 0.75 },
+    limits: { size: [0.2, 0.8], height: [0.8, 3], length: [0.4, 1.5] },
+    dims: { size: 'half-depth', height: 'height', length: 'width' },
+    friction: 0.7,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 0.75) / 2, hy: o.height / 2, hz: o.size, y: o.height / 2 },
+    ],
+  },
+
+  generator: {
+    label: 'Generator',
+    group: 'props',
+    defaults: { size: 0.42, height: 0.8, length: 1.2 },
+    limits: { size: [0.25, 1], height: [0.4, 1.8], length: [0.6, 2.5] },
+    dims: { size: 'half-depth', height: 'height', length: 'length' },
+    friction: 0.75,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 1.2) / 2, hy: o.height / 2, hz: o.size, y: o.height / 2 },
+    ],
+  },
+
+  portableToilet: {
+    label: 'Portable toilet',
+    group: 'props',
+    defaults: { size: 0.6, height: 2.25, length: 1.15 },
+    limits: { size: [0.4, 1.2], height: [1.5, 3.5], length: [0.8, 2] },
+    dims: { size: 'half-depth', height: 'height', length: 'width' },
+    friction: 0.65,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 1.15) / 2, hy: o.height / 2, hz: o.size, y: o.height / 2 },
+    ],
+  },
+
+  streetLight: {
+    label: 'Street light',
+    group: 'props',
+    defaults: { size: 0.1, height: 6 },
+    limits: { size: [0.05, 0.3], height: [2.5, 12] },
+    dims: { size: 'pole radius', height: 'total height' },
+    friction: 0.6,
+    colliders: (o) => [{ shape: 'post', radius: o.size, stand: o.height }],
+  },
+
+  bench: {
+    label: 'Bench',
+    group: 'props',
+    defaults: { size: 0.35, height: 0.85, length: 1.8 },
+    limits: { size: [0.2, 0.8], height: [0.5, 1.4], length: [0.8, 4] },
+    dims: { size: 'half-depth', height: 'back height', length: 'length' },
+    friction: 0.7,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 1.8) / 2, hy: o.height / 2, hz: o.size, y: o.height / 2 },
+    ],
+  },
+
+  roadworkBarrier: {
+    label: 'Roadwork barrier',
+    group: 'props',
+    defaults: { size: 0.08, height: 1.1, length: 2.4 },
+    limits: { size: [0.04, 0.2], height: [0.6, 2], length: [1, 5] },
+    dims: { size: 'post radius', height: 'height', length: 'bar length' },
+    friction: 0.65,
+    colliders: (o) => {
+      const half = (o.length ?? 2.4) / 2;
+      return [
+        { shape: 'post' as const, radius: o.size, stand: o.height, x: -half },
+        { shape: 'post' as const, radius: o.size, stand: o.height, x: half },
+        { shape: 'box' as const, hx: half, hy: o.height * 0.1, hz: o.size, y: o.height * 0.72 },
+      ];
+    },
+  },
+
+  checkpointArch: {
+    label: 'Checkpoint arch',
+    group: 'markers',
+    defaults: { size: 0.13, height: 3.4, length: 4.5 },
+    limits: { size: [0.07, 0.35], height: [2, 7], length: [2.5, 10] },
+    dims: { size: 'post radius', height: 'total height', length: 'inside width' },
+    friction: 0.65,
+    colliders: (o) => {
+      const half = (o.length ?? 4.5) / 2;
+      return [
+        { shape: 'post' as const, radius: o.size, stand: o.height, x: -half },
+        { shape: 'post' as const, radius: o.size, stand: o.height, x: half },
+        { shape: 'box' as const, hx: half + o.size, hy: o.size, hz: o.size, y: o.height - o.size },
+      ];
+    },
+  },
+
+  campTent: {
+    label: 'Camp tent',
+    group: 'props',
+    defaults: { size: 1.3, height: 1.45, length: 2.4 },
+    limits: { size: [0.7, 3], height: [0.7, 2.6], length: [1.4, 5] },
+    dims: { size: 'half-width', height: 'ridge height', length: 'length' },
+    friction: 0.65,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 2.4) / 2, hy: o.height * 0.42, hz: o.size,
+        y: o.height * 0.42 },
+    ],
+  },
+
+  woodPile: {
+    label: 'Wood pile',
+    group: 'props',
+    defaults: { size: 0.7, height: 1, length: 2.5 },
+    limits: { size: [0.35, 1.5], height: [0.4, 2], length: [1, 6] },
+    dims: { size: 'half-depth', height: 'pile height', length: 'pile length' },
+    friction: 0.75,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 2.5) / 2, hy: o.height / 2, hz: o.size,
+        y: o.height / 2 },
+    ],
+  },
+
+  waterTrough: {
+    label: 'Water trough',
+    group: 'props',
+    defaults: { size: 0.65, height: 0.7, length: 2.4 },
+    limits: { size: [0.35, 1.4], height: [0.35, 1.4], length: [1, 6] },
+    dims: { size: 'half-width', height: 'height', length: 'length' },
+    friction: 0.75,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 2.4) / 2, hy: o.height / 2, hz: o.size,
+        y: o.height / 2 },
+    ],
+  },
+
+  farmWindmill: {
+    label: 'Farm windmill',
+    group: 'props',
+    defaults: { size: 0.14, height: 8 },
+    limits: { size: [0.08, 0.35], height: [3, 16] },
+    dims: { size: 'tower post radius', height: 'total height' },
+    friction: 0.65,
+    colliders: (o) => [{ shape: 'post', radius: o.size, stand: o.height }],
+  },
+
+  solarPanel: {
+    label: 'Solar panel',
+    group: 'props',
+    defaults: { size: 0.9, height: 1.5, length: 2.4 },
+    limits: { size: [0.4, 2], height: [0.7, 3], length: [1, 6] },
+    dims: { size: 'panel half-depth', height: 'top height', length: 'panel width' },
+    friction: 0.65,
+    colliders: (o) => [
+      { shape: 'post', radius: 0.07, stand: o.height * 0.8,
+        x: -(o.length ?? 2.4) * 0.3 },
+      { shape: 'post', radius: 0.07, stand: o.height * 0.8,
+        x: (o.length ?? 2.4) * 0.3 },
+      { shape: 'box', hx: (o.length ?? 2.4) / 2, hy: 0.06, hz: o.size,
+        y: o.height * 0.8 },
+    ],
+  },
+
+  oldTractor: {
+    label: 'Old tractor',
+    group: 'props',
+    defaults: { size: 0.9, height: 1.9, length: 3.2 },
+    limits: { size: [0.55, 1.5], height: [1.1, 3], length: [2, 5] },
+    dims: { size: 'half-width', height: 'total height', length: 'length' },
+    friction: 0.75,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 3.2) / 2, hy: o.height * 0.42, hz: o.size,
+        y: o.height * 0.42 },
+    ],
+  },
+
   // --- Structures ----------------------------------------------------
 
   shippingContainer: {
@@ -586,6 +856,115 @@ const OBJECT_TABLE = {
     friction: 0.9,
     colliders: (o) => [
       { shape: 'box', hx: (o.length ?? 8) / 2, hy: 0.06, hz: o.size, y: o.height },
+    ],
+  },
+
+  horizontalTank: {
+    label: 'Horizontal tank',
+    group: 'props',
+    defaults: { size: 1.1, height: 2.2, length: 4 },
+    limits: { size: [0.5, 3], height: [1, 6], length: [1.5, 12] },
+    dims: { size: 'tank radius', height: 'unused', length: 'tank length' },
+    friction: 0.7,
+    colliders: (o) => [
+      { shape: 'drum', radius: o.size, halfLength: (o.length ?? 4) / 2, axis: 'x', y: o.size + 0.35 },
+    ],
+  },
+
+  watchtower: {
+    label: 'Watchtower',
+    group: 'props',
+    defaults: { size: 1.2, height: 5, length: 2.4 },
+    limits: { size: [0.7, 2.5], height: [2.5, 10], length: [1.4, 5] },
+    dims: { size: 'half-depth', height: 'platform height', length: 'platform width' },
+    friction: 0.7,
+    colliders: (o) => {
+      const halfX = (o.length ?? 2.4) / 2;
+      const insetX = Math.max(0, halfX - 0.14);
+      const insetZ = Math.max(0, o.size - 0.14);
+      return [
+        ...([-1, 1] as const).flatMap((sx) => ([-1, 1] as const).map((sz) => ({
+          shape: 'post' as const, radius: 0.12, stand: o.height,
+          x: sx * insetX, z: sz * insetZ,
+        }))),
+        { shape: 'box' as const, hx: halfX, hy: 0.12, hz: o.size, y: o.height },
+      ];
+    },
+  },
+
+  bushHut: {
+    label: 'Bush hut',
+    group: 'props',
+    defaults: { size: 2, height: 2.2, length: 4 },
+    limits: { size: [1, 5], height: [1.6, 4], length: [2, 10] },
+    dims: { size: 'half-depth', height: 'wall height', length: 'width' },
+    friction: 0.7,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 4) / 2, hy: o.height / 2, hz: o.size,
+        y: o.height / 2 },
+      { shape: 'box', hx: (o.length ?? 4) / 2, hy: o.height * 0.14, hz: o.size,
+        y: o.height * 1.12 },
+    ],
+  },
+
+  timberCabin: {
+    label: 'Timber cabin',
+    group: 'props',
+    defaults: { size: 2.4, height: 2.4, length: 5 },
+    limits: { size: [1.2, 5], height: [1.7, 4.5], length: [2.5, 11] },
+    dims: { size: 'half-depth', height: 'wall height', length: 'width' },
+    friction: 0.75,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 5) / 2, hy: o.height / 2, hz: o.size,
+        y: o.height / 2 },
+      { shape: 'box', hx: (o.length ?? 5) / 2, hy: o.height * 0.16, hz: o.size,
+        y: o.height * 1.14 },
+    ],
+  },
+
+  leanTo: {
+    label: 'Lean-to shelter',
+    group: 'props',
+    defaults: { size: 2, height: 2.3, length: 4 },
+    limits: { size: [1, 4], height: [1.5, 4], length: [2, 9] },
+    dims: { size: 'half-depth', height: 'roof height', length: 'width' },
+    friction: 0.7,
+    colliders: (o) => {
+      const halfX = (o.length ?? 4) / 2;
+      return [
+        ...([-1, 1] as const).flatMap((sx) => ([-1, 1] as const).map((sz) => ({
+          shape: 'post' as const, radius: 0.1, stand: o.height,
+          x: sx * (halfX - 0.12), z: sz * (o.size - 0.12),
+        }))),
+        { shape: 'box' as const, hx: halfX, hy: 0.08, hz: o.size,
+          y: o.height },
+      ];
+    },
+  },
+
+  caravan: {
+    label: 'Bush caravan',
+    group: 'props',
+    defaults: { size: 1.15, height: 2.25, length: 5 },
+    limits: { size: [0.8, 1.8], height: [1.5, 3.5], length: [3, 8] },
+    dims: { size: 'half-width', height: 'body height', length: 'body length' },
+    friction: 0.7,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 5) / 2, hy: o.height / 2, hz: o.size,
+        y: o.height / 2 + 0.35 },
+    ],
+  },
+
+  bushDunny: {
+    label: 'Bush dunny',
+    group: 'props',
+    defaults: { size: 0.7, height: 2.1, length: 1.25 },
+    limits: { size: [0.45, 1.2], height: [1.5, 3], length: [0.8, 2.2] },
+    dims: { size: 'half-depth', height: 'wall height', length: 'width' },
+    friction: 0.7,
+    colliders: (o) => [
+      { shape: 'box', hx: (o.length ?? 1.25) / 2, hy: o.height / 2, hz: o.size,
+        y: o.height / 2 },
     ],
   },
 } satisfies Record<string, ObjectInfo>;
@@ -700,7 +1079,10 @@ export function resolveColliders(o: Obstacle): ResolvedCollider[] {
         out.push({
           shape: 'ball',
           args: [part.radius],
-          pos: { x: o.x, y: o.y + part.radius * part.sink, z: o.z },
+          pos: {
+            ...offset(o, part.x ?? 0, part.z ?? 0),
+            y: o.y + part.radius * part.sink,
+          },
           rot: IDENTITY,
           friction: info.friction,
         });

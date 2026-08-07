@@ -20,12 +20,15 @@
 //    resolution live in the document both sides compile in.
 // 4: clients own vehicle physics and upload canonical VehicleState; the
 //    server relays it instead of simulating and correcting player bodies.
-// 5: authored water. MapDoc gains a water block (MAP_FORMAT_VERSION 2),
+// 6: the object catalog gained ~40 kinds. Obstacle colliders are built
+//    independently by every owner client, so two builds that disagree
+//    about the catalog disagree about what the world is solid at.
+// 7: authored water. MapDoc gains a water block (MAP_FORMAT_VERSION 2),
 //    TerrainData gains the level and flow grids, and the vehicle model
 //    gains buoyancy, drag, current and drowning. Two builds either side
 //    of this disagree about both the map's geometry and how a truck
 //    behaves in it.
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 7;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // The client-owned vehicle simulation advances at this fixed cadence.

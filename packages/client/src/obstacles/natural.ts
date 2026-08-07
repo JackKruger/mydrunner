@@ -168,6 +168,60 @@ const palm: ObjectMeshBuilder = (ctx, o) => {
   return out;
 };
 
+const cactus: ObjectMeshBuilder = (ctx, o) => {
+  const green = solid(ctx, ctx.pick([0x467a3b, 0x3f7136, 0x568546], o, 'cactus'), 0.92);
+  const flower = solid(ctx, ctx.pick([0xc94d65, 0xe08a3e, 0xd6b43d], o, 'flower'), 0.88);
+  const out: THREE.Object3D[] = [
+    cyl(o.size * 0.82, o.size, o.height, green, { y: o.height / 2 }, 9),
+    cyl(o.size * 0.84, o.size * 0.84, o.size * 0.45, green, { y: o.height }, 9),
+  ];
+  for (const [side, up] of [[-1, 0.48], [1, 0.64]] as const) {
+    const armH = o.height * (side < 0 ? 0.28 : 0.22);
+    const armX = side * o.size * 2.2;
+    out.push(
+      lyingCyl(o.size * 0.48, o.size * 2.5, green, {
+        x: side * o.size * 1.15, y: o.height * up,
+      }, 8),
+      cyl(o.size * 0.43, o.size * 0.5, armH, green, {
+        x: armX, y: o.height * up + armH / 2,
+      }, 8),
+      cyl(o.size * 0.44, o.size * 0.44, o.size * 0.28, flower, {
+        x: armX, y: o.height * up + armH,
+      }, 7),
+    );
+  }
+  return out;
+};
+
+const reeds: ObjectMeshBuilder = (ctx, o) => {
+  const stalk = solid(ctx, 0x6f8242, 0.95);
+  const head = solid(ctx, 0x5a3d26, 0.98);
+  const leaf = ctx.mat('reedLeaf', () => new THREE.MeshStandardMaterial({
+    color: 0x78954c, roughness: 0.95, side: THREE.DoubleSide,
+  }));
+  const out: THREE.Object3D[] = [];
+  const count = Math.max(7, Math.round(o.size * 10));
+  for (let i = 0; i < count; i++) {
+    const a = ctx.h(o, `reedA${i}`) * Math.PI * 2;
+    const r = Math.sqrt(ctx.h(o, `reedR${i}`)) * o.size;
+    const h = o.height * (0.65 + ctx.h(o, `reedH${i}`) * 0.35);
+    const x = Math.cos(a) * r;
+    const z = Math.sin(a) * r;
+    out.push(cyl(0.014, 0.02, h, stalk, { x, y: h / 2, z }, 5));
+    if (i % 2 === 0) {
+      out.push(cyl(0.035, 0.045, h * 0.16, head, { x, y: h, z }, 6));
+    }
+    out.push(plane(h * 0.34, 0.06, leaf, {
+      x: x + Math.cos(a) * h * 0.12,
+      y: h * 0.42,
+      z: z + Math.sin(a) * h * 0.12,
+      ry: -a,
+      rz: 0.55,
+    }));
+  }
+  return out;
+};
+
 const rockStep: ObjectMeshBuilder = (ctx, o) => {
   const mat = solid(ctx, ctx.pick(ROCK_COLORS, o, 'rockColor'), 0.88, true);
   const len = o.length ?? 4;
@@ -183,5 +237,6 @@ const rockStep: ObjectMeshBuilder = (ctx, o) => {
 };
 
 export const NATURAL_MESHES = {
-  rock, boulder, tree, pine, deadTree, stump, log, bush, palm, rockStep,
+  rock, boulder, tree, pine, deadTree, stump, log, bush, palm, cactus, reeds,
+  rockStep,
 } satisfies Record<string, ObjectMeshBuilder>;

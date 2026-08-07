@@ -5,6 +5,8 @@ import { Physics } from '@mydrunner/shared';
 import {
   OBJECT_YAW_STEP, applyKindDefaults, defaultToolState, placeableKinds, stepYaw,
 } from '../editor/tools.js';
+import { OBJECT_MESHES } from '../obstacles/registry.js';
+import { createMeshCtx } from '../obstacles/materials.js';
 
 describe('placeable kinds', () => {
   it('offers every kind the catalog knows, grouped', () => {
@@ -17,6 +19,39 @@ describe('placeable kinds', () => {
     for (const g of placeableKinds()) {
       expect(g.label.length).toBeGreaterThan(0);
       expect(g.kinds.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('has a visual builder for every offered kind', () => {
+    expect(Object.keys(OBJECT_MESHES).sort()).toEqual([...Physics.OBJECT_KINDS].sort());
+  });
+
+  it('builds the expanded choices with finite local transforms', () => {
+    const added = [
+      'cactus', 'reeds', 'stairSteps', 'rockGarden', 'washboard', 'sandbagWall',
+      'fuelPump', 'generator', 'portableToilet', 'streetLight', 'bench',
+      'roadworkBarrier', 'checkpointArch', 'horizontalTank', 'watchtower',
+      'campTent', 'woodPile', 'waterTrough', 'farmWindmill', 'solarPanel',
+      'oldTractor', 'bushHut', 'timberCabin', 'leanTo', 'caravan', 'bushDunny',
+    ] as const;
+    const ctx = createMeshCtx();
+    for (const kind of added) {
+      const d = Physics.objectInfo(kind).defaults;
+      const parts = OBJECT_MESHES[kind](ctx, {
+        id: `test-${kind}`, kind, x: 0, y: 0, z: 0, yaw: 0,
+        size: d.size, height: d.height,
+        ...(d.length !== undefined ? { length: d.length } : {}),
+      });
+      expect(parts.length, kind).toBeGreaterThan(0);
+      for (const part of parts) {
+        part.traverse((node) => {
+          for (const value of [
+            node.position.x, node.position.y, node.position.z,
+            node.rotation.x, node.rotation.y, node.rotation.z,
+            node.scale.x, node.scale.y, node.scale.z,
+          ]) expect(Number.isFinite(value), kind).toBe(true);
+        });
+      }
     }
   });
 });
