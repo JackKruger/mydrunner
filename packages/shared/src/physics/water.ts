@@ -171,6 +171,10 @@ export interface WaterLoad {
   /** Whole-body drag, which is also the current: it is computed against
    *  the velocity of the vehicle *relative to the water*. */
   drag: Vec3;
+  /** Centre of pressure for whole-body drag. In shallow water this sits
+   *  below the chassis centre, so a cross-current loads the suspension
+   *  and rolls the body instead of sliding it sideways without reaction. */
+  dragPoint: Vec3;
   /** Angular drag, chassis-independent (world frame). */
   dragTorque: Vec3;
   /** 0..1 mean submersion across the hull samples. Drives the drag
@@ -192,6 +196,7 @@ export function createWaterLoad(): WaterLoad {
       { point: { x: 0, y: 0, z: 0 }, force: { x: 0, y: 0, z: 0 } },
     ],
     drag: { x: 0, y: 0, z: 0 },
+    dragPoint: { x: 0, y: 0, z: 0 },
     dragTorque: { x: 0, y: 0, z: 0 },
     submergedFrac: 0,
     intakeSubmerged: false,
@@ -273,6 +278,9 @@ export function computeWaterLoad(
   out.drag.x = 0;
   out.drag.y = 0;
   out.drag.z = 0;
+  out.dragPoint.x = pose.t.x;
+  out.dragPoint.y = pose.t.y;
+  out.dragPoint.z = pose.t.z;
   out.dragTorque.x = 0;
   out.dragTorque.y = 0;
   out.dragTorque.z = 0;
@@ -306,6 +314,19 @@ export function computeWaterLoad(
     out.drag.x = fLong * fx + fLat * rx;
     out.drag.z = fLong * fz + fLat * rz;
     out.drag.y = fVert;
+
+    // Pressure acts around the centre of the wetted hull, not magically
+    // through its centre of mass. As the water rises, that point moves
+    // from the floor toward the hull centre. Applying a shallow
+    // cross-current down low produces the small, important body lean a
+    // driver expects to feel before the tyres begin to slide.
+    _corner.x = 0;
+    _corner.y = Math.min(ext.y, -ext.y + span * submerged * 0.5);
+    _corner.z = 0;
+    const cp = rotateVecByQuat(_corner, pose.r);
+    out.dragPoint.x = pose.t.x + cp.x;
+    out.dragPoint.y = pose.t.y + cp.y;
+    out.dragPoint.z = pose.t.z + cp.z;
 
     const ka = WATER.dragAngular * k;
     out.dragTorque.x = -ka * pose.av.x;

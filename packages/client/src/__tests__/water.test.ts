@@ -131,6 +131,24 @@ describe('WaterMesh', () => {
     m.dispose();
   });
 
+  it('keeps the packed flow range available to the shader in m/s', () => {
+    // The texture stores a normalised byte pair, but animation happens in
+    // world metres. Losing this decode scale made a 1 m/s river appear to
+    // crawl at one quarter speed even though the physics current was real.
+    const t = terrain();
+    t.waterLevel.fill(1);
+    t.waterFlowX.fill(2);
+    const m = new WaterMesh(t);
+    const mat = m.mesh.material as THREE.ShaderMaterial;
+    const range = mat.uniforms.uFlowRange!.value as number;
+    const tex = mat.uniforms.uFlowMap!.value as THREE.DataTexture;
+    const packed = (tex.image.data as Uint8Array)[0]! / 255;
+    const decoded = (packed * 2 - 1) * range;
+    expect(range).toBe(4);
+    expect(decoded).toBeCloseTo(2, 1);
+    m.dispose();
+  });
+
   it('draws transparent and after the opaque world', () => {
     const t = terrain();
     t.waterLevel.fill(1);

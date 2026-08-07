@@ -218,7 +218,12 @@ describe('arena: hill climb', () => {
     // forward progress in 8 s of throttle.
     const flatRoad = rows.find((r) => r.surface === 'Road' && r.slopeDeg === 0)!;
     expect(flatRoad.maxX).toBeGreaterThan(-10); // started at -30, gained > 20 m
-  }, 10_000);
+  // This is an 18-scenario diagnostic matrix (9,720 Rapier steps), not a
+  // latency contract. It takes ~8 s locally on its own, so the old 10 s
+  // ceiling was flaky when CI scheduled the other physics files beside
+  // it. Keep enough headroom for a slower/shared runner while leaving the
+  // actual vehicle-behaviour assertion above unchanged.
+  }, 30_000);
 });
 
 describe('arena: cross-slope body roll', () => {

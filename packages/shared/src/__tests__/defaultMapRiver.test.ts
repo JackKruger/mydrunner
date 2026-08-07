@@ -88,7 +88,10 @@ describe('the ford', () => {
   it('flows downstream, roughly along the channel', () => {
     const flow = sampleWaterFlow(map.terrain, FORD_X, ROAD_Z, { x: 0, z: 0 });
     const speed = Math.hypot(flow.x, flow.z);
-    expect(speed).toBeGreaterThan(0.5);
+    // A barely moving field can satisfy the direction assertions while
+    // remaining imperceptible from the cab. The shipped centre current
+    // is deliberately swift enough to read through body load and drift.
+    expect(speed).toBeGreaterThan(0.9);
     // The river runs north to south here, so the current is mostly -z:
     // across a road that runs along x, which is what makes it a shove
     // rather than a headwind.

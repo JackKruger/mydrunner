@@ -572,7 +572,11 @@ export class SolidAxleVehicle implements VehicleLike {
           if (s.force.y === 0) continue;
           this.body.addForceAtPoint(s.force, s.point, true);
         }
-        this.body.addForce(wl.drag, true);
+        // Water pressure acts at the centre of the wetted hull. In a
+        // ford that is below the centre of mass, so a cross-current now
+        // loads the downstream suspension instead of moving the entire
+        // truck sideways as if it were on a conveyor belt.
+        this.body.addForceAtPoint(wl.drag, wl.dragPoint, true);
         this.body.addTorque(wl.dragTorque, true);
       }
     } else {

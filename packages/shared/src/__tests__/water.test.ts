@@ -4,8 +4,10 @@ import {
   type TerrainData,
 } from '../physics/terrain.js';
 import {
-  hasWater, sampleWaterDepth, sampleWaterFlow, sampleWaterLevel,
+  computeWaterLoad, createWaterLoad, createWaterState, hasWater,
+  sampleWaterDepth, sampleWaterFlow, sampleWaterLevel,
 } from '../physics/water.js';
+import { geomFor } from '../physics/vehicleGeom.js';
 
 const SIZE = 40;
 const RES = 9; // cell pitch = 40 / 8 = 5 m, cell centres land on round numbers
@@ -177,5 +179,27 @@ describe('sampleWaterFlow', () => {
     const out = sampleWaterFlow(t, SIZE * 2, 0, { x: 0, z: 0 });
     expect(out.x).toBe(0);
     expect(out.z).toBe(0);
+  });
+});
+
+describe('water force placement', () => {
+  it('applies a shallow current below the centre of mass', () => {
+    const t = flat();
+    floodColumns(t, 0, RES - 1, 0.4);
+    t.waterFlowX.fill(1.2);
+    const pose = {
+      t: { x: 0, y: 0.7, z: 0 },
+      r: { x: 0, y: 0, z: 0, w: 1 },
+      lv: { x: 0, y: 0, z: 0 },
+      av: { x: 0, y: 0, z: 0 },
+    };
+    const load = computeWaterLoad(
+      t, geomFor('patrol'), createWaterState(), pose, 1 / 60, createWaterLoad(),
+    );
+
+    expect(load.submergedFrac).toBeGreaterThan(0);
+    expect(load.submergedFrac).toBeLessThan(0.5);
+    expect(load.drag.x).toBeGreaterThan(0);
+    expect(load.dragPoint.y).toBeLessThan(pose.t.y);
   });
 });

@@ -52,6 +52,7 @@ uniform float uFogNear;
 uniform float uFogFar;
 uniform float uTime;
 uniform sampler2D uFlowMap;
+uniform float uFlowRange;
 uniform float uTerrainSize;
 uniform vec3 uShallowColor;
 uniform vec3 uDeepColor;
@@ -90,41 +91,57 @@ void main() {
   if (vWet < 0.5) discard;
 
   vec2 uv = vWorldPos.xz / uTerrainSize + 0.5;
-  // Flow is stored signed in [-1, 1] scaled into a byte pair.
-  vec2 flow = texture2D(uFlowMap, uv).rg * 2.0 - 1.0;
+  // RG stores the authored velocity normalised by uFlowRange. Decode it
+  // back to m/s before animating. The old shader used the normalised
+  // value directly, making every visible current four times too slow.
+  vec2 flow = (texture2D(uFlowMap, uv).rg * 2.0 - 1.0) * uFlowRange;
+  float flowSpeed = length(flow);
+  // Byte packing maps exact zero to a tiny non-zero value. Kill that
+  // quantisation residue so a still pond really stays still.
+  if (flowSpeed < 0.03) {
+    flow = vec2(0.0);
+    flowSpeed = 0.0;
+  }
+  vec2 flowDir = flowSpeed > 0.0 ? flow / flowSpeed : vec2(1.0, 0.0);
+  vec2 flowAcross = vec2(-flowDir.y, flowDir.x);
 
-  // Ripples advect along the flow. Two layers at different rates and
-  // scales so the motion does not read as one sliding texture.
+  // Every detail is evaluated in the same advected world-space frame,
+  // so the surface moves as one body instead of looking like unrelated
+  // textures sliding through each other.
   vec2 p = vWorldPos.xz;
-  vec2 drift = flow * uTime;
-  float r1 = fbm(p * 1.7 - drift * 1.6);
-  float r2 = fbm(p * 4.3 - drift * 3.1 + 17.0);
+  vec2 q = p - flow * uTime;
+  float r1 = fbm(q * 1.7);
+  float r2 = fbm(q * 4.3 + 17.0);
   float ripple = r1 * 0.6 + r2 * 0.4;
 
-  // Perturbed normal from the ripple field, tilted mostly upward.
-  //
-  // The gradient step and the amplitude are deliberately small. A wide
-  // step with a big amplitude tilts the normal by tens of degrees over
-  // metre-wide patches, and against a tight specular exponent that reads
-  // as white paint splattered across the river rather than as glitter.
-  // Fine, shallow ripples are what make a surface look wet.
-  float e = 0.12;
-  float rx = fbm((p + vec2(e, 0.0)) * 1.7 - drift * 1.6) - r1;
-  float rz = fbm((p + vec2(0.0, e)) * 1.7 - drift * 1.6) - r1;
-  vec3 n = normalize(vec3(-rx * 0.9, 1.0, -rz * 0.9));
+  // Build the normal from the advected ripple field. The mesh stays flat
+  // (its 2.5 m vertex spacing is too coarse for wave geometry), while the
+  // fragment-resolution normal catches broad ripples and coherent wave
+  // fronts. The sine's gradient is analytic, saving six extra noise
+  // samples per pixel compared with differencing the whole height field.
+  float e = 0.07;
+  float r1x = fbm((q + vec2(e, 0.0)) * 1.7);
+  float r1z = fbm((q + vec2(0.0, e)) * 1.7);
+  float currentMix = smoothstep(0.08, 0.9, flowSpeed);
+  float frontPhase = dot(q, flowDir) * 4.8 + fbm(q * 0.31 + 57.0) * 5.0;
+  float frontSlope = cos(frontPhase) * 4.8 * 0.012 * currentMix;
+  float slopeX = (r1x - r1) * 0.10 / e + flowDir.x * frontSlope;
+  float slopeZ = (r1z - r1) * 0.10 / e + flowDir.y * frontSlope;
+  vec3 n = normalize(vec3(-slopeX, 1.0, -slopeZ));
 
   // Depth tint: this is the readout the player steers by.
   float t = clamp(vDepth / uDeepAt, 0.0, 1.0);
   vec3 base = mix(uShallowColor, uDeepColor, t);
 
   // Shallow water is see-through, deep water is not.
-  float alpha = mix(0.38, 0.9, t);
+  float alpha = mix(0.34, 0.82, t);
 
   // Sun glitter. Sharp and weak: a highlight on a moving surface, not a
   // light source.
   vec3 viewDir = normalize(cameraPosition - vWorldPos);
   vec3 h = normalize(normalize(uSunDir) + viewDir);
-  float spec = pow(max(dot(n, h), 0.0), 160.0);
+  float specTight = pow(max(dot(n, h), 0.0), 150.0);
+  float specBroad = pow(max(dot(n, h), 0.0), 32.0);
   // Fresnel: water is a mirror at grazing angles and nearly clear looking
   // straight down. It is also what makes the far side of a river read as
   // brighter than the water at your own bumper, which is the depth cue
@@ -133,17 +150,33 @@ void main() {
 
   // Foam at the waterline. Draws the shore, and marks the shallow edge
   // that is safe to enter.
-  float foam = smoothstep(uFoamDepth, 0.0, vDepth) * (0.55 + 0.45 * ripple);
+  // Do not reverse smoothstep's edges: GLSL leaves that undefined and
+  // different GPUs can lose the shoreline band entirely.
+  float foam = (1.0 - smoothstep(0.0, uFoamDepth, vDepth)) * (0.55 + 0.45 * ripple);
   base = mix(base, vec3(0.86, 0.90, 0.92), foam * 0.45);
   alpha = mix(alpha, 0.9, foam * 0.5);
 
+  // Long, broken filaments give the eye a feature it can actually track
+  // downstream. They align to the local flow field, move at its real
+  // speed, and fade completely out on still water.
+  vec2 streamUv = vec2(dot(q, flowDir) * 0.16, dot(q, flowAcross) * 1.35);
+  float filaments = smoothstep(0.68, 0.88, fbm(streamUv + 73.0));
+  float breakup = smoothstep(0.32, 0.72, fbm(q * 0.48 + 113.0));
+  float currentInk = filaments * breakup * smoothstep(0.18, 1.05, flowSpeed);
+  currentInk *= smoothstep(0.04, 0.28, vDepth);
+  base = mix(base, vec3(0.72, 0.82, 0.84), currentInk * 0.24);
+  alpha = clamp(alpha + currentInk * 0.05, 0.0, 1.0);
+
   float diff = max(dot(n, normalize(uSunDir)), 0.0);
   vec3 lit = base * (uAmbient + uSunColor * (0.35 + 0.65 * diff));
-  lit = mix(lit, uFogColor * 0.85, fres * 0.4);
-  lit += uSunColor * spec * 0.35;
+  // A cool sky reflection is the cue that was missing from the almost
+  // black deep water. It grows at grazing angles like real water.
+  vec3 skyReflection = mix(vec3(0.34, 0.48, 0.58), uFogColor, 0.45);
+  lit = mix(lit, skyReflection, fres * 0.58);
+  lit += uSunColor * (specTight * 0.42 + specBroad * 0.07);
   // A touch of the ripple in the albedo so flow is legible even in flat
   // light, where the specular alone would not show it.
-  lit += (ripple - 0.5) * 0.035;
+  lit += (ripple - 0.5) * 0.045 + currentInk * 0.025;
   alpha = clamp(alpha + fres * 0.25, 0.0, 1.0);
 
   float dist = length(vWorldPos - cameraPosition);
@@ -183,9 +216,10 @@ export function makeWaterMaterial(terrain: Physics.TerrainData): THREE.ShaderMat
       uFogFar: { value: 480 },
       uTime: { value: 0 },
       uFlowMap: { value: flowMap },
+      uFlowRange: { value: FLOW_RANGE },
       uTerrainSize: { value: terrain.size },
-      uShallowColor: { value: new THREE.Color(0x6f8f7a) },
-      uDeepColor: { value: new THREE.Color(0x12333c) },
+      uShallowColor: { value: new THREE.Color(0x668f83) },
+      uDeepColor: { value: new THREE.Color(0x16404b) },
       uDeepAt: { value: DEEP_AT },
       uFoamDepth: { value: FOAM_DEPTH },
     },
