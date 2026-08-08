@@ -12,7 +12,8 @@ import {
   type TerrainData,
 } from '../physics/terrain.js';
 import { World, initRapier } from '../physics/world.js';
-import type { CarKind } from '../types.js';
+import type { CarKind, VehicleBuild } from '../types.js';
+import { createStockBuild } from '../vehicleBuild.js';
 
 beforeAll(async () => {
   await initRapier();
@@ -53,7 +54,7 @@ function pondWorld(opts: PondOptions = {}): World {
   return new World({ terrain });
 }
 
-function spawn(world: World, kind: CarKind = 'patrol', y = 1.2): SolidAxleVehicle {
+function spawn(world: World, kind: CarKind | VehicleBuild = 'ridgeback', y = 1.2): SolidAxleVehicle {
   const v = new SolidAxleVehicle(world, 'p', { position: { x: 0, y, z: 0 } }, kind);
   world.vehicles.set(v.id, v);
   return v;
@@ -109,14 +110,14 @@ describe('buoyancy', () => {
     const dryRide = dryV.axleSnaps()[0]!.rideY;
     dry.dispose();
 
-    const wet = pondWorld({ level: 0.6, bed: 0 });
+    const wet = pondWorld({ level: 0.9, bed: 0 });
     const wetV = spawn(wet);
     coast(wet, 180, wetV);
     const wetRide = wetV.axleSnaps()[0]!.rideY;
     wet.dispose();
 
-    // Less spring compression under water means a bigger rideY.
-    expect(wetRide).toBeGreaterThan(dryRide);
+    // Less spring compression under water means a smaller compression DOF.
+    expect(wetRide).toBeLessThan(dryRide);
   });
 
   it('lifts a fully submerged truck back toward the surface', () => {
@@ -130,7 +131,9 @@ describe('buoyancy', () => {
 
   it('eventually swamps and settles instead of floating forever', () => {
     const world = pondWorld({ level: 2.5, bed: -6 });
-    const v = spawn(world, 'patrol', 0);
+    const ridgeback = createStockBuild('ridgeback');
+    ridgeback.snorkelId = 'ridgeback.snorkel.fitted';
+    const v = spawn(world, ridgeback, 0);
     coast(world, 120, v);
     const floating = v.getState().position.y;
     // Long enough for floodFrac to saturate (WATER.swampSeconds).

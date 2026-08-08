@@ -5,7 +5,6 @@
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
-import { buildCarMesh, colorHash } from './carMesh.js';
 
 export class LandmarkMeshes {
   readonly group = new THREE.Group();
@@ -138,16 +137,40 @@ export class LandmarkMeshes {
     back.position.set(baseCx, stripeY, baseCz - park.d / 2);
     root.add(back);
 
-    // Parked Hilux in the middle parking bay. Reuse buildCarMesh so it
-    // looks identical to a player vehicle. No physics body - axle groups
-    // sit at their rest pose (rideY=0, rollAngle=0), which buildAxles
-    // already initialises. Wheels stay at their fixed (+/- trackHalf, 0,
-    // 0) positions inside each axle group.
-    const pk = STATION.parkedCar;
-    const car = buildCarMesh('hilux', false, colorHash(pk.visualHashSeed));
-    car.group.position.set(pk.x, pk.y, pk.z);
-    car.group.rotation.y = pk.yawLocal;
-    root.add(car.group);
+    // Three-bay drive-in workshop. It is assembled from a roof, a rear
+    // wall and individual posts to match the non-blocking shared colliders.
+    const workshop = STATION.workshop;
+    const workshopRoof = new THREE.Mesh(
+      new THREE.BoxGeometry(workshop.w, workshop.roofH, workshop.d),
+      roofMat,
+    );
+    workshopRoof.position.set(workshop.cx, workshop.postHeight + workshop.roofH / 2, workshop.cz);
+    workshopRoof.castShadow = true;
+    root.add(workshopRoof);
+    const rearWall = new THREE.Mesh(
+      new THREE.BoxGeometry(workshop.w, workshop.backWallH, workshop.backWallD),
+      wallMat,
+    );
+    rearWall.position.set(workshop.cx, workshop.backWallH / 2, workshop.cz - workshop.d / 2);
+    rearWall.castShadow = true;
+    root.add(rearWall);
+    for (const x of [workshop.cx - workshop.w / 2, workshop.cx - workshop.w / 6, workshop.cx + workshop.w / 6, workshop.cx + workshop.w / 2]) {
+      for (const z of [workshop.cz - workshop.d / 2, workshop.cz + workshop.d / 2]) {
+        const post = new THREE.Mesh(
+          new THREE.CylinderGeometry(workshop.postRadius, workshop.postRadius, workshop.postHeight, 10),
+          columnMat,
+        );
+        post.position.set(x, workshop.postHeight / 2, z);
+        post.castShadow = true;
+        root.add(post);
+      }
+    }
+    const workshopSign = new THREE.Mesh(
+      new THREE.BoxGeometry(4.8, 0.65, 0.12),
+      accentMat,
+    );
+    workshopSign.position.set(workshop.cx, workshop.postHeight - 0.45, workshop.cz + workshop.d / 2 + 0.08);
+    root.add(workshopSign);
 
     // Sign pole + sign by the road.
     const poleH = 6.5;

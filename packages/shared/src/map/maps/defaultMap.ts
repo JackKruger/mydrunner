@@ -312,7 +312,11 @@ export const defaultMap: MapDoc = {
     "tile": 16
   },
   "id": "procedural",
-  "markers": [],
+  "markers": [
+    { "id": "service-bay-1", "kind": "garageBay", "x": -58, "y": 0, "z": -28.5, "yaw": 3.141592653589793, "radius": 1.65, "label": "Workshop bay 1" },
+    { "id": "service-bay-2", "kind": "garageBay", "x": -55, "y": 0, "z": -28.5, "yaw": 3.141592653589793, "radius": 1.65, "label": "Workshop bay 2" },
+    { "id": "service-bay-3", "kind": "garageBay", "x": -52, "y": 0, "z": -28.5, "yaw": 3.141592653589793, "radius": 1.65, "label": "Workshop bay 3" }
+  ],
   "name": "Procedural Valley",
   "objects": {
     "added": [

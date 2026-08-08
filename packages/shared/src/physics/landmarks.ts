@@ -76,24 +76,22 @@ export const STATION = {
     w: 9,
     d: 5,
   },
+  // Open-sided workshop over the three marked bays. Every structural
+  // element gets its own collider below; there is deliberately no solid
+  // shed-sized box blocking the drive-through openings.
+  workshop: {
+    cx: 9,
+    cz: -6.5,
+    w: 9,
+    d: 7,
+    postRadius: 0.14,
+    postHeight: 4.35,
+    roofH: 0.35,
+    backWallH: 2.2,
+    backWallD: 0.18,
+  },
   // Tall sign on a pole near the road edge of the lot.
   sign: { x: 11, z: 11 },
-  // Parked Hilux in the middle parking bay. Position is the chassis
-  // centre; halfW/H/D match VEHICLE.chassisHalfExtents (1.7m wide x
-  // 0.9m tall x 3.8m long). Yaw 0 means the parked car faces away
-  // from the road. The yawLocal is in radians within the station's
-  // local frame.
-  parkedCar: {
-    x: 9,           // middle of the parking strip (parking.cx)
-    y: 1.5,         // chassis centre at rest height
-    z: -6.5,        // parking.cz (back row)
-    halfW: 0.85,
-    halfH: 0.45,
-    halfD: 1.9,
-    yawLocal: Math.PI, // facing -Z (toward the back wall)
-    /** Hash seed for the visual colour pick. */
-    visualHashSeed: 'parked-hilux',
-  },
 } as const;
 
 export function spawnLandmarkColliders(
@@ -166,16 +164,22 @@ export function spawnLandmarkColliders(
   const poleH = 6.5;
   cylinder(place(sign.x, poleH / 2, sign.z), poleH / 2, 0.12);
 
-  // Parked car in the second bay - just a chassis-sized cuboid for
-  // collision. The visual mesh is added on the client side by reusing
-  // the same buildCarMesh() the live vehicles use.
-  const pk = STATION.parkedCar;
+  const workshop = STATION.workshop;
+  // Roof slab, rear wall and eight individual posts. These colliders
+  // match the visible structure and leave all three front openings clear.
   cuboid(
-    place(pk.x, pk.y, pk.z),
-    pk.halfW,
-    pk.halfH,
-    pk.halfD,
+    place(workshop.cx, workshop.postHeight + workshop.roofH / 2, workshop.cz),
+    workshop.w / 2, workshop.roofH / 2, workshop.d / 2,
   );
+  cuboid(
+    place(workshop.cx, workshop.backWallH / 2, workshop.cz - workshop.d / 2),
+    workshop.w / 2, workshop.backWallH / 2, workshop.backWallD / 2,
+  );
+  for (const x of [workshop.cx - workshop.w / 2, workshop.cx - workshop.w / 6, workshop.cx + workshop.w / 6, workshop.cx + workshop.w / 2]) {
+    for (const z of [workshop.cz - workshop.d / 2, workshop.cz + workshop.d / 2]) {
+      cylinder(place(x, workshop.postHeight / 2, z), workshop.postHeight / 2, workshop.postRadius);
+    }
+  }
 
   return bodies;
 }

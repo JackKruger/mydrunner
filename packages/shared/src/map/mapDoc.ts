@@ -51,10 +51,10 @@ export interface SpawnPoint {
   yaw: number;
 }
 
-export type MarkerKind = 'checkpoint' | 'objective' | 'cargoPickup' | 'cargoDropoff';
+export type MarkerKind = 'checkpoint' | 'objective' | 'cargoPickup' | 'cargoDropoff' | 'garageBay';
 
 export const MARKER_KINDS: readonly MarkerKind[] = [
-  'checkpoint', 'objective', 'cargoPickup', 'cargoDropoff',
+  'checkpoint', 'objective', 'cargoPickup', 'cargoDropoff', 'garageBay',
 ];
 
 /** Authored gameplay marker. Carried and rendered, not yet simulated —
@@ -65,6 +65,8 @@ export interface Marker {
   x: number;
   y: number;
   z: number;
+  /** Authored vehicle yaw for garageBay markers. */
+  yaw?: number;
   radius: number;
   label: string;
 }
@@ -325,6 +327,7 @@ function decodeMarker(v: unknown, path: string): Marker {
     x: num(o.x, `${path}.x`),
     y: num(o.y, `${path}.y`),
     z: num(o.z, `${path}.z`),
+    yaw: o.yaw === undefined ? undefined : num(o.yaw, `${path}.yaw`),
     radius: num(o.radius, `${path}.radius`),
     label: str(o.label, `${path}.label`),
   };

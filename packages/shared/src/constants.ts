@@ -28,7 +28,9 @@
 //    gains buoyancy, drag, current and drowning. Two builds either side
 //    of this disagree about both the map's geometry and how a truck
 //    behaves in it.
-export const PROTOCOL_VERSION = 7;
+// 8: complete VehicleBuild identities, drivetrain/damage telemetry and
+//    acknowledged workshop leasing/build messages.
+export const PROTOCOL_VERSION = 8;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // The client-owned vehicle simulation advances at this fixed cadence.
@@ -330,12 +332,12 @@ export const LEDGE_CONTACT = {
   // the rear axle strikes the face at road speed.
   crawlHoldTicks: 180,
   edgeMotorMaxSpeed: 0.35,
-  edgeMotorMaxForce: 2_500,
+  edgeMotorMaxForce: 10_000,
   edgeMotorMassFraction: 0.25,
   // A sharp corner keys into deformable tread before a rigid-cylinder
   // penalty solver develops much face-normal load. This floor models that
   // mechanical hook; low-friction colliders still reduce the resulting cap.
-  minHookNormalLoad: 1_500,
+  minHookNormalLoad: 6_500,
   // The crawler assist only engages if a downward probe just beyond the
   // face finds an actual upper surface within this hub-rise. Tall walls do
   // not become driveable simply because the tyre touches them.
@@ -353,7 +355,7 @@ export const LEDGE_CONTACT = {
   // detected upper surface. Kept below the handoff rate so the spring and
   // damper load progressively instead of recreating the original launch.
   climbCompressionRate: 0.1,
-  maxClimbSuspensionForce: 6_000,
+  maxClimbSuspensionForce: 6_500,
   // Keep the last validated edge support briefly while the cylinder normal
   // rotates through pure-up and the chassis-axis ray has not yet moved over
   // the top. This bridges query representations, not arbitrary air time.

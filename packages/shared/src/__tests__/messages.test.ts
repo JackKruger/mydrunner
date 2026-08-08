@@ -14,6 +14,7 @@ import {
   encode,
 } from '../net/messages.js';
 import { PROTOCOL_VERSION } from '../constants.js';
+import { createStockBuild } from '../vehicleBuild.js';
 import type { VehicleState } from '../types.js';
 
 const raw = (obj: unknown): Uint8Array => msgpackEncode(obj);
@@ -26,6 +27,8 @@ const vehicle: VehicleState = {
   rpm: 900,
   gear: 2,
   throttle: 0.5,
+  drivetrain: { range: 'low', frontLocked: true, rearLocked: true },
+  damage: { body: 0.75, engine: 0.5, steering: 0.9, stoppedCause: 'collision' },
   wheels: Array.from({ length: 4 }, () => ({
     steer: 0,
     spin: 0,
@@ -42,9 +45,9 @@ const vehicle: VehicleState = {
 describe('decodeClient validation', () => {
   it('round-trips a valid hello', () => {
     const msg = decodeClient(
-      encode({ t: 'hello', name: 'jack', carKind: 'hilux', v: PROTOCOL_VERSION }),
+      encode({ t: 'hello', name: 'jack', build: createStockBuild('stockman-dual'), v: PROTOCOL_VERSION }),
     );
-    expect(msg).toEqual({ t: 'hello', name: 'jack', carKind: 'hilux', v: PROTOCOL_VERSION });
+    expect(msg).toEqual({ t: 'hello', name: 'jack', build: createStockBuild('stockman-dual'), v: PROTOCOL_VERSION });
   });
 
   it('reports a missing or malformed hello version as 0 rather than throwing', () => {
@@ -114,7 +117,9 @@ describe('decodeServer schema guard', () => {
       {
         id: 'p1',
         name: 'jack',
-        carKind: 'patrol' as const,
+        build: createStockBuild('ridgeback'),
+        buildRevision: 3,
+        workshopMode: false,
         stateSeq: 3,
         vehicle,
       },
@@ -125,7 +130,13 @@ describe('decodeServer schema guard', () => {
     const out = decodeServer(encode({ t: 'snapshot', snap }));
     if (out.t !== 'snapshot') throw new Error('expected snapshot');
     expect(out.snap.tick).toBe(7);
-    expect(out.snap.players[0]!.vehicle.position.x).toBeCloseTo(vehicle.position.x, 2);
+    const player = out.snap.players[0]!;
+    expect(player.vehicle.position.x).toBeCloseTo(vehicle.position.x, 2);
+    expect(player.build).toEqual(createStockBuild('ridgeback'));
+    expect(player.buildRevision).toBe(3);
+    expect(player.workshopMode).toBe(false);
+    expect(player.vehicle.drivetrain).toEqual(vehicle.drivetrain);
+    expect(player.vehicle.damage).toEqual(vehicle.damage);
   });
 
   it('rejects a snapshot from an unknown schema version', () => {

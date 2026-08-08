@@ -2,15 +2,18 @@
 // localStorage so subsequent visits skip straight to the game. Tests
 // can pre-populate localStorage to bypass the picker.
 
-import type { CarKind } from '@mydrunner/shared';
-import { normalizeCarKind } from '@mydrunner/shared';
+import type { CarKind, VehicleBaseId, VehicleBuild } from '@mydrunner/shared';
+import { createStockBuild, normalizeVehicleBaseId, normalizeVehicleBuild } from '@mydrunner/shared';
 
 const NAME_KEY = 'mydrunner.name';
 const CAR_KEY = 'mydrunner.carKind';
+export const APPLIED_BUILD_KEY = 'mydrunner.appliedBuild.v1';
 
 export interface JoinChoice {
   name: string;
-  carKind: CarKind;
+  build: VehicleBuild;
+  /** Compatibility mirror for editor handoff code. */
+  carKind: VehicleBaseId;
 }
 
 export function loadSavedJoin(): JoinChoice | null {
@@ -18,7 +21,9 @@ export function loadSavedJoin(): JoinChoice | null {
     const name = localStorage.getItem(NAME_KEY);
     const carRaw = localStorage.getItem(CAR_KEY);
     if (!name) return null;
-    return { name, carKind: normalizeCarKind(carRaw) };
+    const buildRaw = localStorage.getItem(APPLIED_BUILD_KEY);
+    const build = buildRaw ? normalizeVehicleBuild(JSON.parse(buildRaw)) : createStockBuild(normalizeVehicleBaseId(carRaw));
+    return { name, build, carKind: build.baseId };
   } catch {
     return null;
   }
@@ -27,14 +32,15 @@ export function loadSavedJoin(): JoinChoice | null {
 export function saveJoin(choice: JoinChoice): void {
   try {
     localStorage.setItem(NAME_KEY, choice.name);
-    localStorage.setItem(CAR_KEY, choice.carKind);
+    localStorage.setItem(CAR_KEY, choice.build.baseId);
+    localStorage.setItem(APPLIED_BUILD_KEY, JSON.stringify(choice.build));
   } catch {
     /* private browsing / storage disabled - run anyway, just don't persist */
   }
 }
 
 interface CarOption {
-  kind: CarKind;
+  kind: VehicleBaseId;
   name: string;
   desc: string;
   glyph: string;
@@ -43,32 +49,39 @@ interface CarOption {
 
 const CAR_OPTIONS: CarOption[] = [
   {
-    kind: 'patrol',
-    name: 'Patrol GQ',
-    desc: 'Boxy 4x4 SUV. Roof rack, snorkel, bullbar. Tall and upright.',
+    kind: 'ridgeback',
+    name: 'Ridgeback Wagon',
+    desc: 'Articulated trail wagon. Excellent on rocks; taller on side slopes.',
     glyph: '[==]',
     swatchBg: '#d9531e',
   },
   {
-    kind: 'hilux',
-    name: 'Hilux',
-    desc: 'Single-cab ute with a hardtop canopy on the bed.',
+    kind: 'overlander',
+    name: 'Overlander Wagon',
+    desc: 'Stable, durable tourer with predictable grip and longer braking.',
     glyph: '[=#]',
     swatchBg: '#e8e3da',
   },
   {
-    kind: 'ute',
-    name: 'Falcon Ute',
-    desc: 'Sedan-based ute. Low cabin, open tray, chrome sport bar.',
+    kind: 'stockman-single',
+    name: 'Stockman Single Cab',
+    desc: 'Nimble work ute with strong power-to-weight and a light rear.',
     glyph: '[=_]',
     swatchBg: '#f2c200',
   },
   {
-    kind: 'motorbike',
-    name: 'Dual-Sport',
-    desc: 'Lightweight motorbike. Thin frame, knobby tyres, no roof.',
-    glyph: 'oo',
+    kind: 'stockman-dual',
+    name: 'Stockman Dual Cab',
+    desc: 'Balanced utility with a longer wheelbase and useful touring room.',
+    glyph: '[==_]',
     swatchBg: '#2a8acb',
+  },
+  {
+    kind: 'longreach',
+    name: 'Longreach Carrier',
+    desc: 'Expedition rig with high wading ability and a wide turning circle.',
+    glyph: '[===]',
+    swatchBg: '#b6a579',
   },
 ];
 
@@ -80,7 +93,7 @@ export function showJoinScreen(initial: Partial<JoinChoice>): Promise<JoinChoice
     overlay.setAttribute('aria-modal', 'true');
     overlay.setAttribute('aria-labelledby', 'join-title');
 
-    let selected: CarKind = initial.carKind ?? 'patrol';
+    let selected: VehicleBaseId = initial.build?.baseId ?? normalizeVehicleBaseId(initial.carKind);
 
     const card = document.createElement('form');
     card.id = 'join-card';
@@ -93,7 +106,7 @@ export function showJoinScreen(initial: Partial<JoinChoice>): Promise<JoinChoice
           <label for="join-name">Driver call sign</label>
           <input id="join-name" type="text" maxlength="32" autocomplete="nickname" spellcheck="false" placeholder="Enter driver name" />
         </div>
-        <p class="join-driver-note">Online rally session<br />Four rigs available</p>
+        <p class="join-driver-note">Online trail session<br />Five rigs available</p>
       </div>
       <fieldset id="join-rig-fieldset">
         <legend>Choose your rig</legend>
@@ -111,8 +124,8 @@ export function showJoinScreen(initial: Partial<JoinChoice>): Promise<JoinChoice
     nameInput.value = initial.name ?? '';
 
     const carsEl = card.querySelector('#join-cars') as HTMLDivElement;
-    const cardEls = new Map<CarKind, HTMLButtonElement>();
-    const selectCar = (kind: CarKind, focus = false): void => {
+    const cardEls = new Map<VehicleBaseId, HTMLButtonElement>();
+    const selectCar = (kind: VehicleBaseId, focus = false): void => {
       selected = kind;
       for (const [k, el] of cardEls) {
         const isSelected = k === selected;
@@ -154,7 +167,8 @@ export function showJoinScreen(initial: Partial<JoinChoice>): Promise<JoinChoice
     const submit = (): void => {
       const name = nameInput.value.trim().slice(0, 32) || `player-${Math.floor(Math.random() * 1000)}`;
       document.body.removeChild(overlay);
-      resolve({ name, carKind: selected });
+      const build = initial.build?.baseId === selected ? normalizeVehicleBuild(initial.build) : createStockBuild(selected);
+      resolve({ name, build, carKind: selected });
     };
     card.addEventListener('submit', (e) => {
       e.preventDefault();

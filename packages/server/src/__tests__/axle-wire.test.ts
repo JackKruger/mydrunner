@@ -4,7 +4,7 @@
 // owner state can preserve the local truck's flex pose for remote visuals.
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { Physics, EMPTY_INPUT, Net } from '@mydrunner/shared';
+import { Physics, EMPTY_INPUT, Net, createStockBuild } from '@mydrunner/shared';
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -72,7 +72,9 @@ describe('axle wire round-trip', () => {
           {
             id: 'p',
             name: 'p',
-            carKind: 'patrol',
+            build: createStockBuild(),
+            buildRevision: 1,
+            workshopMode: false,
             vehicle: before,
             stateSeq: 0,
           },

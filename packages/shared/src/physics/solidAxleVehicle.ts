@@ -33,13 +33,20 @@ import {
 } from '../constants.js';
 import { TUNING } from '../tuning.js';
 import {
+  BUTTON_FRONT_LOCKER,
+  BUTTON_RANGE,
+  BUTTON_REAR_LOCKER,
   BUTTON_STARTER,
   EMPTY_INPUT,
   type CarKind,
+  type DrivetrainState,
   type PlayerInput,
+  type VehicleBuild,
+  type VehicleDamageState,
   type VehicleState,
   type WheelState,
 } from '../types.js';
+import { createStockBuild, normalizeVehicleBuild } from '../vehicleBuild.js';
 import { Surface, sampleSurface, surfaceInfo } from './terrain.js';
 import {
   computeWaterLoad, createWaterLoad, createWaterState, hasWater,
@@ -82,12 +89,14 @@ import {
   type SteepWheelContact,
   type WheelBasis,
 } from './wheelContact.js';
+import { applyCollisionDamage, createDamageState, repairDamage } from './damage.js';
 
 type Vec3 = { x: number; y: number; z: number };
 
 export class SolidAxleVehicle implements VehicleLike {
   private readonly world: World;
   readonly id: string;
+  readonly build: VehicleBuild;
   readonly body: RAPIER.RigidBody;
   readonly chassis: RAPIER.Collider;
   readonly geom: VehicleGeom;
@@ -95,6 +104,15 @@ export class SolidAxleVehicle implements VehicleLike {
 
   private input: PlayerInput = { ...EMPTY_INPUT };
   private currentSteer = 0;
+  private lastButtons = 0;
+  private readonly drivetrain: DrivetrainState = {
+    range: 'high',
+    frontLocked: false,
+    rearLocked: false,
+  };
+  private readonly damage: VehicleDamageState = createDamageState();
+  private drivetrainNotice: string | null = null;
+  private impactSpeed = 0;
 
   private readonly axles: [AxleState, AxleState];
   private readonly wheels: [WheelKinematic, WheelKinematic, WheelKinematic, WheelKinematic];
@@ -117,10 +135,20 @@ export class SolidAxleVehicle implements VehicleLike {
   // that wrote them; never store references to these.
   private readonly _scratchForce: Vec3 = { x: 0, y: 0, z: 0 };
 
-  constructor(world: World, id: string, spawn: VehicleSpawn, kind: CarKind = 'patrol') {
+  constructor(
+    world: World,
+    id: string,
+    spawn: VehicleSpawn,
+    value: VehicleBuild | CarKind = createStockBuild(),
+  ) {
     this.world = world;
     this.id = id;
-    this.geom = geomFor(kind);
+    this.build = typeof value === 'string'
+      ? createStockBuild(value === 'hilux' ? 'stockman-dual'
+        : value === 'overlander' || value === 'stockman-single' || value === 'stockman-dual' || value === 'longreach'
+          ? value : 'ridgeback')
+      : normalizeVehicleBuild(value);
+    this.geom = geomFor(this.build);
     this.wheelShape = new RAPIER.Cylinder(this.geom.wheelWidth / 2, this.geom.wheelRadius);
 
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
@@ -149,7 +177,7 @@ export class SolidAxleVehicle implements VehicleLike {
     // doesn't clip through the ground when the car is upside-down.
     const colHalfH = (VEHICLE.cabinRoofY + ext.y) / 2;
     const colOffsetY = -ext.y + colHalfH; // center between chassis-bottom and roof
-    const kindMass = VEHICLE.mass * this.geom.massMult;
+    const kindMass = this.geom.spec.massKg;
     const colDesc = RAPIER.ColliderDesc.roundCuboid(ext.x - r, colHalfH - r, ext.z - r, r)
       .setTranslation(0, colOffsetY, 0)
       .setDensity(kindMass / (8 * ext.x * ext.y * ext.z))
@@ -161,8 +189,12 @@ export class SolidAxleVehicle implements VehicleLike {
     // rollovers despite the tall visual cabin.
     this.body.setAdditionalMassProperties(
       0,
-      { x: 0, y: -ext.y * 0.6, z: 0 },
-      { x: kindMass * 0.6, y: kindMass * 0.5, z: kindMass * 0.6 },
+      this.geom.spec.centerOfMass,
+      {
+        x: kindMass * 0.6 * this.geom.spec.inertiaMult,
+        y: kindMass * 0.5 * this.geom.spec.inertiaMult,
+        z: kindMass * 0.6 * this.geom.spec.inertiaMult,
+      },
       { x: 0, y: 0, z: 0, w: 1 },
       true,
     );
@@ -198,7 +230,13 @@ export class SolidAxleVehicle implements VehicleLike {
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     this.currentSteer = 0;
+    this.lastButtons = 0;
     this.input = { ...EMPTY_INPUT };
+    this.drivetrain.range = 'high';
+    this.drivetrain.frontLocked = false;
+    this.drivetrain.rearLocked = false;
+    this.drivetrainNotice = null;
+    repairDamage(this.damage);
     for (const a of this.axles) resetAxleState(a);
     for (const w of this.wheels) resetWheelKinematic(w);
     this.engine = createEngineState();
@@ -226,14 +264,25 @@ export class SolidAxleVehicle implements VehicleLike {
     const fwd = rotateVecByQuat({ x: 0, y: 0, z: 1 }, r);
     const right = rotateVecByQuat({ x: 1, y: 0, z: 0 }, r);
     const up = rotateVecByQuat({ x: 0, y: 1, z: 0 }, r);
+    const groundSpeed = Math.hypot(lv.x, lv.z);
+    this.impactSpeed = groundSpeed;
+    this.updateDrivetrainControls(groundSpeed);
     const wheelBases: Array<WheelBasis | null> = [null, null, null, null];
     const ledgeContacts: Array<SteepWheelContact | null> = [null, null, null, null];
     const ledgeLoads = [0, 0, 0, 0];
 
     // 2. Smooth steering.
-    const targetSteer = this.input.steer * TUNING.maxSteer;
+    const steeringAuthority = 0.28 + this.damage.steering * 0.72;
+    const alignmentPull = (1 - this.damage.steering) * 0.16;
+    const lockerSteer = this.drivetrain.frontLocked ? 0.68
+      : this.drivetrain.rearLocked ? 0.88 : 1;
+    const targetSteer = clamp(
+      this.input.steer * TUNING.maxSteer * steeringAuthority * lockerSteer + alignmentPull,
+      -TUNING.maxSteer,
+      TUNING.maxSteer,
+    );
     const steerDelta = targetSteer - this.currentSteer;
-    const maxStep = TUNING.steerSpeed * dt;
+    const maxStep = TUNING.steerSpeed * this.geom.spec.steeringResponse * dt;
     this.currentSteer +=
       Math.abs(steerDelta) < maxStep ? steerDelta : Math.sign(steerDelta) * maxStep;
 
@@ -282,8 +331,8 @@ export class SolidAxleVehicle implements VehicleLike {
 
       wL.surface = sampleSurface(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
       wR.surface = sampleSurface(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
-      wL.supportGrip = wL.supportIsTerrain ? surfaceGrip(wL.surface) : wL.supportColliderFriction;
-      wR.supportGrip = wR.supportIsTerrain ? surfaceGrip(wR.surface) : wR.supportColliderFriction;
+      wL.supportGrip = wL.supportIsTerrain ? surfaceGrip(wL.surface, this.geom) : wL.supportColliderFriction;
+      wR.supportGrip = wR.supportIsTerrain ? surfaceGrip(wR.surface, this.geom) : wR.supportColliderFriction;
 
       // Water between the tread and the bed, on top of whatever the bed
       // itself grips at. Keeping the bed surface is the reason water is
@@ -292,8 +341,8 @@ export class SolidAxleVehicle implements VehicleLike {
       if (this.worldHasWater) {
         wL.waterDepth = sampleWaterDepth(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
         wR.waterDepth = sampleWaterDepth(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
-        wL.supportGrip *= wetGripMult(wL.waterDepth, this.geom.wheelRadius);
-        wR.supportGrip *= wetGripMult(wR.waterDepth, this.geom.wheelRadius);
+        wL.supportGrip *= wetGripMult(wL.waterDepth, this.geom.wheelRadius) * this.geom.spec.grip.wet;
+        wR.supportGrip *= wetGripMult(wR.waterDepth, this.geom.wheelRadius) * this.geom.spec.grip.wet;
       }
 
       // A second, volumetric query catches faces the suspension-axis ray
@@ -594,6 +643,8 @@ export class SolidAxleVehicle implements VehicleLike {
       this.waterLoad.drowned,
       (this.input.buttons & BUTTON_STARTER) !== 0,
     );
+    if (this.engine.drowned) this.damage.stoppedCause = 'flooding';
+    else if (this.damage.stoppedCause === 'flooding') this.damage.stoppedCause = 'none';
 
     // 4. Engine + gearbox.
     const avgAngVel = (this.wheels[0]!.angVel + this.wheels[1]!.angVel + this.wheels[2]!.angVel + this.wheels[3]!.angVel) / 4;
@@ -603,22 +654,29 @@ export class SolidAxleVehicle implements VehicleLike {
     // Passed separately so the engine uses it for shift decisions without
     // being confused by wheel slip (see engine.ts for the full rationale).
     const vehicleAngVel = Math.abs(longSpeed) / this.geom.wheelRadius;
-    const engineOut = stepEngine(this.engine, signedAvg, vehicleAngVel, this.input.throttle, dt);
+    let engineOut = stepEngine(this.engine, signedAvg, vehicleAngVel, this.input.throttle, dt);
+    if (this.damage.engine <= 0.08) {
+      engineOut = { wheelForce: 0, rpm: Math.max(0, this.lastRpm - 900 * dt), gear: 0 };
+      this.damage.stoppedCause = 'collision';
+    }
     this.lastRpm = engineOut.rpm;
     this.lastGear = engineOut.gear;
-    const drivePerWheelTorque = engineOut.wheelForce * this.geom.powerMult; // engine.ts returns torque-shaped values
+    const engineHealthMult = 0.38 + this.damage.engine * 0.62;
+    const rangeMult = this.drivetrain.range === 'low' ? this.geom.spec.lowRangeRatio : 1;
+    const drivePerWheelTorque = engineOut.wheelForce * this.geom.powerMult
+      * engineHealthMult * rangeMult; // engine.ts returns torque-shaped values
 
     // Incline assist (matches legacy semantics).
     const climb = Math.min(0.5, Math.max(0, fwd.y));
     const inclineMult = 1 + (climb / 0.5) * TUNING.inclineAssistMax;
 
     // 5. Diff lock equalisation (per axle, before slip).
-    if (TUNING.diffLockFront) {
+    if (TUNING.diffLockFront || this.drivetrain.frontLocked) {
       const a = this.wheels[0]!, b = this.wheels[1]!;
       const avg = 0.5 * (a.angVel + b.angVel);
       a.angVel = avg; b.angVel = avg;
     }
-    if (TUNING.diffLockRear) {
+    if (TUNING.diffLockRear || this.drivetrain.rearLocked) {
       const a = this.wheels[2]!, b = this.wheels[3]!;
       const avg = 0.5 * (a.angVel + b.angVel);
       a.angVel = avg; b.angVel = avg;
@@ -640,6 +698,16 @@ export class SolidAxleVehicle implements VehicleLike {
     }
     const crawlActive = this.ledgeCrawlTicks > 0;
     const crawlRatio = crawlActive ? LEDGE_CONTACT.crawlTorqueMultiplier : 1;
+    if (this.drivetrain.range === 'low' && Math.abs(longSpeed) > this.geom.spec.lowRangeMaxSpeed) {
+      const overspeed = Math.abs(longSpeed) - this.geom.spec.lowRangeMaxSpeed;
+      const governorForce = Math.min(14_000, overspeed * 5_000);
+      const sign = Math.sign(longSpeed);
+      this.body.addForce({
+        x: -fwd.x * governorForce * sign,
+        y: -fwd.y * governorForce * sign,
+        z: -fwd.z * governorForce * sign,
+      }, true);
+    }
     if (crawlActive && Math.abs(longSpeed) > LEDGE_CONTACT.crawlMaxSpeed) {
       const overspeed = Math.abs(longSpeed) - LEDGE_CONTACT.crawlMaxSpeed;
       const governorForce = Math.min(
@@ -693,7 +761,8 @@ export class SolidAxleVehicle implements VehicleLike {
       if (w.waterDepth > 0) {
         rollingMult += (WATER.wheelDragMult - 1) * wheelSubmersion(w.waterDepth, this.geom.wheelRadius);
       }
-      const rollingResistance = WHEEL.rollingResistance * rollingMult;
+      const rollingResistance = WHEEL.rollingResistance * rollingMult
+        * this.geom.spec.rollingResistanceMult;
 
       // Pick one torque-transmitting patch. A steep tyre-volume contact
       // takes priority so drive torque acts up its tangent; the support ray
@@ -838,6 +907,30 @@ export class SolidAxleVehicle implements VehicleLike {
       if (groundSpeed < STATIONARY && Math.abs(w.angVel) < 1.0) continue;
       w.spin += w.angVel * FIXED_DT;
     }
+    let strongestImpulse = 0;
+    let strongestPoint: Vec3 | null = null;
+    this.world.world.contactPairsWith(this.chassis, (other) => {
+      this.world.world.contactPair(this.chassis, other, (manifold, flipped) => {
+        for (let i = 0; i < manifold.numContacts(); i++) {
+          const impulse = Math.abs(manifold.contactImpulse(i));
+          if (impulse <= strongestImpulse) continue;
+          const point = flipped
+            ? manifold.localContactPoint2(i)
+            : manifold.localContactPoint1(i);
+          if (!point) continue;
+          strongestImpulse = impulse;
+          strongestPoint = { x: point.x, y: point.y, z: point.z };
+        }
+      });
+    });
+    if (strongestPoint) {
+      applyCollisionDamage(this.damage, {
+        impulse: strongestImpulse,
+        localPoint: strongestPoint,
+        chassisHalfExtents: this.geom.chassisHalfExtents,
+        approach: Math.min(1, this.impactSpeed / 10),
+      }, this.geom.spec.damageResistance, this.geom.spec.bullbarEngineProtection);
+    }
     // Visual axle pose (rideY/rollAngle) is left at the value preStep
     // computed from the pre-integration body pose. The previous
     // implementation re-cast 4 rays per vehicle here so the axle visual
@@ -876,6 +969,8 @@ export class SolidAxleVehicle implements VehicleLike {
       rpm: this.lastRpm,
       gear: this.lastGear,
       throttle: this.input.throttle,
+      drivetrain: { ...this.drivetrain },
+      damage: { ...this.damage },
       wheels,
       axles: [
         { rideY: aFront.rideY, rollAngle: aFront.rollAngle },
@@ -917,6 +1012,58 @@ export class SolidAxleVehicle implements VehicleLike {
   applyAxleSnaps(snaps: [AxleSnap, AxleSnap]): void {
     applyAxleSnap(this.axles[0]!, snaps[0]);
     applyAxleSnap(this.axles[1]!, snaps[1]);
+  }
+
+  repair(): void {
+    repairDamage(this.damage);
+    this.engine = createEngineState();
+    this.lastRpm = this.engine.rpm;
+    this.lastGear = 0;
+    resetWaterState(this.water);
+  }
+
+  damageStatus(): VehicleDamageState {
+    return { ...this.damage };
+  }
+
+  drivetrainStatus(): DrivetrainState {
+    return { ...this.drivetrain };
+  }
+
+  consumeDrivetrainNotice(): string | null {
+    const notice = this.drivetrainNotice;
+    this.drivetrainNotice = null;
+    return notice;
+  }
+
+  private updateDrivetrainControls(speed: number): void {
+    if (this.drivetrain.frontLocked && speed > 7.5) {
+      this.drivetrain.frontLocked = false;
+      this.drivetrainNotice = 'Front locker disengaged above its safe speed.';
+    }
+    if (this.drivetrain.rearLocked && speed > 14) {
+      this.drivetrain.rearLocked = false;
+      this.drivetrainNotice = 'Rear locker disengaged above its safe speed.';
+    }
+    const rising = this.input.buttons & ~this.lastButtons;
+    this.lastButtons = this.input.buttons;
+    const canShift = speed < 1.8 && Math.abs(this.input.throttle) < 0.18;
+    if ((rising & BUTTON_RANGE) !== 0) {
+      if (!canShift) this.drivetrainNotice = 'Slow down and release the throttle to change range.';
+      else this.drivetrain.range = this.drivetrain.range === 'high' ? 'low' : 'high';
+    }
+    if ((rising & BUTTON_REAR_LOCKER) !== 0) {
+      if (!this.build.rearLocker) this.drivetrainNotice = 'Fit a rear locker in the workshop first.';
+      else if (this.drivetrain.rearLocked) this.drivetrain.rearLocked = false;
+      else if (!canShift) this.drivetrainNotice = 'Slow down and release the throttle to engage the rear locker.';
+      else this.drivetrain.rearLocked = true;
+    }
+    if ((rising & BUTTON_FRONT_LOCKER) !== 0) {
+      if (!this.build.frontLocker) this.drivetrainNotice = 'Fit a front locker in the workshop first.';
+      else if (this.drivetrain.frontLocked) this.drivetrain.frontLocked = false;
+      else if (!canShift) this.drivetrainNotice = 'Slow down and release the throttle to engage the front locker.';
+      else this.drivetrain.frontLocked = true;
+    }
   }
 
   dispose(): void {
@@ -1114,9 +1261,15 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-function surfaceGrip(s: number): number {
+function surfaceGrip(s: number, geom: VehicleGeom): number {
   // TUNING rather than SURFACE_FRICTION: the debug panel mutates the
   // former in place, and this is the reader that makes those sliders do
   // something.
-  return TUNING.surfaceFriction[surfaceInfo(s).friction];
+  const key = surfaceInfo(s).friction;
+  const compound = key === 'road' || key === 'concrete' ? geom.spec.grip.road
+    : key === 'dirt' || key === 'grass' ? geom.spec.grip.dirt
+    : key === 'gravel' ? geom.spec.grip.gravel
+    : key === 'mud' ? geom.spec.grip.mud
+    : geom.spec.grip.deepMud;
+  return TUNING.surfaceFriction[key] * compound;
 }

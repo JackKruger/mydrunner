@@ -5,7 +5,8 @@
 // on the Patrol mesh is decoration.
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { BUTTON_STARTER, EMPTY_INPUT, type CarKind } from '../types.js';
+import { BUTTON_STARTER, EMPTY_INPUT, type CarKind, type VehicleBuild } from '../types.js';
+import { createStockBuild } from '../vehicleBuild.js';
 import { ENGINE, WATER } from '../constants.js';
 import {
   createEngineState, stepEngine, stepEngineFlooding,
@@ -41,7 +42,7 @@ function floodedWorld(level: number): World {
   return new World({ terrain });
 }
 
-function run(world: World, kind: CarKind, ticks: number, buttons = 0): SolidAxleVehicle {
+function run(world: World, kind: CarKind | VehicleBuild, ticks: number, buttons = 0): SolidAxleVehicle {
   const v = new SolidAxleVehicle(world, 'p', { position: { x: 0, y: 1.0, z: 0 } }, kind);
   world.vehicles.set(v.id, v);
   for (let i = 0; i < ticks; i++) {
@@ -59,7 +60,7 @@ function run(world: World, kind: CarKind, ticks: number, buttons = 0): SolidAxle
  *  offset. Hardcoding a level from the offset alone tests nothing —
  *  every kind's intake would sit half a metre higher than the number
  *  used, and nothing would ever drown. */
-function intakeWorldY(kind: CarKind): number {
+function intakeWorldY(kind: CarKind | VehicleBuild): number {
   const world = floodedWorld(-1e9);
   const v = run(world, kind, 180);
   const y = v.getState().position.y + geomFor(kind).airIntakeY;
@@ -68,38 +69,37 @@ function intakeWorldY(kind: CarKind): number {
 }
 
 describe('the air intake decides who drowns', () => {
-  it('orders the kinds by intake height', () => {
+  it('orders the five factory intakes by vehicle role', () => {
     // The data that makes the rest of this file mean anything.
-    expect(geomFor('patrol').airIntakeY).toBeGreaterThan(geomFor('hilux').airIntakeY);
-    expect(geomFor('hilux').airIntakeY).toBeGreaterThan(geomFor('ute').airIntakeY);
-    expect(geomFor('ute').airIntakeY).toBeGreaterThan(geomFor('motorbike').airIntakeY);
+    expect(geomFor('longreach').airIntakeY).toBeGreaterThan(geomFor('overlander').airIntakeY);
+    expect(geomFor('overlander').airIntakeY).toBeGreaterThan(geomFor('ridgeback').airIntakeY);
+    expect(geomFor('ridgeback').airIntakeY).toBeGreaterThan(geomFor('stockman-dual').airIntakeY);
+    expect(geomFor('stockman-dual').airIntakeY).toBeGreaterThan(geomFor('stockman-single').airIntakeY);
   });
 
-  it('drowns the Hilux at a depth the snorkelled Patrol shrugs off', () => {
-    // Between the two intakes as they actually sit in the world: over
-    // the Hilux's grille, under the Patrol's snorkel.
-    const level = (intakeWorldY('patrol') + intakeWorldY('hilux')) / 2;
+  it('makes a fitted snorkel raise the real flooding point', () => {
+    const factory = createStockBuild('ridgeback');
+    const snorkelled = { ...factory, snorkelId: 'ridgeback.snorkel.fitted' };
+    const level = (intakeWorldY(factory) + intakeWorldY(snorkelled)) / 2;
 
     const wet = floodedWorld(level);
-    const hilux = run(wet, 'hilux', WATER.drownTicks + 40);
-    expect(hilux.waterStatus().drowned).toBe(true);
+    expect(run(wet, factory, WATER.drownTicks + 40).waterStatus().drowned).toBe(true);
     wet.dispose();
 
     const wet2 = floodedWorld(level);
-    const patrol = run(wet2, 'patrol', WATER.drownTicks + 40);
-    expect(patrol.waterStatus().drowned).toBe(false);
+    expect(run(wet2, snorkelled, WATER.drownTicks + 40).waterStatus().drowned).toBe(false);
     wet2.dispose();
   });
 
-  it('drowns the bike where the ute survives', () => {
-    const level = (intakeWorldY('ute') + intakeWorldY('motorbike')) / 2;
+  it('lets the expedition Longreach survive water that drowns the work ute', () => {
+    const level = (intakeWorldY('longreach') + intakeWorldY('stockman-single')) / 2;
 
     const a = floodedWorld(level);
-    expect(run(a, 'motorbike', WATER.drownTicks + 40).waterStatus().drowned).toBe(true);
+    expect(run(a, 'stockman-single', WATER.drownTicks + 40).waterStatus().drowned).toBe(true);
     a.dispose();
 
     const b = floodedWorld(level);
-    expect(run(b, 'ute', WATER.drownTicks + 40).waterStatus().drowned).toBe(false);
+    expect(run(b, 'longreach', WATER.drownTicks + 40).waterStatus().drowned).toBe(false);
     b.dispose();
   });
 

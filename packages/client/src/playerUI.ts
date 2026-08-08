@@ -27,6 +27,13 @@ export interface PlayerTelemetry {
   tick?: number;
   fps?: number;
   previewDiagnostic?: string;
+  range?: 'high' | 'low';
+  frontLocked?: boolean;
+  rearLocked?: boolean;
+  bodyCondition?: number;
+  engineCondition?: number;
+  steeringCondition?: number;
+  drivetrainNotice?: string;
 }
 
 export interface PlayerHudState extends PlayerTelemetry {
@@ -79,6 +86,8 @@ export class PlayerUI {
   private readonly tickText: HTMLElement;
   private readonly fpsText: HTMLElement;
   private readonly previewDiagnosticText: HTMLElement;
+  private readonly drivetrainText: HTMLElement;
+  private readonly conditionText: HTMLElement;
 
   constructor(root: HTMLElement, options: PlayerUIOptions) {
     this.root = root;
@@ -93,6 +102,9 @@ export class PlayerUI {
       tick: 0,
       fps: 0,
       previewDiagnostic: '',
+      range: 'high', frontLocked: false, rearLocked: false,
+      bodyCondition: 1, engineCondition: 1, steeringCondition: 1,
+      drivetrainNotice: '',
       version: options.version,
     };
 
@@ -140,6 +152,8 @@ export class PlayerUI {
           </div>
         </div>
         <div id="hud-handbrake" class="hud-handbrake" role="status" aria-live="polite"></div>
+        <div id="hud-drivetrain" class="hud-drivetrain" role="status">HIGH · LOCKERS OPEN</div>
+        <div id="hud-condition" class="hud-condition" role="status"></div>
       </section>
 
       <section id="hud-diagnostics" class="hud-diagnostics instrument-panel" aria-label="Development diagnostics"${options.development ? '' : ' hidden'}>
@@ -164,6 +178,8 @@ export class PlayerUI {
     this.tickText = root.querySelector('#hud-tick')!;
     this.fpsText = root.querySelector('#hud-fps')!;
     this.previewDiagnosticText = root.querySelector('#hud-preview-diagnostic')!;
+    this.drivetrainText = root.querySelector('#hud-drivetrain')!;
+    this.conditionText = root.querySelector('#hud-condition')!;
 
     this.renderConnection();
     this.renderTelemetry();
@@ -226,6 +242,16 @@ export class PlayerUI {
     this.handbrakeText.classList.toggle('active', this.state.handbrake);
     this.handbrakeText.textContent = this.state.handbrake ? 'HANDBRAKE' : '';
     this.handbrakeText.setAttribute('aria-hidden', String(!this.state.handbrake));
+
+    const locks = [this.state.rearLocked ? 'R LOCK' : '', this.state.frontLocked ? 'F LOCK' : ''].filter(Boolean).join(' · ');
+    this.drivetrainText.textContent = `${this.state.range === 'low' ? 'LOW RANGE' : 'HIGH RANGE'} · ${locks || 'LOCKERS OPEN'}`;
+    if (this.state.drivetrainNotice) this.drivetrainText.textContent = this.state.drivetrainNotice;
+    const body = Math.round((this.state.bodyCondition ?? 1) * 100);
+    const engine = Math.round((this.state.engineCondition ?? 1) * 100);
+    const steering = Math.round((this.state.steeringCondition ?? 1) * 100);
+    const damaged = body < 98 || engine < 98 || steering < 98;
+    this.conditionText.textContent = damaged ? `BODY ${body} · ENGINE ${engine} · STEERING ${steering}` : '';
+    this.conditionText.classList.toggle('active', damaged);
 
     this.tickText.textContent = `tick=${this.state.tick ?? 0}`;
     this.fpsText.textContent = `${this.state.fps ?? 0} FPS`;

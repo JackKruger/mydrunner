@@ -9,7 +9,14 @@
 // display rate so fixed ticks do not show up as chassis stepping.
 
 import {
-  Maps, Physics, FIXED_DT, SNAPSHOT_RATE, normalizeCarKind, type CarKind, type PlayerId,
+  Maps,
+  Physics,
+  FIXED_DT,
+  SNAPSHOT_RATE,
+  createStockBuild,
+  normalizeVehicleBaseId,
+  type PlayerId,
+  type VehicleBuild,
 } from '@mydrunner/shared';
 
 import { EngineAudio } from './engineAudio.js';
@@ -25,6 +32,7 @@ import { PlayerUI } from './playerUI.js';
 import { Scene } from './scene.js';
 import { LocalSimulation } from './localSimulation.js';
 import { readPreview } from './previewHandoff.js';
+import { WorkshopUI } from './workshop.js';
 
 function getServerUrl(): string {
   const explicit = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -44,6 +52,12 @@ initInput();
 initTouchInput();
 const scene = new Scene(app);
 const engineAudio = new EngineAudio();
+const workshop = new WorkshopUI();
+const workshopPrompt = document.createElement('button');
+workshopPrompt.id = 'workshop-prompt';
+workshopPrompt.type = 'button';
+workshopPrompt.textContent = 'F · OPEN WORKSHOP';
+document.body.appendChild(workshopPrompt);
 
 // Network + frame diagnostics: snapshot arrival jitter and per-frame
 // CPU/GPU breakdown. Cheap counters, flushed every 5 s. Jitter (gaps
@@ -161,9 +175,24 @@ let lastSnapTick = 0;
 let lastSpeed = 0;
 let lastRpm = 0;
 let lastGear = 0;
+let lastRange: 'high' | 'low' = 'high';
+let lastFrontLocked = false;
+let lastRearLocked = false;
+let lastBodyCondition = 1;
+let lastEngineCondition = 1;
+let lastSteeringCondition = 1;
+let lastStoppedCause: 'none' | 'collision' | 'flooding' = 'none';
+let drivetrainNotice = '';
+let drivetrainNoticeUntil = 0;
 let lastFrameTimeMs = performance.now();
 let mapWorld: Maps.MapWorld | null = null;
 let localSimulation: LocalSimulation | null = null;
+let currentBuild: VehicleBuild = createStockBuild();
+let currentBuildRevision = 1;
+let nearbyBayId: string | null = null;
+let workshopLeaseId: string | null = null;
+let workshopPose: { position: { x: number; y: number; z: number }; yaw: number } | null = null;
+let workshopEntryPending = false;
 /** Driving a map handed over by the editor, with no server and no socket.
  *  Set before any NetClient exists, and never unset. */
 let previewMode = false;
@@ -193,11 +222,13 @@ let lastFpsUpdate = performance.now();
 function enterWorld(
   doc: Maps.MapDoc,
   spawn: { position: { x: number; y: number; z: number }; yaw?: number },
-  carKind: CarKind,
+  build: VehicleBuild,
   id: PlayerId,
 ): void {
   localId = id;
-  scene.setLocalPlayer(id, carKind);
+  currentBuild = build;
+  currentBuildRevision = 1;
+  scene.setLocalPlayer(id, build, currentBuildRevision);
   // Compose the map ONCE and share it everywhere it's needed: the terrain
   // mesh, obstacles, landmarks, the surface-name HUD lookup, and the
   // local sim. It used to be regenerated five times from the same seed
@@ -208,7 +239,7 @@ function enterWorld(
   // so the local Rapier world integrates against an identical heightmap and
   // obstacle set and starts at the same pose.
   localSimulation?.dispose();
-  localSimulation = new LocalSimulation(mapWorld, spawn, carKind);
+  localSimulation = new LocalSimulation(mapWorld, spawn, build);
   inputAcc = 0;
   stateUploadAcc = 0;
   stateSeq = 0;
@@ -278,7 +309,7 @@ function wireCameraControls(): void {
  *  online path, so preview mode gets none of them without a single
  *  suppression check. The truck uses the same standalone LocalSimulation
  *  as online play; preview simply omits state upload and remote proxies. */
-function startPreview(params: URLSearchParams, savedCar: CarKind | undefined): void {
+function startPreview(params: URLSearchParams, savedBuild: VehicleBuild | undefined): void {
   const payload = readPreview();
   if (!payload) {
     playerUI.setConnectionState({ mode: 'missing-preview' });
@@ -288,17 +319,19 @@ function startPreview(params: URLSearchParams, savedCar: CarKind | undefined): v
   previewMapName = payload.doc.name || payload.doc.id;
   playerUI.setConnectionState({ mode: 'preview', mapName: previewMapName });
   const carParam = params.get('car');
-  const carKind = carParam ? normalizeCarKind(carParam) : (savedCar ?? payload.carKind);
+  const build = carParam
+    ? createStockBuild(normalizeVehicleBaseId(carParam))
+    : (savedBuild ?? createStockBuild(normalizeVehicleBaseId(payload.carKind)));
 
   // Composed once here purely to resolve the spawn, then again inside
   // enterWorld. The alternative is threading a half-built world through,
   // which costs more clarity than the ~50 ms buys back on a page that has
   // just loaded a WASM blob.
   const world = Maps.applyMapDoc(payload.doc);
-  const spawn = Maps.resolveSpawn(world, 0, carKind);
-  enterWorld(payload.doc, spawn, carKind, 'preview');
+  const spawn = Maps.resolveSpawn(world, 0, build);
+  enterWorld(payload.doc, spawn, build, 'preview');
 
-  installPreviewControls(spawn, carKind);
+  installPreviewControls(spawn, build);
   wireCameraControls();
   requestAnimationFrame(frame);
 }
@@ -308,7 +341,7 @@ function startPreview(params: URLSearchParams, savedCar: CarKind | undefined): v
  *  Plain R already respawns at the start via the reset button, which is
  *  useless when the thing you are testing is 300 m out and you have just
  *  rolled onto the roof beside it. */
-function installPreviewControls(spawn: Maps.SpawnPose, carKind: CarKind): void {
+function installPreviewControls(spawn: Maps.SpawnPose, build: VehicleBuild): void {
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Escape') {
       // Valid because the editor opened this tab with window.open.
@@ -329,7 +362,7 @@ function installPreviewControls(spawn: Maps.SpawnPose, carKind: CarKind): void {
       const idx = Physics.worldToTerrainIndex(mapWorld.terrain, p.x, p.z);
       const ground = idx >= 0 ? (mapWorld.terrain.heights[idx] ?? 0) : 0;
       localSimulation.resetTo({
-        position: { x: p.x, y: ground + Physics.spawnYAboveGround(carKind), z: p.z },
+        position: { x: p.x, y: ground + Physics.spawnYAboveGround(build), z: p.z },
         yaw: spawn.yaw,
       });
     }
@@ -352,7 +385,7 @@ async function start(): Promise<void> {
   // screen and before any NetClient exists: there is no server in this
   // mode, so there is nothing to join and no name to pick.
   if (params.get('preview') === '1') {
-    startPreview(params, saved?.carKind);
+    startPreview(params, saved?.build);
     return;
   }
 
@@ -362,7 +395,8 @@ async function start(): Promise<void> {
     const carParam = params.get('car');
     choice = {
       name: params.get('name') || saved?.name || `player-${Math.floor(Math.random() * 1000)}`,
-      carKind: carParam ? normalizeCarKind(carParam) : (saved?.carKind ?? 'patrol'),
+      build: carParam ? createStockBuild(normalizeVehicleBaseId(carParam)) : (saved?.build ?? createStockBuild()),
+      carKind: carParam ? normalizeVehicleBaseId(carParam) : (saved?.build.baseId ?? 'ridgeback'),
     };
   } else {
     choice = await showJoinScreen(saved ?? {});
@@ -387,7 +421,7 @@ async function start(): Promise<void> {
   let reconnectDelayMs = 1000;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const net = new NetClient(getServerUrl(), choice.name, choice.carKind, {
+  const net = new NetClient(getServerUrl(), choice.name, choice.build, {
     onOpen() {
       connected = true;
       stateUploadReady = false;
@@ -395,7 +429,7 @@ async function start(): Promise<void> {
       playerUI.setConnectionState({ mode: 'connected', driverName: choice.name });
       chat.pushSystem('connected — press T to chat');
     },
-    onWelcome(id, _serverTimeMs, map, spawn) {
+    onWelcome(id, _serverTimeMs, map, spawn, build) {
       // The server names a map; this build supplies it. A map it does not
       // have, or has at a different revision, means the two bundles
       // disagree about the ground — refuse rather than drive on it.
@@ -404,7 +438,7 @@ async function start(): Promise<void> {
         net.abort(resolved.reason);
         return;
       }
-      enterWorld(resolved.doc, spawn, choice.carKind, id);
+      enterWorld(resolved.doc, spawn, build, id);
       stateUploadReady = true;
       playerUI.setConnectionState({
         mode: 'connected',
@@ -416,6 +450,16 @@ async function start(): Promise<void> {
       lastSnapTick = snap.tick;
       scene.pushSnapshot(snap, recvAtMs);
       netDiagOnSnapshot(recvAtMs);
+      if (localId) {
+        const me = snap.players.find((player) => player.id === localId);
+        if (me && workshop.isOpen && !me.workshopMode && workshopLeaseId) {
+          workshop.setStatus('Workshop lease expired.', true);
+          workshop.close();
+          localSimulation?.exitWorkshop();
+          workshopLeaseId = null;
+          workshopPose = null;
+        }
+      }
       // Owner physics is intentionally untouched. The snapshot exists for
       // remote-player interpolation and membership only.
     },
@@ -459,11 +503,64 @@ async function start(): Promise<void> {
       }, reconnectDelayMs);
       reconnectDelayMs = Math.min(15_000, reconnectDelayMs * 2);
     },
+    onWorkshopAck(msg) {
+      if (msg.action === 'enter') workshopEntryPending = false;
+      if (!msg.ok) {
+        workshop.setBusy(false);
+        workshop.setStatus(msg.reason ?? 'Workshop request rejected.', true);
+        if (msg.action === 'enter') chat.pushSystem(msg.reason ?? 'workshop entry rejected');
+        return;
+      }
+      if (msg.action === 'enter' && msg.leaseId && msg.pose && msg.build) {
+        workshopLeaseId = msg.leaseId;
+        workshopPose = msg.pose;
+        localSimulation?.enterWorkshop(msg.pose);
+        workshop.open(msg.build, {
+          onApply: (nextBuild) => net.applyBuild(msg.leaseId!, nextBuild),
+          onExit: () => net.exitWorkshop(msg.leaseId!),
+          onRepair: () => localSimulation?.repair(),
+        });
+        return;
+      }
+      if (msg.action === 'apply' && msg.build && msg.pose && msg.buildRevision !== undefined) {
+        currentBuild = msg.build;
+        currentBuildRevision = msg.buildRevision;
+        workshopPose = msg.pose;
+        workshop.confirmApplied(msg.build);
+        localSimulation?.applyBuild(msg.build, msg.pose);
+        if (localId) scene.setLocalPlayer(localId, msg.build, msg.buildRevision);
+        choice.build = msg.build;
+        choice.carKind = msg.build.baseId;
+        saveJoin(choice);
+        if (workshopLeaseId) net.exitWorkshop(workshopLeaseId);
+        return;
+      }
+      if (msg.action === 'exit') {
+        localSimulation?.exitWorkshop();
+        workshop.close();
+        workshopLeaseId = null;
+        workshopPose = null;
+      }
+    },
   });
   currentNet = net;
   net.connect();
 
   wireCameraControls();
+
+  const requestWorkshop = (): void => {
+    if (!nearbyBayId || workshopEntryPending || workshop.isOpen) return;
+    workshopEntryPending = true;
+    workshopPrompt.classList.remove('visible');
+    net.enterWorkshop(nearbyBayId);
+  };
+  workshopPrompt.addEventListener('click', requestWorkshop);
+  window.addEventListener('keydown', (event) => {
+    if (event.code === 'KeyF' && !event.repeat && !chat.isOpen()) {
+      event.preventDefault();
+      requestWorkshop();
+    }
+  });
 
   // T opens the chat input. The chat module's own keydown handler
   // catches Enter / Escape to submit / cancel. Mobile users use the
@@ -524,6 +621,17 @@ function frame(): void {
     lastSpeed = telemetry.speed;
     lastRpm = telemetry.rpm;
     lastGear = telemetry.gear;
+    lastRange = telemetry.drivetrain.range;
+    lastFrontLocked = telemetry.drivetrain.frontLocked;
+    lastRearLocked = telemetry.drivetrain.rearLocked;
+    lastBodyCondition = telemetry.damage.body;
+    lastEngineCondition = telemetry.damage.engine;
+    lastSteeringCondition = telemetry.damage.steering;
+    lastStoppedCause = telemetry.damage.stoppedCause;
+    if (telemetry.notice) {
+      drivetrainNotice = telemetry.notice;
+      drivetrainNoticeUntil = now + 2600;
+    }
     engineAudio.set(telemetry.rpm, telemetry.throttle);
 
     // Publish canonical owner state independently of render/physics cadence.
@@ -541,6 +649,8 @@ function frame(): void {
       }
     }
   }
+
+  updateWorkshopPrompt();
 
   const renderStart = performance.now();
   scene.render(now);
@@ -576,6 +686,7 @@ function engineStatusLabel(): string {
   const w = localSimulation?.waterStatus();
   if (!w) return '';
   if (w.drowned) return 'ENGINE FLOODED — HOLD E';
+  if (lastStoppedCause === 'collision') return 'ENGINE STOPPED — COLLISION DAMAGE';
   if (w.intakeSubmerged) return 'INTAKE UNDER';
   return '';
 }
@@ -595,6 +706,13 @@ function updateHud(): void {
       engineStatus: engineStatusLabel(),
       fps,
       previewDiagnostic: 'offline physics',
+      range: t?.drivetrain.range ?? 'high',
+      frontLocked: t?.drivetrain.frontLocked ?? false,
+      rearLocked: t?.drivetrain.rearLocked ?? false,
+      bodyCondition: t?.damage.body ?? 1,
+      engineCondition: t?.damage.engine ?? 1,
+      steeringCondition: t?.damage.steering ?? 1,
+      drivetrainNotice: performance.now() < drivetrainNoticeUntil ? drivetrainNotice : '',
     });
     return;
   }
@@ -608,7 +726,39 @@ function updateHud(): void {
     tick: lastSnapTick,
     fps,
     previewDiagnostic: '',
+    range: lastRange,
+    frontLocked: lastFrontLocked,
+    rearLocked: lastRearLocked,
+    bodyCondition: lastBodyCondition,
+    engineCondition: lastEngineCondition,
+    steeringCondition: lastSteeringCondition,
+    drivetrainNotice: performance.now() < drivetrainNoticeUntil ? drivetrainNotice : '',
   });
+}
+
+function updateWorkshopPrompt(): void {
+  nearbyBayId = null;
+  if (!connected || previewMode || workshop.isOpen || workshopLeaseId || workshopEntryPending || !mapWorld || !localSimulation) {
+    workshopPrompt.classList.remove('visible');
+    return;
+  }
+  const state = localSimulation.vehicleState();
+  const speed = Math.hypot(state.linVel.x, state.linVel.y, state.linVel.z);
+  const upY = 1 - 2 * (state.rotation.x ** 2 + state.rotation.z ** 2);
+  if (speed > 0.8 || upY < 0.65) {
+    workshopPrompt.classList.remove('visible');
+    return;
+  }
+  for (const marker of mapWorld.markers) {
+    if (marker.kind !== 'garageBay') continue;
+    if (Math.hypot(state.position.x - marker.x, state.position.z - marker.z) <= marker.radius) {
+      nearbyBayId = marker.id;
+      workshopPrompt.textContent = `F · OPEN ${marker.label.toUpperCase()}`;
+      workshopPrompt.classList.add('visible');
+      return;
+    }
+  }
+  workshopPrompt.classList.remove('visible');
 }
 
 start().catch((err) => {

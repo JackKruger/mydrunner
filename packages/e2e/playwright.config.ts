@@ -1,10 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // Some sandboxed environments cannot download Playwright browsers but already
-// have them cached in /opt/pw-browsers. Honor it if present.
+// have them cached in a shared location. Honor either cache if present.
 import { existsSync } from 'node:fs';
-if (!process.env.PLAYWRIGHT_BROWSERS_PATH && existsSync('/opt/pw-browsers')) {
-  process.env.PLAYWRIGHT_BROWSERS_PATH = '/opt/pw-browsers';
+const sharedBrowserCache = ['/opt/pw-browsers', '/tmp/pw-browsers'].find(existsSync);
+if (!process.env.PLAYWRIGHT_BROWSERS_PATH && sharedBrowserCache) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = sharedBrowserCache;
 }
 
 // Boots both server and client. The webServer entries are siblings - playwright

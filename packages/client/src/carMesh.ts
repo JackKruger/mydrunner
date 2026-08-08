@@ -1,19 +1,20 @@
-// Procedural truck silhouettes built from Three.js primitives. The chassis
-// extents (VEHICLE.chassisHalfExtents) and wheel positions are shared
-// across kinds because physics is shared - only the visual changes.
-//
-// Kinds:
-//   patrol    - Nissan-Patrol-GQ-style boxy 4x4: full SUV cabin, roof rack,
-//               snorkel, bullbar, rear spare wheel.
-//   hilux     - Toyota-Hilux-style ute: short forward cab + bed with a
-//               hardtop canopy, low-profile bullbar, no roof rack.
-//   ute       - Falcon-style sedan-based ute: low cabin, flat open tray,
-//               sport bar over the tray, no canopy.
-//   motorbike - Dual-sport bike: thin frame, fuel tank, seat, handlebars,
-//               two visible wheels (overlapped per axle at chassis centre).
+// Fitted procedural meshes for the five fictional Australian 4x4 bases.
+// Geometry follows the resolved build, while wheel groups stay parented to
+// the physics-driven solid axles. These meshes are intentionally free of
+// manufacturer badges and double as the asset-load failure fallback.
 
 import * as THREE from 'three';
-import { Physics, VEHICLE, type CarKind } from '@mydrunner/shared';
+import {
+  Physics,
+  createStockBuild,
+  normalizeVehicleBaseId,
+  normalizeVehicleBuild,
+  type CarKind,
+  type PaintFinish,
+  type VehicleBuild,
+} from '@mydrunner/shared';
+
+type Extents = { x: number; y: number; z: number };
 
 export interface CarMesh {
   group: THREE.Group;
@@ -29,42 +30,6 @@ export interface CarMesh {
   axles: [THREE.Group, THREE.Group];
 }
 
-const PATROL_COLORS = [
-  0xd9531e, // burnt orange (local default)
-  0x2a4a6a, // navy
-  0x466b3a, // olive
-  0xc9b86b, // sand
-  0x8b4513, // saddle brown
-  0xb23a48, // brick red
-];
-
-const HILUX_COLORS = [
-  0xe8e3da, // arctic white (local default)
-  0x1f2a36, // graphite
-  0x6e3a1c, // bronze
-  0x3a5a3a, // forest
-  0xc1342f, // cherry red
-  0x8aa0b5, // silver-blue
-];
-
-const UTE_COLORS = [
-  0xf2c200, // canary yellow (local default)
-  0x1a1a1a, // jet black
-  0xb91212, // racing red
-  0x2d4a8a, // royal blue
-  0x6f7a85, // gunmetal
-  0xd87b1c, // burnt amber
-];
-
-const MOTORBIKE_COLORS = [
-  0x2a8acb, // electric blue (local default)
-  0x111111, // satin black
-  0xd11a1a, // rally red
-  0x1a8c3a, // racing green
-  0xefa61c, // amber
-  0x9b2cd1, // ultraviolet
-];
-
 interface Materials {
   body: THREE.MeshStandardMaterial;
   trim: THREE.MeshStandardMaterial;
@@ -73,28 +38,37 @@ interface Materials {
   black: THREE.MeshStandardMaterial;
 }
 
-function pickColor(palette: readonly number[], isLocal: boolean, idHash: number): number {
-  if (isLocal) return palette[0]!;
-  return palette[1 + (idHash % (palette.length - 1))] ?? palette[1]!;
-}
-
-function makeMaterials(bodyColor: number): Materials {
+function makeMaterials(bodyColor: number, finish: PaintFinish = 'gloss'): Materials {
+  const roughness = finish === 'matte' ? 0.9 : finish === 'satin' ? 0.66 : 0.42;
+  const metalness = finish === 'matte' ? 0.02 : 0.15;
   return {
-    body: new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.55, metalness: 0.15 }),
+    body: new THREE.MeshStandardMaterial({ color: bodyColor, roughness, metalness, name: 'paint.primary' }),
     trim: new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.85, metalness: 0 }),
-    glass: new THREE.MeshStandardMaterial({ color: 0x1a1f24, roughness: 0.15, metalness: 0.6 }),
+    glass: new THREE.MeshStandardMaterial({
+      color: 0x29343d,
+      roughness: 0.18,
+      metalness: 0.08,
+      transparent: true,
+      opacity: 0.72,
+    }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xb8b8b8, roughness: 0.35, metalness: 0.7 }),
     black: new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.6 }),
   };
 }
 
-function buildSingleWheel(r: number, w: number): THREE.Group {
+function buildSingleWheel(r: number, w: number, build?: VehicleBuild): THREE.Group {
   const tireGeo = new THREE.CylinderGeometry(r, r, w, 20);
   tireGeo.rotateZ(Math.PI / 2);
   const tireMat = new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness: 0.95 });
   const rimGeo = new THREE.CylinderGeometry(r * 0.6, r * 0.6, w + 0.02, 14);
   rimGeo.rotateZ(Math.PI / 2);
-  const rimMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.4, metalness: 0.7 });
+  const steel = build?.wheelId.endsWith('.classic-steel') ?? false;
+  const beadlock = build?.wheelId.endsWith('.beadlock-alloy') ?? false;
+  const rimMat = new THREE.MeshStandardMaterial({
+    color: steel ? 0x292b2d : beadlock ? 0x555b60 : 0x9aa0a6,
+    roughness: steel ? 0.72 : 0.4,
+    metalness: 0.7,
+  });
   const hubGeo = new THREE.CylinderGeometry(r * 0.18, r * 0.18, w + 0.04, 8);
   hubGeo.rotateZ(Math.PI / 2);
   const hubMat = new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.8 });
@@ -117,6 +91,13 @@ function buildSingleWheel(r: number, w: number): THREE.Group {
   wheelGroup.add(tire);
   wheelGroup.add(new THREE.Mesh(rimGeo, rimMat));
   wheelGroup.add(new THREE.Mesh(hubGeo, hubMat));
+  if (beadlock) {
+    const ringGeo = new THREE.TorusGeometry(r * 0.54, 0.025, 8, 24);
+    const ring = new THREE.Mesh(ringGeo, new THREE.MeshStandardMaterial({ color: 0xb7a476, roughness: 0.45, metalness: 0.75 }));
+    ring.rotation.y = Math.PI / 2;
+    ring.position.x = w * 0.51;
+    wheelGroup.add(ring);
+  }
   const spokeCount = 5;
   for (let s = 0; s < spokeCount; s++) {
     const spoke = new THREE.Mesh(spokeGeo, rimMat);
@@ -142,23 +123,16 @@ function buildSingleWheel(r: number, w: number): THREE.Group {
  *  signature of solid-axle 4x4s. Wheels are at fixed local +/- trackHalf
  *  inside the axle group, so steering and spin still apply per-wheel
  *  while the axle itself moves them as one unit. */
-function buildAxles(group: THREE.Group, kind: CarKind): {
+function buildAxles(group: THREE.Group, build: VehicleBuild): {
   axles: [THREE.Group, THREE.Group];
   wheels: THREE.Object3D[];
 } {
-  const geom = Physics.geomFor(kind);
+  const geom = Physics.geomFor(build);
   const axles: [THREE.Group, THREE.Group] = [new THREE.Group(), new THREE.Group()];
   const wheels: THREE.Object3D[] = [];
 
   const beamMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.85 });
   const diffMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.75, metalness: 0.2 });
-
-  // Motorbike visualises both per-axle wheels overlapped at the chassis
-  // centreline so the silhouette reads as 1 front + 1 rear wheel. The
-  // physics still drives 4 wheels at full trackHalf - the visual is just
-  // collapsed onto x=0. Side beams and diff pumpkins are skipped because
-  // a bike doesn't have a solid axle.
-  const isBike = kind === 'motorbike';
 
   for (let aIdx = 0; aIdx < 2; aIdx++) {
     const ag = aIdx === 0 ? geom.front : geom.rear;
@@ -170,7 +144,7 @@ function buildAxles(group: THREE.Group, kind: CarKind): {
     // each frame from the physics axle state.
     axle.position.set(0, ag.centerLocalY - ag.suspensionRestLength, ag.centerLocalZ);
 
-    if (!isBike) {
+    {
       // Beam: thin cylinder along chassis-X. Slightly shorter than full
       // track so the wheel hubs visually overlap the beam ends.
       const beamLen = ag.trackHalf * 2 - 0.18;
@@ -192,13 +166,11 @@ function buildAxles(group: THREE.Group, kind: CarKind): {
       axle.add(diff);
     }
 
-    // Two wheels at the beam ends (overlapped at centre for the bike).
-    const wheelXOffset = isBike ? 0 : ag.trackHalf;
-    // Bike tyres are narrower than truck tyres - keeps the silhouette
-    // bike-like even though the underlying physics width is shared.
-    const wheelW = isBike ? geom.wheelWidth * 0.45 : geom.wheelWidth;
+    // Two wheels at the beam ends.
+    const wheelXOffset = ag.trackHalf;
+    const wheelW = geom.wheelWidth;
     for (let side = 0; side < 2; side++) {
-      const wheel = buildSingleWheel(geom.wheelRadius, wheelW);
+      const wheel = buildSingleWheel(geom.wheelRadius, wheelW, build);
       wheel.position.set(side === 0 ? -wheelXOffset : +wheelXOffset, 0, 0);
       axle.add(wheel);
       wheels.push(wheel);
@@ -212,9 +184,9 @@ function buildAxles(group: THREE.Group, kind: CarKind): {
 
 function buildLowerBodyAndFlares(
   group: THREE.Group,
-  ext: typeof VEHICLE.chassisHalfExtents,
+  ext: Extents,
   mats: Materials,
-  kind: CarKind,
+  build: VehicleBuild,
 ): void {
   // Lower body: full chassis box.
   const lower = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 2, ext.y * 2, ext.z * 2), mats.body);
@@ -229,18 +201,17 @@ function buildLowerBodyAndFlares(
   group.add(band);
 
   // Wheel flares around each wheel position. Driven from the per-kind
-  // axle geometry so flares track wheelbase changes (e.g. a longer
-  // Hilux puts its rear flares further back than a Patrol's).
-  for (const wp of Physics.restWheelPositions(kind)) {
+  // axle geometry so flares track each base's wheelbase changes.
+  for (const wp of Physics.restWheelPositions(build)) {
     const flare = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 0.85), mats.trim);
     flare.position.set(Math.sign(wp.x) * (ext.x + 0.02), -ext.y + 0.1, wp.z);
     group.add(flare);
   }
 }
 
-function buildPatrolBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExtents, mats: Materials): void {
+function buildWagonBody(group: THREE.Group, ext: Extents, mats: Materials): void {
   // Cabin - tall and upright, almost as wide as body, flat top. Sits on the
-  // rear 75% of the body (Patrol has a short hood).
+  // rear 75% of the body, behind a short bonnet.
   const cabinLen = ext.z * 1.25;
   const cabinHeight = ext.y * 1.7;
   const cabinWide = ext.x * 1.93;
@@ -265,26 +236,7 @@ function buildPatrolBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExte
     group.add(win);
   }
 
-  // Bullbar - thick horizontal pipe across the front with two vertical posts.
-  const barRadius = 0.05;
-  const barLen = ext.x * 1.7;
-  const barHorizontal = new THREE.Mesh(new THREE.CylinderGeometry(barRadius, barRadius, barLen, 10), mats.black);
-  barHorizontal.rotation.z = Math.PI / 2;
-  barHorizontal.position.set(0, -ext.y * 0.1, ext.z + 0.18);
-  barHorizontal.castShadow = true;
-  group.add(barHorizontal);
-  for (const sign of [-1, 1]) {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(barRadius * 0.9, barRadius * 0.9, ext.y * 1.0, 8), mats.black);
-    post.position.set(sign * ext.x * 0.55, -ext.y * 0.4, ext.z + 0.18);
-    post.castShadow = true;
-    group.add(post);
-  }
-  const upperBar = new THREE.Mesh(new THREE.CylinderGeometry(barRadius * 0.85, barRadius * 0.85, barLen * 0.6, 10), mats.black);
-  upperBar.rotation.z = Math.PI / 2;
-  upperBar.position.set(0, ext.y * 0.3, ext.z + 0.18);
-  group.add(upperBar);
-
-  // Round headlights set behind the bullbar.
+  // Round headlights and a simple factory bumper.
   const headlightMat = new THREE.MeshStandardMaterial({ color: 0xfff4d2, emissive: 0xffd070, emissiveIntensity: 0.6 });
   for (const sign of [-1, 1]) {
     const hl = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.06, 14), headlightMat);
@@ -298,6 +250,9 @@ function buildPatrolBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExte
     slat.position.set(i * 0.07, -ext.y * 0.05, ext.z + 0.025);
     group.add(slat);
   }
+  const bumper = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.82, 0.13, 0.12), mats.trim);
+  bumper.position.set(0, -ext.y * 0.35, ext.z + 0.07);
+  group.add(bumper);
 
   // Tall vertical tail lights.
   const tailMat = new THREE.MeshStandardMaterial({ color: 0xa31818, emissive: 0xa31818, emissiveIntensity: 0.4 });
@@ -306,42 +261,12 @@ function buildPatrolBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExte
     tl.position.set(sign * ext.x * 0.78, ext.y * 0.1, -ext.z - 0.03);
     group.add(tl);
   }
-  // Rear spare wheel mount.
-  const spareMount = new THREE.Mesh(
-    new THREE.CylinderGeometry(VEHICLE.wheelRadius * 0.95, VEHICLE.wheelRadius * 0.95, 0.18, 18),
-    new THREE.MeshStandardMaterial({ color: 0x101010, roughness: 0.95 }),
-  );
-  spareMount.rotation.x = Math.PI / 2;
-  spareMount.position.set(0, 0.05, -ext.z - 0.18);
-  spareMount.castShadow = true;
-  group.add(spareMount);
-
-  // Roof rack with rails.
-  const rackMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.7 });
-  const rackBase = new THREE.Mesh(new THREE.BoxGeometry(cabinWide * 0.92, 0.04, cabinLen * 0.9), rackMat);
-  rackBase.position.set(0, ext.y + cabinHeight + 0.05, -ext.z * 0.25);
-  rackBase.castShadow = true;
-  group.add(rackBase);
-  for (const sign of [-1, 1]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.08, cabinLen * 0.9), rackMat);
-    rail.position.set(sign * cabinWide * 0.45, ext.y + cabinHeight + 0.10, -ext.z * 0.25);
-    group.add(rail);
-  }
-
-  // Snorkel up the right A-pillar.
-  const snorkelMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.85 });
-  const snorkel = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, cabinHeight * 1.1, 10), snorkelMat);
-  snorkel.position.set(cabinWide / 2 - 0.03, ext.y + cabinHeight / 2, -ext.z * 0.25 + cabinLen / 2 - 0.1);
-  group.add(snorkel);
-  const snorkelHead = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.18, 0.18), snorkelMat);
-  snorkelHead.position.set(cabinWide / 2 - 0.03, ext.y + cabinHeight + 0.05, -ext.z * 0.25 + cabinLen / 2 - 0.1);
-  group.add(snorkelHead);
 }
 
-function buildHiluxBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExtents, mats: Materials): void {
+function buildUtilityBody(group: THREE.Group, ext: Extents, mats: Materials): void {
   // Single-cab forward of mid: cabin sits in the front 45% of the body, leaving
   // the rear 55% as the bed/tray. Cabin is shorter and narrower than the
-  // Patrol's full SUV cabin so the silhouette reads as a ute.
+  // wagon cabin so the silhouette reads as a utility.
   const cabinLen = ext.z * 0.95;
   const cabinHeight = ext.y * 1.55;
   const cabinWide = ext.x * 1.86;
@@ -393,52 +318,6 @@ function buildHiluxBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExten
     group.add(wall);
   }
 
-  // Canopy (the user-requested fibreglass shell on the bed). Sits on top of
-  // the bed walls and is sized so its top is flush with the cabin roof,
-  // and its sides sit slightly inboard of the cabin width so the silhouette
-  // reads as cabin-then-canopy rather than one continuous box. Tinted
-  // glass on side + back.
-  const canopyH = cabinHeight - bedWallH;
-  const canopyW = ext.x * 1.78;
-  const canopyL = bedLen * 0.96;
-  const canopyY = ext.y + bedWallH + canopyH / 2;
-  const canopyZ = bedCenterZ;
-  const canopy = new THREE.Mesh(new THREE.BoxGeometry(canopyW, canopyH, canopyL), mats.body);
-  canopy.position.set(0, canopyY, canopyZ);
-  canopy.castShadow = true;
-  group.add(canopy);
-  // Slight bevel: an angled cap at the rear top edge for a less-brick silhouette.
-  const canopyCap = new THREE.Mesh(new THREE.BoxGeometry(canopyW, canopyH * 0.18, 0.18), mats.body);
-  canopyCap.position.set(0, canopyY + canopyH / 2 - canopyH * 0.09, canopyZ - canopyL / 2 + 0.06);
-  canopyCap.rotation.x = 0.3;
-  group.add(canopyCap);
-  // Canopy windows (tinted).
-  const canopyWinH = canopyH * 0.45;
-  const canopyWinY = canopyY + canopyH * 0.05;
-  for (const sign of [-1, 1]) {
-    const win = new THREE.Mesh(new THREE.BoxGeometry(winThickness, canopyWinH, canopyL * 0.85), mats.glass);
-    win.position.set(sign * (canopyW / 2 + winThickness / 2), canopyWinY, canopyZ);
-    group.add(win);
-  }
-  const canopyRear = new THREE.Mesh(new THREE.BoxGeometry(canopyW * 0.85, canopyWinH, winThickness), mats.glass);
-  canopyRear.position.set(0, canopyWinY, canopyZ - canopyL / 2 - winThickness / 2);
-  group.add(canopyRear);
-
-  // Low-profile bullbar: single horizontal bar with two short posts. No
-  // upper loop - Hiluxes typically wear simpler nudge bars than Patrols.
-  const barRadius = 0.045;
-  const barLen = ext.x * 1.7;
-  const bar = new THREE.Mesh(new THREE.CylinderGeometry(barRadius, barRadius, barLen, 10), mats.black);
-  bar.rotation.z = Math.PI / 2;
-  bar.position.set(0, -ext.y * 0.15, ext.z + 0.16);
-  bar.castShadow = true;
-  group.add(bar);
-  for (const sign of [-1, 1]) {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(barRadius * 0.9, barRadius * 0.9, ext.y * 0.85, 8), mats.black);
-    post.position.set(sign * ext.x * 0.55, -ext.y * 0.42, ext.z + 0.16);
-    group.add(post);
-  }
-
   // Rectangular headlights tucked into the front fenders.
   const headlightMat = new THREE.MeshStandardMaterial({ color: 0xfff4d2, emissive: 0xffd070, emissiveIntensity: 0.55 });
   for (const sign of [-1, 1]) {
@@ -450,6 +329,9 @@ function buildHiluxBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExten
   const grille = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 0.95, 0.1, 0.04), mats.chrome);
   grille.position.set(0, -ext.y * 0.05, ext.z + 0.025);
   group.add(grille);
+  const bumper = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.82, 0.12, 0.12), mats.trim);
+  bumper.position.set(0, -ext.y * 0.34, ext.z + 0.07);
+  group.add(bumper);
 
   // Horizontal tail lights low on the tailgate.
   const tailMat = new THREE.MeshStandardMaterial({ color: 0xa31818, emissive: 0xa31818, emissiveIntensity: 0.4 });
@@ -460,231 +342,158 @@ function buildHiluxBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExten
   }
 }
 
-function paletteFor(kind: CarKind): readonly number[] {
-  switch (kind) {
-    case 'hilux': return HILUX_COLORS;
-    case 'ute': return UTE_COLORS;
-    case 'motorbike': return MOTORBIKE_COLORS;
-    default: return PATROL_COLORS;
+function addSharedDetail(group: THREE.Group, ext: Extents, mats: Materials, build: VehicleBuild): void {
+  const seamMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+  // Door/panel seams and sill rails make the silhouette read at close range.
+  for (const side of [-1, 1]) {
+    for (const z of [-ext.z * 0.35, ext.z * 0.35]) {
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.018, ext.y * 1.35, 0.025), seamMat);
+      seam.position.set(side * (ext.x + 0.011), ext.y * 0.75, z);
+      group.add(seam);
+    }
+    const mirror = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 0.28), mats.trim);
+    mirror.position.set(side * (ext.x + 0.12), ext.y * 1.45, ext.z * 0.42);
+    group.add(mirror);
   }
-}
-
-function buildUteBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExtents, mats: Materials): void {
-  // Sedan-based ute: low, sleek cabin in the front 45% of the body, then
-  // a flat open tray with side walls and a sport bar. No canopy.
-  const cabinLen = ext.z * 0.85;
-  const cabinHeight = ext.y * 1.35;     // lower than Hilux (1.55) - sedan-like
-  const cabinWide = ext.x * 1.84;
-  const cabinCenterZ = ext.z * 0.5;
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(cabinWide, cabinHeight, cabinLen), mats.body);
-  cabin.position.set(0, ext.y + cabinHeight / 2, cabinCenterZ);
-  cabin.castShadow = true;
-  group.add(cabin);
-
-  // Glass: side windows + raked windshield + sloped rear cab glass.
-  const winThickness = 0.025;
-  const winH = cabinHeight * 0.55;
-  const winYCenter = ext.y + cabinHeight / 2 + cabinHeight * 0.08;
-  for (const sign of [-1, 1]) {
-    const win = new THREE.Mesh(new THREE.BoxGeometry(winThickness, winH, cabinLen * 0.8), mats.glass);
-    win.position.set(sign * (cabinWide / 2 + winThickness / 2), winYCenter, cabinCenterZ);
-    group.add(win);
-  }
-  const windshield = new THREE.Mesh(new THREE.BoxGeometry(cabinWide * 0.94, winH, winThickness), mats.glass);
-  windshield.position.set(0, winYCenter, cabinCenterZ + cabinLen / 2 + winThickness / 2);
-  windshield.rotation.x = -0.22;        // sleeker rake than the Hilux
-  group.add(windshield);
-  const rearCabGlass = new THREE.Mesh(new THREE.BoxGeometry(cabinWide * 0.88, winH * 0.85, winThickness), mats.glass);
-  rearCabGlass.position.set(0, winYCenter, cabinCenterZ - cabinLen / 2 - winThickness / 2);
-  rearCabGlass.rotation.x = 0.18;
-  group.add(rearCabGlass);
-
-  // Open tray: low side walls along the rear half, no canopy. Tailgate
-  // sits at the back edge of the body. Floor is the lower body box.
-  const trayStartZ = cabinCenterZ - cabinLen / 2;
-  const trayEndZ = -ext.z;
-  const trayLen = trayStartZ - trayEndZ;
-  const trayCenterZ = (trayStartZ + trayEndZ) / 2;
-  const wallH = ext.y * 0.45;
-  const wallY = ext.y + wallH / 2;
-  const trayFront = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.92, wallH, 0.06), mats.body);
-  trayFront.position.set(0, wallY, trayStartZ - 0.03);
-  group.add(trayFront);
-  const tailgate = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.92, wallH * 0.95, 0.06), mats.body);
-  tailgate.position.set(0, wallY - wallH * 0.025, trayEndZ + 0.03);
-  group.add(tailgate);
-  for (const sign of [-1, 1]) {
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(0.06, wallH, trayLen), mats.body);
-    wall.position.set(sign * ext.x * 0.96, wallY, trayCenterZ);
-    group.add(wall);
-  }
-
-  // Sport bar (chrome roll-bar over the front of the tray) - the
-  // signature ute styling cue.
-  const barRadius = 0.05;
-  const barTopY = ext.y + cabinHeight * 0.85;
-  const barTopWidth = ext.x * 1.55;
-  const top = new THREE.Mesh(new THREE.CylinderGeometry(barRadius, barRadius, barTopWidth, 10), mats.chrome);
-  top.rotation.z = Math.PI / 2;
-  top.position.set(0, barTopY, trayStartZ - 0.05);
-  top.castShadow = true;
-  group.add(top);
-  for (const sign of [-1, 1]) {
-    const post = new THREE.Mesh(
-      new THREE.CylinderGeometry(barRadius * 0.95, barRadius * 0.95, barTopY - (ext.y + wallH), 10),
-      mats.chrome,
-    );
-    post.position.set(sign * (barTopWidth / 2), (barTopY + ext.y + wallH) / 2, trayStartZ - 0.05);
-    post.castShadow = true;
-    group.add(post);
-  }
-
-  // Low-profile nudge bar across the front (no upper loop, sits under
-  // the bonnet line - sportier than the Patrol's bullbar).
-  const nudgeLen = ext.x * 1.65;
-  const nudge = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, nudgeLen, 10), mats.chrome);
-  nudge.rotation.z = Math.PI / 2;
-  nudge.position.set(0, -ext.y * 0.2, ext.z + 0.14);
-  nudge.castShadow = true;
-  group.add(nudge);
-
-  // Slim rectangular headlights flush with the front fascia.
-  const headlightMat = new THREE.MeshStandardMaterial({ color: 0xfff4d2, emissive: 0xffd070, emissiveIntensity: 0.55 });
-  for (const sign of [-1, 1]) {
-    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.10, 0.04), headlightMat);
-    hl.position.set(sign * ext.x * 0.5, ext.y * 0.05, ext.z + 0.025);
-    group.add(hl);
-  }
-  // Wide grille slot.
-  const grille = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.0, 0.14, 0.04), mats.trim);
-  grille.position.set(0, -ext.y * 0.12, ext.z + 0.025);
-  group.add(grille);
-
-  // Horizontal tail lights inset on the tailgate.
-  const tailMat = new THREE.MeshStandardMaterial({ color: 0xa31818, emissive: 0xa31818, emissiveIntensity: 0.4 });
-  for (const sign of [-1, 1]) {
-    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.14, 0.04), tailMat);
-    tl.position.set(sign * ext.x * 0.62, wallY * 0.95, trayEndZ - 0.04);
-    group.add(tl);
-  }
-}
-
-function buildMotorbikeBody(group: THREE.Group, ext: typeof VEHICLE.chassisHalfExtents, mats: Materials): void {
-  // Bike silhouette built along the chassis centreline. The wide chassis
-  // collider is shared (physics is identical across kinds), so the visual
-  // intentionally does NOT draw the full chassis box - we draw only the
-  // bike frame, tank, seat, and handlebars at the centreline. The two
-  // visible wheels are placed by buildAxles with x=0 overlap.
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.6, metalness: 0.4 });
-
-  // Lower frame backbone: a thin rail from front to rear at chassis
-  // bottom edge.
-  const backbone = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.10, ext.z * 1.7), frameMat);
-  backbone.position.set(0, -ext.y + 0.08, 0);
-  backbone.castShadow = true;
-  group.add(backbone);
-
-  // Fuel tank: teardrop-ish (use a stretched box) above the front-mid
-  // section in body colour.
-  const tankLen = ext.z * 0.55;
-  const tankHeight = ext.y * 0.65;
-  const tankWidth = 0.30;
-  const tank = new THREE.Mesh(new THREE.BoxGeometry(tankWidth, tankHeight, tankLen), mats.body);
-  tank.position.set(0, ext.y * 0.25, ext.z * 0.15);
-  tank.castShadow = true;
-  group.add(tank);
-
-  // Seat: a longer dark slab behind the tank.
-  const seatLen = ext.z * 0.55;
-  const seatHeight = 0.12;
-  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.32, seatHeight, seatLen), mats.trim);
-  seat.position.set(0, ext.y * 0.55, -ext.z * 0.18);
-  seat.castShadow = true;
-  group.add(seat);
-
-  // Tail / rear fender + tail light cluster at the very back.
-  const tailFender = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.10, 0.40), mats.body);
-  tailFender.position.set(0, ext.y * 0.55, -ext.z * 0.78);
-  group.add(tailFender);
-  const tailMat = new THREE.MeshStandardMaterial({ color: 0xa31818, emissive: 0xa31818, emissiveIntensity: 0.5 });
-  const tailLight = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 0.03), tailMat);
-  tailLight.position.set(0, ext.y * 0.55, -ext.z * 0.96);
-  group.add(tailLight);
-
-  // Front fork: two thin posts running from the front-axle area up to the
-  // headstock above the tank. Slight rake.
-  const forkRad = 0.025;
-  const forkLen = ext.y * 1.6;
-  for (const sign of [-1, 1]) {
-    const fork = new THREE.Mesh(new THREE.CylinderGeometry(forkRad, forkRad, forkLen, 10), frameMat);
-    fork.position.set(sign * 0.10, ext.y * 0.15, ext.z * 0.85);
-    fork.rotation.x = -0.18;
-    fork.castShadow = true;
-    group.add(fork);
-  }
-
-  // Headstock + headlight cowl at the top of the forks.
-  const headstockY = ext.y * 0.95;
-  const headstockZ = ext.z * 0.97;
-  const cowl = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.22, 0.18), mats.body);
-  cowl.position.set(0, headstockY, headstockZ);
-  cowl.castShadow = true;
-  group.add(cowl);
-  const headlightMat = new THREE.MeshStandardMaterial({ color: 0xfff4d2, emissive: 0xffd070, emissiveIntensity: 0.7 });
-  const headlight = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.05, 14), headlightMat);
-  headlight.rotation.x = Math.PI / 2;
-  headlight.position.set(0, headstockY, headstockZ + 0.10);
-  group.add(headlight);
-
-  // Handlebars: a wide horizontal bar across the headstock, with two
-  // grip stubs at the ends.
-  const barLen = 0.70;
-  const bars = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, barLen, 10), frameMat);
-  bars.rotation.z = Math.PI / 2;
-  bars.position.set(0, headstockY + 0.14, headstockZ - 0.04);
-  group.add(bars);
-  const gripMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.95 });
-  for (const sign of [-1, 1]) {
-    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.10, 10), gripMat);
-    grip.rotation.z = Math.PI / 2;
-    grip.position.set(sign * (barLen / 2 - 0.05), headstockY + 0.14, headstockZ - 0.04);
-    group.add(grip);
-  }
-
-  // Engine block: a chunky dark box slung beneath the tank between the
-  // wheels.
-  const engine = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.36, 0.50), mats.black);
-  engine.position.set(0, -ext.y * 0.15, 0);
-  engine.castShadow = true;
-  group.add(engine);
-
-  // Exhaust: a short chrome cylinder along the right side, sloping up
-  // toward the rear.
-  const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.7, 12), mats.chrome);
-  exhaust.rotation.x = Math.PI / 2;
-  exhaust.rotation.y = -0.05;
-  exhaust.position.set(0.18, -ext.y * 0.05, -ext.z * 0.45);
-  group.add(exhaust);
-}
-
-export function buildCarMesh(kind: CarKind, isLocal: boolean, idHash: number): CarMesh {
-  const group = new THREE.Group();
-  const ext = VEHICLE.chassisHalfExtents;
-  const mats = makeMaterials(pickColor(paletteFor(kind), isLocal, idHash));
-
-  if (kind === 'motorbike') {
-    buildMotorbikeBody(group, ext, mats);
-  } else {
-    buildLowerBodyAndFlares(group, ext, mats, kind);
-    if (kind === 'hilux') {
-      buildHiluxBody(group, ext, mats);
-    } else if (kind === 'ute') {
-      buildUteBody(group, ext, mats);
-    } else {
-      buildPatrolBody(group, ext, mats);
+  // Lightweight seats and dashboard remain visible through the glass.
+  const cabinFrontZ = ext.z * 0.43;
+  const dashboard = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.55, 0.15, 0.32), mats.trim);
+  dashboard.position.set(0, ext.y + 0.45, cabinFrontZ + 0.28);
+  group.add(dashboard);
+  const seatRows = build.baseId === 'stockman-single'
+    ? [cabinFrontZ - 0.12]
+    : [cabinFrontZ - 0.12, -ext.z * 0.23];
+  for (const rowZ of seatRows) {
+    for (const side of [-1, 1]) {
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 0.52, 0.54, 0.46), mats.black);
+      seat.position.set(side * ext.x * 0.39, ext.y + 0.34, rowZ);
+      group.add(seat);
     }
   }
-  const { axles, wheels } = buildAxles(group, kind);
+  group.userData.vehicleBuild = build;
+}
+
+function addBaseCharacter(group: THREE.Group, ext: Extents, mats: Materials, build: VehicleBuild): void {
+  const trim = mats.trim;
+  if (build.baseId === 'overlander') {
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 2.04, 0.07, ext.z * 1.55), trim);
+    belt.position.set(0, ext.y * 1.1, -ext.z * 0.12);
+    group.add(belt);
+  } else if (build.baseId === 'stockman-single') {
+    const headboard = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.82, 0.08, 0.08), mats.chrome);
+    headboard.position.set(0, ext.y * 1.55, -ext.z * 0.05);
+    group.add(headboard);
+  } else if (build.baseId === 'stockman-dual') {
+    const rearWindow = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.45, 0.48, 0.025), mats.glass);
+    rearWindow.position.set(0, ext.y * 1.45, -ext.z * 0.18);
+    group.add(rearWindow);
+  } else if (build.baseId === 'longreach') {
+    for (const side of [-1, 1]) {
+      const cargoWindow = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.50, ext.z * 0.52), mats.glass);
+      cargoWindow.position.set(side * (ext.x + 0.015), ext.y * 1.28, -ext.z * 0.48);
+      group.add(cargoWindow);
+    }
+  }
+}
+
+function addAccessories(group: THREE.Group, ext: Extents, mats: Materials, build: VehicleBuild): void {
+  const front = new THREE.Group(); front.name = 'attachment.frontBar'; group.add(front);
+  const roof = new THREE.Group(); roof.name = 'attachment.roof'; group.add(roof);
+  const rear = new THREE.Group(); rear.name = 'attachment.rearBody'; group.add(rear);
+  const intake = new THREE.Group(); intake.name = 'attachment.snorkel'; group.add(intake);
+  const metal = build.frontBarId.endsWith('.steel-winch') ? mats.black : mats.chrome;
+  if (!build.frontBarId.endsWith('.factory')) {
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 2.08, 0.22, 0.22), metal);
+    beam.position.set(0, -ext.y * 0.12, ext.z + 0.16);
+    front.add(beam);
+    const hoop = new THREE.Mesh(new THREE.TorusGeometry(ext.x * 0.64, 0.045, 8, 20, Math.PI), metal);
+    hoop.rotation.z = Math.PI;
+    hoop.position.set(0, ext.y * 0.12, ext.z + 0.2);
+    front.add(hoop);
+  }
+  if (build.winchId.endsWith('.fitted')) {
+    const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.52, 16), mats.chrome);
+    drum.rotation.z = Math.PI / 2;
+    drum.position.set(0, -ext.y * 0.02, ext.z + 0.31);
+    front.add(drum);
+    const fairlead = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.08, 0.05), mats.chrome);
+    fairlead.position.set(0, -ext.y * 0.02, ext.z + 0.45);
+    front.add(fairlead);
+  }
+  if (build.snorkelId.endsWith('.fitted')) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 1.45, 12), mats.black);
+    pipe.position.set(ext.x * 0.86, ext.y + 0.64, ext.z * 0.47);
+    intake.add(pipe);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 0.24), mats.black);
+    head.position.set(ext.x * 0.86, ext.y + 1.36, ext.z * 0.53);
+    intake.add(head);
+  }
+  if (!build.roofId.endsWith('.none')) {
+    const platformY = ext.y + 1.46;
+    const platform = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.75, 0.08, ext.z * 1.2), mats.black);
+    platform.position.set(0, platformY, -ext.z * 0.12);
+    roof.add(platform);
+    if (build.roofId.endsWith('.basket')) {
+      for (const x of [-ext.x * 0.78, ext.x * 0.78]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.22, ext.z * 1.2), mats.black);
+        rail.position.set(x, platformY + 0.12, -ext.z * 0.12);
+        roof.add(rail);
+      }
+    } else {
+      const awning = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, ext.z * 1.12, 12), mats.chrome);
+      awning.rotation.x = Math.PI / 2;
+      awning.position.set(ext.x * 0.98, platformY + 0.08, -ext.z * 0.12);
+      roof.add(awning);
+    }
+  }
+  if (!build.rearBodyId.endsWith('.factory')) {
+    const heavy = build.rearBodyId.endsWith('.option-b');
+    if (build.baseId === 'stockman-single' || build.baseId === 'stockman-dual') {
+      const box = new THREE.Mesh(
+        new THREE.BoxGeometry(ext.x * 1.88, heavy ? 1.25 : 0.22, ext.z * 0.78),
+        heavy ? mats.chrome : mats.black,
+      );
+      box.position.set(0, ext.y + (heavy ? 0.62 : 0.11), -ext.z * 0.57);
+      rear.add(box);
+    } else {
+      const carrier = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.9, 0.12, 0.12), mats.black);
+      carrier.position.set(0, ext.y * 0.15, -ext.z - 0.17);
+      rear.add(carrier);
+      const spareCount = heavy ? 2 : 1;
+      for (let i = 0; i < spareCount; i++) {
+        const spare = buildSingleWheel(Physics.geomFor(build).wheelRadius * 0.92, 0.20, build);
+        spare.rotation.y = Math.PI / 2;
+        spare.position.set((i - (spareCount - 1) / 2) * ext.x * 0.88, ext.y * 0.48, -ext.z - 0.25);
+        rear.add(spare);
+      }
+      if (heavy) {
+        const ladder = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.05, 0.08), mats.chrome);
+        ladder.position.set(ext.x * 0.62, ext.y + 0.48, -ext.z - 0.14);
+        rear.add(ladder);
+      }
+    }
+  }
+}
+
+export function buildCarMesh(value: CarKind | VehicleBuild, _isLocal: boolean, _idHash: number): CarMesh {
+  const build = typeof value === 'string'
+    ? createStockBuild(normalizeVehicleBaseId(value))
+    : normalizeVehicleBuild(value);
+  const group = new THREE.Group();
+  group.name = `vehicle.${build.baseId}`;
+  const ext = Physics.geomFor(build).chassisHalfExtents;
+  const mats = makeMaterials(Number.parseInt(build.paintColor.slice(1), 16), build.paintFinish);
+
+  buildLowerBodyAndFlares(group, ext, mats, build);
+  if (build.baseId === 'stockman-single' || build.baseId === 'stockman-dual') {
+    buildUtilityBody(group, ext, mats);
+  } else {
+    buildWagonBody(group, ext, mats);
+  }
+  addSharedDetail(group, ext, mats, build);
+  addBaseCharacter(group, ext, mats, build);
+  addAccessories(group, ext, mats, build);
+  const { axles, wheels } = buildAxles(group, build);
   return { group, wheels, axles };
 }
 

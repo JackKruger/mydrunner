@@ -17,7 +17,7 @@
 // Storage is user-editable and a stale envelope from an older format
 // version has to fail readably rather than build a world full of NaN.
 
-import { Maps, normalizeCarKind, type CarKind } from '@mydrunner/shared';
+import { Maps, normalizeVehicleBaseId, type VehicleBaseId } from '@mydrunner/shared';
 
 export const PREVIEW_KEY = 'mydrunner:preview';
 
@@ -32,12 +32,12 @@ export const PREVIEW_MAX_BYTES = 4_000_000;
 
 export interface PreviewPayload {
   doc: Maps.MapDoc;
-  carKind: CarKind;
+  carKind: VehicleBaseId;
 }
 
 export type PreviewWriteResult = { ok: true } | { ok: false; reason: string };
 
-export function writePreview(doc: Maps.MapDoc, carKind: CarKind): PreviewWriteResult {
+export function writePreview(doc: Maps.MapDoc, carKind: VehicleBaseId): PreviewWriteResult {
   let text: string;
   try {
     text = JSON.stringify({ v: ENVELOPE_VERSION, carKind, doc: JSON.parse(Maps.encodeMapDoc(doc)) });
@@ -72,7 +72,7 @@ export function readPreview(): PreviewPayload | null {
     if (env.v !== ENVELOPE_VERSION) return null;
     return {
       doc: Maps.decodeMapDoc(env.doc),
-      carKind: normalizeCarKind(String(env.carKind ?? 'patrol')),
+      carKind: normalizeVehicleBaseId(env.carKind),
     };
   } catch {
     return null;

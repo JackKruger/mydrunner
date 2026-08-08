@@ -8,12 +8,13 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
-  Physics, DEFAULT_CAR_KIND, type VehicleState, type WorldSnapshot,
+  Physics, createStockBuild, type VehicleState, type WorldSnapshot,
 } from '@mydrunner/shared';
 import { VehicleEffects } from '../vehicleEffects.js';
 
 const SIZE = 80;
 const RES = 16;
+const BUILD = createStockBuild();
 
 function terrain(waterLevel?: number): Physics.TerrainData {
   const t: Physics.TerrainData = {
@@ -41,6 +42,8 @@ function vehicleState(over: Partial<VehicleState> = {}): VehicleState {
     rpm: 1000,
     gear: 1,
     throttle: 0,
+    drivetrain: { range: 'high', frontLocked: false, rearLocked: false },
+    damage: { body: 1, engine: 1, steering: 1, stoppedCause: 'none' },
     wheels: [0, 1, 2, 3].map(() => ({
       steer: 0, spin: 0, contact: true, suspensionLength: 0.3, angVel: 0,
     })),
@@ -54,7 +57,7 @@ function snapshot(v: VehicleState): WorldSnapshot {
     tick: 1,
     serverTimeMs: 0,
     players: [{
-      id: 'p1', name: 'p', carKind: DEFAULT_CAR_KIND, vehicle: v, stateSeq: 1,
+      id: 'p1', name: 'p', build: BUILD, buildRevision: 1, workshopMode: false, vehicle: v, stateSeq: 1,
     }],
   };
 }
@@ -172,7 +175,7 @@ describe('offline preview', () => {
     const fx = new VehicleEffects();
     fx.setTerrain(terrain(0.3));
     const v = vehicleState({ linVel: { x: 0, y: 0, z: 8 } });
-    fx.spawnLocal(DEFAULT_CAR_KIND, v, pose(), 1000);
+    fx.spawnLocal(BUILD, v, pose(), 1000);
     expect(live(fx)).toBeGreaterThan(0);
     fx.dispose();
   });
@@ -182,10 +185,10 @@ describe('offline preview', () => {
     fx.setTerrain(terrain(0.3));
     const v = vehicleState({ linVel: { x: 0, y: 0, z: 8 } });
     const g = pose();
-    fx.spawnLocal(DEFAULT_CAR_KIND, v, g, 1000);
+    fx.spawnLocal(BUILD, v, g, 1000);
     const afterOne = live(fx);
     // Eight more frames within the same 1/30 s window.
-    for (let i = 1; i <= 8; i++) fx.spawnLocal(DEFAULT_CAR_KIND, v, g, 1000 + i);
+    for (let i = 1; i <= 8; i++) fx.spawnLocal(BUILD, v, g, 1000 + i);
     expect(live(fx)).toBe(afterOne);
     fx.dispose();
   });

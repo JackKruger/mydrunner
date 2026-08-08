@@ -1,6 +1,13 @@
 // Keyboard + touch -> PlayerInput. Polled each frame from main loop.
 
-import { BUTTON_RESET, BUTTON_STARTER, type PlayerInput } from '@mydrunner/shared';
+import {
+  BUTTON_FRONT_LOCKER,
+  BUTTON_RANGE,
+  BUTTON_REAR_LOCKER,
+  BUTTON_RESET,
+  BUTTON_STARTER,
+  type PlayerInput,
+} from '@mydrunner/shared';
 
 import { getTouchState } from './touchInput.js';
 
@@ -40,7 +47,7 @@ export function initInput(): void {
     if (
       e.code === 'Space' ||
       e.code.startsWith('Arrow') ||
-      ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR'].includes(e.code)
+      ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyV', 'KeyZ', 'KeyX'].includes(e.code)
     ) {
       e.preventDefault();
     }
@@ -92,12 +99,19 @@ export function sampleInput(): PlayerInput {
   const kbHandbrake = handbrakeOn ? 1 : 0;
   const reset = KEYS.has('KeyR') || t.reset > 0;
   const starter = KEYS.has('KeyE') || t.starter > 0;
+  const range = KEYS.has('KeyV') || t.range > 0;
+  const rearLocker = KEYS.has('KeyZ') || t.rearLocker > 0;
+  const frontLocker = KEYS.has('KeyX') || t.frontLocker > 0;
   return {
     seq,
     throttle,
     steer,
     brake: Math.max(kbBrake, t.brake),
     handbrake: Math.max(kbHandbrake, t.handbrake),
-    buttons: (reset ? BUTTON_RESET : 0) | (starter ? BUTTON_STARTER : 0),
+    buttons: (reset ? BUTTON_RESET : 0)
+      | (starter ? BUTTON_STARTER : 0)
+      | (range ? BUTTON_RANGE : 0)
+      | (rearLocker ? BUTTON_REAR_LOCKER : 0)
+      | (frontLocker ? BUTTON_FRONT_LOCKER : 0),
   };
 }

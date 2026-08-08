@@ -7,7 +7,8 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { GRAVITY_Y } from '../constants.js';
 import { SolidAxleVehicle } from './solidAxleVehicle.js';
-import type { CarKind } from '../types.js';
+import { createStockBuild } from '../vehicleBuild.js';
+import type { CarKind, VehicleBuild } from '../types.js';
 import type { VehicleLike, VehicleSpawn } from './vehicleTypes.js';
 import { generateTerrain, type TerrainData, type TerrainOptions } from './terrain.js';
 import { generateObstacles, spawnObstacleColliders, type Obstacle } from './obstacles.js';
@@ -105,8 +106,8 @@ export class World {
     }
   }
 
-  spawnVehicle(id: string, spawn: VehicleSpawn, kind: CarKind = 'patrol'): VehicleLike {
-    const v: VehicleLike = new SolidAxleVehicle(this, id, spawn, kind);
+  spawnVehicle(id: string, spawn: VehicleSpawn, build: VehicleBuild | CarKind = createStockBuild()): VehicleLike {
+    const v: VehicleLike = new SolidAxleVehicle(this, id, spawn, build);
     this.vehicles.set(id, v);
     return v;
   }

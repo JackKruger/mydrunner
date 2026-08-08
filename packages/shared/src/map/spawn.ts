@@ -10,7 +10,7 @@
 // slot N on this map".
 
 import { TERRAIN } from '../constants.js';
-import type { CarKind } from '../types.js';
+import type { CarKind, VehicleBuild } from '../types.js';
 import { spawnYAboveGround } from '../physics/vehicleGeom.js';
 import { worldToTerrainIndex } from '../physics/terrain.js';
 import type { MapWorld } from './applyMapDoc.js';
@@ -54,7 +54,7 @@ export function gridSpawn(worldSize: number, slot: number): { x: number; z: numb
  *
  *  Y always sits at the kind's suspension equilibrium (spawnYAboveGround)
  *  so there is no free-fall or settle bounce. */
-export function resolveSpawn(map: MapWorld, slot: number, kind: CarKind): SpawnPose {
+export function resolveSpawn(map: MapWorld, slot: number, kind: CarKind | VehicleBuild): SpawnPose {
   const authored = map.spawns;
   const { x, z, yaw } = authored.length > 0
     ? authored[slot % authored.length]!

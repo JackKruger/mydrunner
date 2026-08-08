@@ -10,8 +10,9 @@ import {
   VEHICLE,
   Maps,
   Physics,
-  type CarKind,
+  createStockBuild,
   type PlayerInput,
+  type VehicleBuild,
   type VehicleState,
 } from '@mydrunner/shared';
 import type RAPIER from '@dimforge/rapier3d-compat';
@@ -128,7 +129,7 @@ function slerpQuat(
 }
 
 interface RemoteProxy {
-  carKind: CarKind;
+  buildRevision: number;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
   targetPosition: { x: number; y: number; z: number };
@@ -148,15 +149,16 @@ export class LocalSimulation {
   private readonly current = makeState();
   private readonly rendered = makeState();
   private readonly remoteProxies = new Map<string, RemoteProxy>();
+  private workshopMode = false;
 
   constructor(
     map: Maps.MapWorld,
     spawn: { position: { x: number; y: number; z: number }; yaw?: number },
-    carKind: CarKind = 'patrol',
+    build: VehicleBuild = createStockBuild(),
   ) {
     this.world = new Physics.World({ map });
     this.spawn = { position: { ...spawn.position }, yaw: spawn.yaw ?? 0 };
-    this.vehicle = this.world.spawnVehicle('local', this.spawn, carKind);
+    this.vehicle = this.world.spawnVehicle('local', this.spawn, build);
     this.vehicle.body.enableCcd(true);
     this.syncRenderStates();
   }
@@ -169,6 +171,11 @@ export class LocalSimulation {
   step(input: PlayerInput): void {
     if (input.seq <= this.lastSteppedSeq) return;
     copyState(this.current, this.previous);
+    if (this.workshopMode) {
+      this.lastSteppedSeq = input.seq;
+      copyVehicleState(this.vehicle.getState(), this.current);
+      return;
+    }
     if ((input.buttons & BUTTON_RESET) !== 0) {
       this.vehicle.resetTo(this.spawn);
     } else {
@@ -185,6 +192,31 @@ export class LocalSimulation {
   resetTo(spawn: { position: { x: number; y: number; z: number }; yaw: number }): void {
     this.vehicle.resetTo(spawn);
     this.syncRenderStates();
+  }
+
+  enterWorkshop(pose: { position: { x: number; y: number; z: number }; yaw: number }): void {
+    this.workshopMode = true;
+    this.spawn = { position: { ...pose.position }, yaw: pose.yaw };
+    this.vehicle.resetTo(pose);
+    this.vehicle.repair?.();
+    this.syncRenderStates();
+  }
+
+  exitWorkshop(): void {
+    this.workshopMode = false;
+  }
+
+  applyBuild(build: VehicleBuild, pose: { position: { x: number; y: number; z: number }; yaw: number }): void {
+    this.world.removeVehicle('local');
+    this.spawn = { position: { ...pose.position }, yaw: pose.yaw };
+    this.vehicle = this.world.spawnVehicle('local', this.spawn, build);
+    this.vehicle.body.enableCcd(true);
+    this.vehicle.repair?.();
+    this.syncRenderStates();
+  }
+
+  repair(): void {
+    this.vehicle.repair?.();
   }
 
   get spawnPose(): { position: { x: number; y: number; z: number }; yaw: number } {
@@ -206,7 +238,7 @@ export class LocalSimulation {
     for (const state of states) {
       present.add(state.id);
       let proxy = this.remoteProxies.get(state.id);
-      if (proxy && proxy.carKind !== state.carKind) {
+      if (proxy && proxy.buildRevision !== state.buildRevision) {
         this.removeRemoteProxy(state.id, proxy);
         proxy = undefined;
       }
@@ -222,7 +254,11 @@ export class LocalSimulation {
       proxy.targetRotation.z = state.rotation.z;
       proxy.targetRotation.w = state.rotation.w;
       proxy.recvAtMs = state.recvAtMs;
-      const fresh = nowMs - state.recvAtMs <= REMOTE_PROXY_STALE_MS;
+      const fresh = !state.workshopMode && nowMs - state.recvAtMs <= REMOTE_PROXY_STALE_MS;
+      if (!fresh && proxy.enabled) {
+        proxy.collider.setEnabled(false);
+        proxy.enabled = false;
+      }
       if (fresh && !proxy.enabled) {
         proxy.body.setTranslation(proxy.targetPosition, true);
         proxy.body.setRotation(proxy.targetRotation, true);
@@ -246,13 +282,19 @@ export class LocalSimulation {
     return count;
   }
 
-  telemetry(): { speed: number; rpm: number; gear: number; throttle: number } {
+  telemetry(): {
+    speed: number; rpm: number; gear: number; throttle: number;
+    drivetrain: VehicleState['drivetrain']; damage: VehicleState['damage']; notice: string | null;
+  } {
     const s = this.vehicle.getState();
     return {
       speed: Math.hypot(s.linVel.x, s.linVel.z),
       rpm: s.rpm,
       gear: s.gear,
       throttle: s.throttle,
+      drivetrain: s.drivetrain,
+      damage: s.damage,
+      notice: this.vehicle.consumeDrivetrainNotice?.() ?? null,
     };
   }
 
@@ -306,7 +348,7 @@ export class LocalSimulation {
   }
 
   private createRemoteProxy(state: RemoteCollisionState): RemoteProxy {
-    const geom = Physics.geomFor(state.carKind);
+    const geom = Physics.geomFor(state.build);
     const ext = geom.chassisHalfExtents;
     const radius = VEHICLE.chassisColliderRadius;
     const colliderHalfHeight = (VEHICLE.cabinRoofY + ext.y) * 0.5;
@@ -330,7 +372,7 @@ export class LocalSimulation {
       body,
     );
     return {
-      carKind: state.carKind,
+      buildRevision: state.buildRevision,
       body,
       collider,
       targetPosition: { ...state.position },

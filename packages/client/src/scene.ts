@@ -7,8 +7,8 @@ import {
   VEHICLE,
   Maps,
   Physics,
-  DEFAULT_CAR_KIND,
-  type CarKind,
+  createStockBuild,
+  type VehicleBuild,
   type PlayerSnapshot,
   type VehicleState,
   type WorldSnapshot,
@@ -41,7 +41,9 @@ interface LocalOverride {
 /** The exact remote pose rendered this frame, reused by physics proxies. */
 export interface RemoteCollisionState {
   id: PlayerId;
-  carKind: CarKind;
+  build: VehicleBuild;
+  buildRevision: number;
+  workshopMode: boolean;
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
   linVel: { x: number; y: number; z: number };
@@ -59,7 +61,8 @@ interface VehicleVisual {
   axles: [THREE.Group, THREE.Group];
   nameplate: THREE.Sprite | null;
   nameplateText: string;
-  carKind: CarKind;
+  build: VehicleBuild;
+  buildRevision: number;
 }
 
 export class Scene {
@@ -71,7 +74,8 @@ export class Scene {
   private buffer: SnapshotEntry[] = [];
   private vehicles = new Map<PlayerId, VehicleVisual>();
   private localId: PlayerId | null = null;
-  private localCarKind: CarKind = DEFAULT_CAR_KIND;
+  private localBuild: VehicleBuild = createStockBuild();
+  private localBuildRevision = 1;
   private effects: VehicleEffects;
   private minimap = new Minimap();
   private lastFrameTimeMs = 0;
@@ -127,9 +131,10 @@ export class Scene {
   get cameraTarget(): THREE.Vector3 { return this.cam.target; }
   get cameraMode(): 'chase' | 'hood' | 'free' { return this.cam.mode; }
 
-  setLocalPlayer(id: PlayerId, carKind: CarKind = DEFAULT_CAR_KIND): void {
+  setLocalPlayer(id: PlayerId, build: VehicleBuild = createStockBuild(), buildRevision = 1): void {
     this.localId = id;
-    this.localCarKind = carKind;
+    this.localBuild = build;
+    this.localBuildRevision = buildRevision;
   }
 
   /** Install the world visuals from the map composed once in main.ts.
@@ -187,9 +192,14 @@ export class Scene {
     return { a: secondLast, b: last, t: 1 };
   }
 
-  private ensureVehicle(id: PlayerId, isLocal: boolean, kind: CarKind): VehicleVisual {
+  private ensureVehicle(
+    id: PlayerId,
+    isLocal: boolean,
+    build: VehicleBuild,
+    buildRevision: number,
+  ): VehicleVisual {
     let v = this.vehicles.get(id);
-    if (v && v.carKind === kind) return v;
+    if (v && v.buildRevision === buildRevision) return v;
     if (v) {
       // Player swapped car kind mid-session - rebuild the mesh under the
       // same id so the visual matches snapshot state. Keep nameplate state.
@@ -201,7 +211,7 @@ export class Scene {
       disposeObject3D(v.group);
       this.vehicles.delete(id);
     }
-    const built = buildCarMesh(kind, isLocal, colorHash(id));
+    const built = buildCarMesh(build, isLocal, colorHash(id));
     this.scene.add(built.group);
     v = {
       group: built.group,
@@ -209,7 +219,8 @@ export class Scene {
       axles: built.axles,
       nameplate: null,
       nameplateText: '',
-      carKind: kind,
+      build,
+      buildRevision,
     };
     this.vehicles.set(id, v);
     return v;
@@ -226,7 +237,7 @@ export class Scene {
     }
     const sprite = createNameplate(name);
     // Sit above the roof rack.
-    sprite.position.set(0, VEHICLE.chassisHalfExtents.y * 2 + 1.4, 0);
+    sprite.position.set(0, Physics.geomFor(v.build).chassisHalfExtents.y * 2 + 1.4, 0);
     v.group.add(sprite);
     v.nameplate = sprite;
     v.nameplateText = name;
@@ -323,7 +334,7 @@ export class Scene {
     v: VehicleVisual,
     axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
   ): void {
-    const geom = Physics.geomFor(v.carKind);
+    const geom = Physics.geomFor(v.build);
     const q = v.group.quaternion;
     // World-Y component of the chassis's local-Y (up) axis.
     const chassisUp = Physics.rotateVecByQuat(
@@ -421,7 +432,7 @@ export class Scene {
         const pa = this._aMap.get(pb.id) ?? pb;
         present.add(pb.id);
         const isLocal = pb.id === this.localId;
-        const vis = this.ensureVehicle(pb.id, isLocal, pb.carKind);
+        const vis = this.ensureVehicle(pb.id, isLocal, pb.build, pb.buildRevision);
         this.setNameplate(vis, pb.name, isLocal);
 
         // Snapshot interpolation pass: every vehicle is first posed from
@@ -522,7 +533,9 @@ export class Scene {
           const latestRecvAtMs = this.buffer[this.buffer.length - 1]!.recvAtMs;
           this._remoteCollisionStates.push({
             id: pb.id,
-            carKind: pb.carKind,
+            build: pb.build,
+            buildRevision: pb.buildRevision,
+            workshopMode: pb.workshopMode,
             position: {
               x: vis.group.position.x,
               y: vis.group.position.y,
@@ -555,7 +568,7 @@ export class Scene {
       // nothing is ever drawn: ensureVehicle and cam.follow used to be
       // reachable only by iterating a snapshot's player list.
       const ov = this._localOverride;
-      const vis = this.ensureVehicle(this.localId, true, this.localCarKind);
+      const vis = this.ensureVehicle(this.localId, true, this.localBuild, this.localBuildRevision);
       present.add(this.localId);
       this.applyLocalOverride(vis, ov);
       this._localSteer = ov.wheels[0]?.steer ?? 0;
@@ -564,7 +577,7 @@ export class Scene {
       // here — without this you could author a river in the editor, hit
       // Preview, drive through it and see no spray at all.
       if (this._localState) {
-        this.effects.spawnLocal(this.localCarKind, this._localState, vis.group, nowMs);
+        this.effects.spawnLocal(this.localBuild, this._localState, vis.group, nowMs);
       }
     }
 

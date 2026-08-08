@@ -1,10 +1,18 @@
 // Tiny client wrapper around the shared message protocol.
 
-import { Net, INTERPOLATION_DELAY_MS, PROTOCOL_VERSION, type CarKind, type WorldSnapshot, type VehicleStateUpdate, type PlayerId } from '@mydrunner/shared';
+import {
+  Net,
+  INTERPOLATION_DELAY_MS,
+  PROTOCOL_VERSION,
+  type PlayerId,
+  type VehicleBuild,
+  type WorldSnapshot,
+  type VehicleStateUpdate,
+} from '@mydrunner/shared';
 import type { MapHandshake, SpawnHandshake } from '@mydrunner/shared/net';
 
 export interface NetEvents {
-  onWelcome(id: PlayerId, serverTimeMs: number, map: MapHandshake, spawn: SpawnHandshake): void;
+  onWelcome(id: PlayerId, serverTimeMs: number, map: MapHandshake, spawn: SpawnHandshake, build: VehicleBuild): void;
   onSnapshot(snap: WorldSnapshot, recvAtMs: number): void;
   onChat(from: PlayerId, fromName: string, text: string, serverTimeMs: number): void;
   /** `fatal` marks a close that retrying cannot fix - currently only a
@@ -14,6 +22,7 @@ export interface NetEvents {
    *  "reconnecting..." message forever. */
   onClose(reason: string, fatal: boolean): void;
   onOpen(): void;
+  onWorkshopAck(msg: Extract<Net.ServerMessage, { t: 'workshop-ack' }>): void;
 }
 
 export class NetClient {
@@ -21,17 +30,17 @@ export class NetClient {
   private events: NetEvents;
   private url: string;
   private name: string;
-  private carKind: CarKind;
+  private build: VehicleBuild;
   /** Set once a `bye` arrives. The server closes the socket right after
    *  sending one, so the 'close' listener below fires immediately after -
    *  without this it would report a second, non-fatal close and undo the
    *  fatal one, putting the client straight back into the retry loop. */
   private fatal = false;
 
-  constructor(url: string, name: string, carKind: CarKind, events: NetEvents) {
+  constructor(url: string, name: string, build: VehicleBuild, events: NetEvents) {
     this.url = url;
     this.name = name;
-    this.carKind = carKind;
+    this.build = build;
     this.events = events;
   }
 
@@ -45,7 +54,7 @@ export class NetClient {
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return;
       ws.send(
-        Net.encode({ t: 'hello', name: this.name, carKind: this.carKind, v: PROTOCOL_VERSION }),
+        Net.encode({ t: 'hello', name: this.name, build: this.build, v: PROTOCOL_VERSION }),
       );
       this.events.onOpen();
     });
@@ -59,7 +68,8 @@ export class NetClient {
       }
       switch (msg.t) {
         case 'welcome':
-          this.events.onWelcome(msg.you, msg.serverTimeMs, msg.map, msg.spawn);
+          this.build = msg.build;
+          this.events.onWelcome(msg.you, msg.serverTimeMs, msg.map, msg.spawn, msg.build);
           break;
         case 'snapshot':
           this.events.onSnapshot(msg.snap, performance.now());
@@ -70,6 +80,10 @@ export class NetClient {
         case 'bye':
           this.fatal = true;
           this.events.onClose(msg.reason, true);
+          break;
+        case 'workshop-ack':
+          if (msg.ok && msg.build) this.build = msg.build;
+          this.events.onWorkshopAck(msg);
           break;
       }
     });
@@ -106,6 +120,21 @@ export class NetClient {
   sendChat(text: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(Net.encode({ t: 'chat', text }));
+  }
+
+  enterWorkshop(bayId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(Net.encode({ t: 'workshop-enter', bayId }));
+  }
+
+  applyBuild(leaseId: string, build: VehicleBuild): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(Net.encode({ t: 'build-update', leaseId, build }));
+  }
+
+  exitWorkshop(leaseId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(Net.encode({ t: 'workshop-exit', leaseId }));
   }
 
   close(): void {

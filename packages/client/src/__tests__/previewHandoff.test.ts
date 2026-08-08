@@ -21,10 +21,10 @@ beforeEach(() => {
 
 describe('preview handoff', () => {
   it('round-trips a document and the car kind', () => {
-    expect(writePreview(doc, 'hilux')).toEqual({ ok: true });
+    expect(writePreview(doc, 'stockman-dual')).toEqual({ ok: true });
     const got = readPreview();
     expect(got).not.toBeNull();
-    expect(got!.carKind).toBe('hilux');
+    expect(got!.carKind).toBe('stockman-dual');
     expect(got!.doc.id).toBe(doc.id);
     // Revision equality is the real check: it hashes the whole document,
     // so a field lost in transit shows up here and nowhere else.
@@ -33,7 +33,7 @@ describe('preview handoff', () => {
 
   it('survives a baked document, which is what the editor actually sends', () => {
     const baked: Maps.MapDoc = { ...doc, bake: undefined };
-    expect(writePreview(baked, 'patrol').ok).toBe(true);
+    expect(writePreview(baked, 'ridgeback').ok).toBe(true);
     expect(readPreview()!.doc.id).toBe(doc.id);
   });
 
@@ -44,7 +44,7 @@ describe('preview handoff', () => {
   // Deliberate: reloading the preview tab has to keep working. The entry
   // dies with the tab anyway, because it is sessionStorage.
   it('does not consume the entry on read', () => {
-    writePreview(doc, 'patrol');
+    writePreview(doc, 'ridgeback');
     expect(readPreview()).not.toBeNull();
     expect(readPreview()).not.toBeNull();
     clearPreview();
@@ -72,10 +72,10 @@ describe('preview handoff', () => {
   });
 
   it('falls back to a known car kind rather than trusting the envelope', () => {
-    writePreview(doc, 'patrol');
+    writePreview(doc, 'ridgeback');
     const raw = JSON.parse(sessionStorage.getItem(PREVIEW_KEY)!);
     raw.carKind = 'monstertruck';
     sessionStorage.setItem(PREVIEW_KEY, JSON.stringify(raw));
-    expect(readPreview()!.carKind).toBe('patrol');
+    expect(readPreview()!.carKind).toBe('ridgeback');
   });
 });

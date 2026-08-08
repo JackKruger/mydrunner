@@ -138,7 +138,7 @@ async function copyModule(): Promise<void> {
  *  lives only in memory, so navigating away would bin the user's work. */
 function previewInGame(): void {
   const doc = session.toDoc(openedDoc, { bake: true });
-  const written = writePreview(doc, loadSavedJoin()?.carKind ?? 'patrol');
+  const written = writePreview(doc, loadSavedJoin()?.carKind ?? 'ridgeback');
   if (!written.ok) {
     ui.status(written.reason, 'error');
     return;

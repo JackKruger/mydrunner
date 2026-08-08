@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { EMPTY_INPUT, Maps, Physics } from '@mydrunner/shared';
+import { EMPTY_INPUT, Maps, Physics, createStockBuild } from '@mydrunner/shared';
 import { LocalSimulation } from '../localSimulation.js';
 import type { RemoteCollisionState } from '../scene.js';
 
@@ -10,7 +10,7 @@ beforeAll(async () => {
 function makeSimulation(): { sim: LocalSimulation; spawn: Maps.SpawnPose } {
   const map = Maps.applyMapDoc(Maps.proceduralDoc());
   const spawn = Maps.resolveSpawn(map, 0, 'patrol');
-  return { sim: new LocalSimulation(map, spawn, 'patrol'), spawn };
+  return { sim: new LocalSimulation(map, spawn, createStockBuild()), spawn };
 }
 
 function remoteAt(
@@ -20,7 +20,9 @@ function remoteAt(
 ): RemoteCollisionState {
   return {
     id,
-    carKind: 'patrol',
+    build: createStockBuild(),
+    buildRevision: 1,
+    workshopMode: false,
     position,
     rotation: { x: 0, y: 0, z: 0, w: 1 },
     linVel: { x: 0, y: 0, z: 0 },

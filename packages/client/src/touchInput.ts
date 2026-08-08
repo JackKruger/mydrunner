@@ -17,6 +17,9 @@ const state = {
   handbrake: 0,
   reset: 0,
   starter: 0,
+  range: 0,
+  rearLocker: 0,
+  frontLocker: 0,
 };
 
 const edgeListeners: Record<Edge, Array<() => void>> = {
@@ -50,7 +53,7 @@ function isTouchDevice(): boolean {
 /** Bind a button so it sets `state[key]` to 1 while held, 0 on release. */
 function bindHoldButton(
   el: HTMLElement,
-  key: 'throttle' | 'brake' | 'handbrake' | 'reset' | 'starter',
+  key: 'throttle' | 'brake' | 'handbrake' | 'reset' | 'starter' | 'range' | 'rearLocker' | 'frontLocker',
 ): void {
   const press = (e: Event): void => {
     e.preventDefault();
@@ -153,6 +156,9 @@ export function initTouchInput(): void {
   const handbrake = document.getElementById('handbrake-btn');
   const reset = document.getElementById('reset-btn');
   const starter = document.getElementById('starter-btn');
+  const range = document.getElementById('range-btn');
+  const rearLocker = document.getElementById('rear-locker-btn');
+  const frontLocker = document.getElementById('front-locker-btn');
   const cam = document.getElementById('cam-btn');
   const mute = document.getElementById('mute-btn');
   const chat = document.getElementById('chat-btn');
@@ -165,6 +171,9 @@ export function initTouchInput(): void {
   // Held, not edge-triggered: cranking takes WATER.crankTicks of
   // continuous hold, same as the keyboard binding.
   if (starter) bindHoldButton(starter, 'starter');
+  if (range) bindHoldButton(range, 'range');
+  if (rearLocker) bindHoldButton(rearLocker, 'rearLocker');
+  if (frontLocker) bindHoldButton(frontLocker, 'frontLocker');
   if (cam) bindEdgeButton(cam, 'cam');
   if (mute) bindEdgeButton(mute, 'mute');
   if (chat) bindEdgeButton(chat, 'chat');

@@ -6,7 +6,17 @@
 // road-vs-mud grip difference, and is deterministic across two worlds.
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
-import { Physics, EMPTY_INPUT, TUNING, type PlayerInput } from '../index.js';
+import {
+  BUTTON_FRONT_LOCKER,
+  BUTTON_RANGE,
+  BUTTON_REAR_LOCKER,
+  Physics,
+  EMPTY_INPUT,
+  TUNING,
+  createStockBuild,
+  type PlayerInput,
+  type VehicleBuild,
+} from '../index.js';
 import { mountainFor, petrolStationPadFor,
   dryWater,
 } from '../physics/terrain.js';
@@ -15,7 +25,7 @@ beforeAll(async () => {
   await Physics.initRapier();
 });
 
-function makeWorld() {
+function makeWorld(build: VehicleBuild = createStockBuild('ridgeback')) {
   // Flat all-zero heightfield: removes terrain noise and obstacles as
   // variables so the test isolates SolidAxleVehicle behaviour. Same
   // pattern heightfield-debug.test.ts uses for the legacy vehicle.
@@ -36,7 +46,7 @@ function makeWorld() {
     world,
     'p',
     { position: { x: 0, y: 1.5, z: 0 } },
-    'patrol',
+    build,
   );
   // World.spawnVehicle would register the vehicle through the factory;
   // we bypass it because VEHICLE_MODEL='raycast' would route us to the
@@ -105,6 +115,46 @@ describe('solid-axle vehicle: settling', () => {
 });
 
 describe('solid-axle vehicle: drivetrain', () => {
+  it('engages low range and installed lockers only at low speed and light throttle', () => {
+    const build = { ...createStockBuild('ridgeback'), frontLocker: true, rearLocker: true };
+    const { world, vehicle } = makeWorld(build);
+    settle(world, 60);
+    vehicle.setInput({
+      ...EMPTY_INPUT,
+      seq: 1,
+      buttons: BUTTON_RANGE | BUTTON_FRONT_LOCKER | BUTTON_REAR_LOCKER,
+    });
+    world.step();
+    expect(vehicle.drivetrainStatus()).toEqual({ range: 'low', frontLocked: true, rearLocked: true });
+
+    // Release the edge-triggered controls, then give the chassis road
+    // speed. Both lockers must protect themselves without another input.
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 2 });
+    vehicle.body.setLinvel({ x: 15, y: 0, z: 0 }, true);
+    world.step();
+    expect(vehicle.drivetrainStatus()).toEqual({ range: 'low', frontLocked: false, rearLocked: false });
+    expect(vehicle.consumeDrivetrainNotice()).toMatch(/safe speed/);
+    world.dispose();
+  });
+
+  it('explains unavailable lockers and rejects range changes while moving', () => {
+    const { world, vehicle } = makeWorld();
+    settle(world, 60);
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 1, buttons: BUTTON_REAR_LOCKER });
+    world.step();
+    expect(vehicle.drivetrainStatus().rearLocked).toBe(false);
+    expect(vehicle.consumeDrivetrainNotice()).toMatch(/Fit a rear locker/);
+
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 2 });
+    world.step();
+    vehicle.body.setLinvel({ x: 3, y: 0, z: 0 }, true);
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 3, buttons: BUTTON_RANGE });
+    world.step();
+    expect(vehicle.drivetrainStatus().range).toBe('high');
+    expect(vehicle.consumeDrivetrainNotice()).toMatch(/Slow down/);
+    world.dispose();
+  });
+
   it('drives forward when throttle is applied', () => {
     const { world, vehicle } = makeWorld();
     settle(world, 60);

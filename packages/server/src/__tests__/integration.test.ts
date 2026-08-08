@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
-import { Net, PROTOCOL_VERSION, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
+import { Net, PROTOCOL_VERSION, createStockBuild, type WorldSnapshot, type PlayerId } from '@mydrunner/shared';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Room, type PlayerHandle } from '../room.js';
 
@@ -32,6 +32,7 @@ describe('server integration', () => {
         const msg = Net.decodeClient(raw as Buffer);
         if (msg.t === 'hello') {
           handle.name = msg.name;
+          handle.build = msg.build;
           room.addPlayer(handle);
         } else if (msg.t === 'state') {
           room.applyVehicleState(id, msg.update);
@@ -53,7 +54,7 @@ describe('server integration', () => {
       if (msg.t === 'welcome') myId = msg.you;
       if (msg.t === 'snapshot') snaps.push(msg.snap);
     });
-    client.send(Net.encode({ t: 'hello', name: 'tester', v: PROTOCOL_VERSION }));
+    client.send(Net.encode({ t: 'hello', name: 'tester', build: createStockBuild(), v: PROTOCOL_VERSION }));
 
     const start = Date.now();
     while (snaps.length < 3 && Date.now() - start < 3000) await sleep(20);

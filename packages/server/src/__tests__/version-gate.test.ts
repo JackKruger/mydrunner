@@ -18,7 +18,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { WebSocket } from 'ws';
-import { Net, PROTOCOL_VERSION } from '@mydrunner/shared';
+import { Net, PROTOCOL_VERSION, createStockBuild } from '@mydrunner/shared';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 // Random high port, not a fixed one. With a fixed port the health probe
@@ -68,7 +68,7 @@ function hello(v: number): Promise<{ outcome: 'joined' | 'refused' | 'silent'; r
       resolve({ outcome, reason });
     };
     const timer = setTimeout(() => done('silent', 'no reply within 5 s'), 5000);
-    ws.on('open', () => ws.send(Net.encode({ t: 'hello', name: 'probe', v })));
+    ws.on('open', () => ws.send(Net.encode({ t: 'hello', name: 'probe', build: createStockBuild(), v })));
     ws.on('message', (raw) => {
       const msg = Net.decodeServer(raw as Buffer);
       if (msg.t === 'welcome') done('joined', `protocolVersion=${msg.protocolVersion}`);

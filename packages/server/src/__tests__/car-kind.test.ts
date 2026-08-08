@@ -2,19 +2,19 @@
 // now constructed by LocalSimulation from the same welcome choice.
 
 import { describe, expect, it } from 'vitest';
-import { Net, type CarKind } from '@mydrunner/shared';
+import { Net, VEHICLE_BASE_IDS, createStockBuild, type VehicleBaseId } from '@mydrunner/shared';
 import { Room } from '../room.js';
 
-describe('per-kind relay identity', () => {
-  it.each<CarKind>(['patrol', 'hilux', 'ute', 'motorbike'])('broadcasts %s unchanged', (carKind) => {
+describe('complete build relay identity', () => {
+  it.each<VehicleBaseId>([...VEHICLE_BASE_IDS])('broadcasts %s unchanged', (baseId) => {
     const room = new Room();
     const messages: Net.ServerMessage[] = [];
     room.addPlayer({
-      id: 'p', name: 'p', carKind,
+      id: 'p', name: 'p', build: createStockBuild(baseId),
       send: (bytes) => messages.push(Net.decodeServer(bytes)),
     });
     room.broadcastSnapshot();
     const snapshot = messages.find((m): m is Extract<Net.ServerMessage, { t: 'snapshot' }> => m.t === 'snapshot')!;
-    expect(snapshot.snap.players[0]!.carKind).toBe(carKind);
+    expect(snapshot.snap.players[0]!.build).toEqual(createStockBuild(baseId));
   });
 });

@@ -121,33 +121,26 @@ function cross(kind: CarKind): { crossed: boolean; drowned: boolean; drift: numb
 }
 
 describe('driving the ford', () => {
-  it('lets the snorkelled Patrol through', () => {
-    const r = cross('patrol');
+  it('lets the Ridgeback through', () => {
+    const r = cross('ridgeback');
     expect(r.crossed).toBe(true);
     expect(r.drowned).toBe(false);
   });
 
-  it('lets the Hilux and Ute through too', () => {
+  it('lets every other stock 4x4 through too', () => {
     // The road ford is the map's main artery; walling off most of the
     // garage would make the whole east half a vehicle-select screen.
-    for (const kind of ['hilux', 'ute'] as CarKind[]) {
+    for (const kind of ['overlander', 'stockman-single', 'stockman-dual', 'longreach'] as CarKind[]) {
       const r = cross(kind);
       expect(r.crossed, `${kind} should cross`).toBe(true);
       expect(r.drowned, `${kind} should not drown`).toBe(false);
     }
   });
 
-  it('drowns the motorbike', () => {
-    // Lowest airbox and nothing sealed around it. Picking a rig for the
-    // route is the point of having four of them.
-    const r = cross('motorbike');
-    expect(r.drowned).toBe(true);
-  });
-
   it('shoves you downstream on the way across', () => {
     // The whole reason to author a flow field. Too little and the river
     // is a puddle; too much and you lose the road entirely.
-    const drift = cross('patrol').drift;
+    const drift = cross('ridgeback').drift;
     expect(drift).toBeGreaterThan(2);
     expect(drift).toBeLessThan(30);
   });

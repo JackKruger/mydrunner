@@ -13,19 +13,92 @@ export interface Quat {
 
 export type PlayerId = string;
 
-/** Vehicle visual variant. Physics is identical across kinds (chassis
- *  extents, mass, drivetrain are shared) - this only switches the mesh
- *  rendered for the player. Add a kind by extending the union here, the
- *  hello/snapshot wire, the server normaliser, and the client mesh
- *  registry in carMesh/. */
-export type CarKind = 'patrol' | 'hilux' | 'ute' | 'motorbike';
+/** Stable fictional vehicle identity used by builds, persistence and the wire. */
+export type VehicleBaseId =
+  | 'ridgeback'
+  | 'overlander'
+  | 'stockman-single'
+  | 'stockman-dual'
+  | 'longreach';
 
-export const DEFAULT_CAR_KIND: CarKind = 'patrol';
+/**
+ * Compatibility input accepted at old save/editor boundaries. Production
+ * selections are the five VehicleBaseIds above; the four legacy values are
+ * immediately migrated by normalizeCarKind/normalizeVehicleBaseId.
+ */
+export type CarKind = VehicleBaseId | 'patrol' | 'hilux' | 'ute' | 'motorbike';
 
-export function normalizeCarKind(v: unknown): CarKind {
-  if (v === 'hilux' || v === 'ute' || v === 'motorbike') return v;
-  return 'patrol';
+export const DEFAULT_CAR_KIND: VehicleBaseId = 'ridgeback';
+
+export function normalizeVehicleBaseId(v: unknown): VehicleBaseId {
+  switch (v) {
+    case 'overlander':
+    case 'stockman-single':
+    case 'stockman-dual':
+    case 'longreach':
+    case 'ridgeback':
+      return v;
+    // Patrol and both removed novelty vehicles migrate to the Ridgeback.
+    case 'patrol':
+    case 'ute':
+    case 'motorbike':
+      return 'ridgeback';
+    // The former Hilux becomes the closest work-ute replacement.
+    case 'hilux':
+      return 'stockman-dual';
+    default:
+      return 'ridgeback';
+  }
 }
+
+/** @deprecated Use normalizeVehicleBaseId. Kept for old editor handoffs. */
+export function normalizeCarKind(v: unknown): VehicleBaseId {
+  return normalizeVehicleBaseId(v);
+}
+
+export type PaintFinish = 'gloss' | 'satin' | 'matte';
+
+/** Versioned, complete and entitlement-ready workshop selection. */
+export interface VehicleBuild {
+  version: 1;
+  baseId: VehicleBaseId;
+  paintColor: string;
+  paintFinish: PaintFinish;
+  suspensionId: string;
+  tireId: string;
+  wheelId: string;
+  frontBarId: string;
+  winchId: string;
+  snorkelId: string;
+  roofId: string;
+  rearBodyId: string;
+  frontLocker: boolean;
+  rearLocker: boolean;
+}
+
+export type TransferRange = 'high' | 'low';
+
+export interface DrivetrainState {
+  range: TransferRange;
+  frontLocked: boolean;
+  rearLocked: boolean;
+}
+
+export interface VehicleDamageState {
+  /** 0 = destroyed, 1 = undamaged. */
+  body: number;
+  engine: number;
+  steering: number;
+  /** Cause shown when the engine can no longer run. */
+  stoppedCause: 'none' | 'collision' | 'flooding';
+}
+
+export const UNDAMAGED_VEHICLE: VehicleDamageState = {
+  body: 1,
+  engine: 1,
+  steering: 1,
+  stoppedCause: 'none',
+};
 
 export interface PlayerInput {
   // Sequence number - lets the server ack inputs for client reconciliation.
@@ -49,6 +122,12 @@ export interface PlayerInput {
 export const BUTTON_RESET = 1;
 /** Crank the starter. Only catches with the air intake clear of water. */
 export const BUTTON_STARTER = 2;
+/** Edge-triggered transfer case toggle. */
+export const BUTTON_RANGE = 4;
+/** Edge-triggered installed rear locker toggle. */
+export const BUTTON_REAR_LOCKER = 8;
+/** Edge-triggered installed front locker toggle. */
+export const BUTTON_FRONT_LOCKER = 16;
 
 export const EMPTY_INPUT: PlayerInput = {
   seq: 0,
@@ -70,6 +149,8 @@ export interface VehicleState {
   rpm: number;
   gear: number; // signed: -1 reverse, 0 neutral, 1..5 forward
   throttle: number;
+  drivetrain: DrivetrainState;
+  damage: VehicleDamageState;
   // Per-wheel data for visual representation
   wheels: WheelState[];
   /** Solid-axle state, ordered [front, rear]. Optional so the legacy
@@ -101,7 +182,9 @@ export interface WheelState {
 export interface PlayerSnapshot {
   id: PlayerId;
   name: string;
-  carKind: CarKind;
+  build: VehicleBuild;
+  buildRevision: number;
+  workshopMode: boolean;
   vehicle: VehicleState;
   // Newest owner-state sequence the relay has accepted for this player.
   stateSeq: number;

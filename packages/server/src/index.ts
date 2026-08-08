@@ -5,9 +5,8 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_PORT,
-  DEFAULT_CAR_KIND,
   PROTOCOL_VERSION,
-  normalizeCarKind,
+  createStockBuild,
   Net,
 } from '@mydrunner/shared';
 import { Room, type PlayerHandle } from './room.js';
@@ -69,7 +68,7 @@ async function main(): Promise<void> {
     const handle: PlayerHandle = {
       id,
       name: 'anon',
-      carKind: DEFAULT_CAR_KIND,
+      build: createStockBuild(),
       send: (msg: Uint8Array) => {
         if (ws.readyState === ws.OPEN) ws.send(msg, { binary: true });
       },
@@ -108,7 +107,7 @@ async function main(): Promise<void> {
           // decodeClient already sanitised + length-capped the name; all
           // that's left is the empty-after-stripping case.
           handle.name = msg.name || 'anon';
-          handle.carKind = normalizeCarKind(msg.carKind);
+          handle.build = msg.build;
           room.addPlayer(handle);
           joined = true;
           break;
@@ -129,6 +128,18 @@ async function main(): Promise<void> {
         case 'chat':
           if (!joined) return;
           room.broadcastChat(handle, msg.text);
+          break;
+        case 'workshop-enter':
+          if (!joined) return;
+          room.requestWorkshopEnter(id, msg.bayId);
+          break;
+        case 'workshop-exit':
+          if (!joined) return;
+          room.requestWorkshopExit(id, msg.leaseId);
+          break;
+        case 'build-update':
+          if (!joined) return;
+          room.requestBuildUpdate(id, msg.leaseId, msg.build, msg.normalizationIssues);
           break;
       }
     });

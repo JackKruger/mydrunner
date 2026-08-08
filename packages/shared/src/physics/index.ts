@@ -14,3 +14,4 @@ export * from './objectCatalog.js';
 export * from './obstacles.js';
 export * from './landmarks.js';
 export * from './collisionGroups.js';
+export * from './damage.js';

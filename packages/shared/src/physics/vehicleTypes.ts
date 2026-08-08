@@ -3,7 +3,7 @@
 // against it instead of the concrete class.
 
 import type RAPIER from '@dimforge/rapier3d-compat';
-import type { PlayerInput, VehicleState } from '../types.js';
+import type { DrivetrainState, PlayerInput, VehicleBuild, VehicleDamageState, VehicleState } from '../types.js';
 import type { AxleSnap } from './axle.js';
 
 export interface VehicleSpawn {
@@ -30,6 +30,7 @@ export interface WaterStatus {
 
 export interface VehicleLike {
   readonly id: string;
+  readonly build: VehicleBuild;
   readonly body: RAPIER.RigidBody;
   setInput(input: PlayerInput): void;
   resetTo(spawn: VehicleSpawn): void;
@@ -41,4 +42,9 @@ export interface VehicleLike {
   axleSnaps?(): [AxleSnap, AxleSnap];
   applyAxleSnaps?(snaps: [AxleSnap, AxleSnap]): void;
   waterStatus?(): WaterStatus;
+  repair?(): void;
+  damageStatus?(): VehicleDamageState;
+  drivetrainStatus?(): DrivetrainState;
+  /** Last rejected transfer-case action for a brief owner HUD notice. */
+  consumeDrivetrainNotice?(): string | null;
 }

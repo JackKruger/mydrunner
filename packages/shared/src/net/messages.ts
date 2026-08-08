@@ -1,5 +1,19 @@
 import { encode as msgpackEncode, decode as msgpackDecode } from '@msgpack/msgpack';
-import type { CarKind, PlayerId, PlayerSnapshot, VehicleState, VehicleStateUpdate, WheelState, WorldSnapshot } from '../types.js';
+import {
+  VEHICLE_BASE_IDS,
+  VEHICLE_PART_CATALOGS,
+  createStockBuild,
+  normalizeVehicleBuildDetailed,
+} from '../vehicleBuild.js';
+import type {
+  PlayerId,
+  PlayerSnapshot,
+  VehicleBuild,
+  VehicleState,
+  VehicleStateUpdate,
+  WheelState,
+  WorldSnapshot,
+} from '../types.js';
 
 // Client -> Server
 export type ClientMessage =
@@ -7,10 +21,13 @@ export type ClientMessage =
    *  before the handshake existed, which is by definition incompatible;
    *  decodeClient reports it as 0 so the server can refuse it with a
    *  reason rather than admitting a client that would rubber-band. */
-  | { t: 'hello'; name: string; carKind?: CarKind; v: number }
+  | { t: 'hello'; name: string; build: VehicleBuild; v: number }
   | { t: 'state'; update: VehicleStateUpdate }
   | { t: 'ping'; clientTimeMs: number }
-  | { t: 'chat'; text: string };
+  | { t: 'chat'; text: string }
+  | { t: 'workshop-enter'; bayId: string }
+  | { t: 'workshop-exit'; leaseId: string }
+  | { t: 'build-update'; leaseId: string; build: VehicleBuild; normalizationIssues?: string[] };
 
 /** Which world to build. Both sides compile the map registry in, so the
  *  wire carries an identity rather than the map: a baked document is
@@ -41,6 +58,7 @@ export type ServerMessage =
       serverTimeMs: number;
       map: MapHandshake;
       spawn: SpawnHandshake;
+      build: VehicleBuild;
       /** Server's PROTOCOL_VERSION. The server already refused the join
        *  on a mismatch, so this is informational - it lets the client log
        *  which build it is actually talking to. */
@@ -51,6 +69,17 @@ export type ServerMessage =
   /** Chat relay - includes the sender's id and display name plus the
    *  server's monotonic time so clients can show "X seconds ago". */
   | { t: 'chat'; from: PlayerId; fromName: string; text: string; serverTimeMs: number }
+  | {
+      t: 'workshop-ack';
+      action: 'enter' | 'exit' | 'apply';
+      ok: boolean;
+      reason?: string;
+      leaseId?: string;
+      bayId?: string;
+      pose?: SpawnHandshake;
+      build?: VehicleBuild;
+      buildRevision?: number;
+    }
   | { t: 'bye'; reason: string };
 
 // Wire format: MessagePack binary plus snapshot quantization. The naive
@@ -86,14 +115,12 @@ const ROLL_SCALE = 1000;     // millirad
 const WHEEL_ANGVEL_SCALE = 100; // centirads/s; ±327 rad/s fits int16
 const TWO_PI = Math.PI * 2;
 
-const CAR_KIND_TO_IDX: Record<CarKind, number> = { patrol: 0, hilux: 1, ute: 2, motorbike: 3 };
-const CAR_KIND_FROM_IDX: CarKind[] = ['patrol', 'hilux', 'ute', 'motorbike'];
-
 function q(v: number, scale: number): number {
   return Math.round(v * scale) | 0;
 }
 
-const VEHICLE_TUPLE_LENGTH = 40;
+const DAMAGE_SCALE = 1000;
+const VEHICLE_TUPLE_LENGTH = 47;
 
 function packVehicle(v: VehicleState): number[] {
   const out: number[] = [
@@ -113,6 +140,13 @@ function packVehicle(v: VehicleState): number[] {
     Math.round(v.rpm) | 0,
     v.gear | 0,
     q(v.throttle, THROTTLE_SCALE),
+    v.drivetrain.range === 'low' ? 1 : 0,
+    v.drivetrain.frontLocked ? 1 : 0,
+    v.drivetrain.rearLocked ? 1 : 0,
+    q(v.damage.body, DAMAGE_SCALE),
+    q(v.damage.engine, DAMAGE_SCALE),
+    q(v.damage.steering, DAMAGE_SCALE),
+    v.damage.stoppedCause === 'collision' ? 1 : v.damage.stoppedCause === 'flooding' ? 2 : 0,
   ];
   for (const w of v.wheels) {
     const spinMod = ((w.spin % TWO_PI) + TWO_PI) % TWO_PI;
@@ -155,6 +189,22 @@ function unpackVehicle(arr: unknown[]): VehicleState {
   const rpm = arr[i++] as number;
   const gear = arr[i++] as number;
   const throttle = (arr[i++] as number) / THROTTLE_SCALE;
+  const rangeWire = arr[i++] as number;
+  const frontLockedWire = arr[i++] as number;
+  const rearLockedWire = arr[i++] as number;
+  const bodyWire = arr[i++] as number;
+  const engineWire = arr[i++] as number;
+  const steeringWire = arr[i++] as number;
+  const causeWire = arr[i++] as number;
+  if (
+    ![0, 1].includes(rangeWire) || ![0, 1].includes(frontLockedWire) || ![0, 1].includes(rearLockedWire)
+    || bodyWire < 0 || bodyWire > DAMAGE_SCALE
+    || engineWire < 0 || engineWire > DAMAGE_SCALE
+    || steeringWire < 0 || steeringWire > DAMAGE_SCALE
+    || ![0, 1, 2].includes(causeWire)
+  ) {
+    throw new Error('vehicle state: drivetrain/damage out of range');
+  }
   const wheels: WheelState[] = [];
   for (let w = 0; w < 4; w++) {
     wheels.push({
@@ -177,16 +227,93 @@ function unpackVehicle(arr: unknown[]): VehicleState {
     rpm,
     gear,
     throttle,
+    drivetrain: {
+      range: rangeWire === 1 ? 'low' : 'high',
+      frontLocked: frontLockedWire === 1,
+      rearLocked: rearLockedWire === 1,
+    },
+    damage: {
+      body: bodyWire / DAMAGE_SCALE,
+      engine: engineWire / DAMAGE_SCALE,
+      steering: steeringWire / DAMAGE_SCALE,
+      stoppedCause: causeWire === 1 ? 'collision' : causeWire === 2 ? 'flooding' : 'none',
+    },
     wheels,
     axles,
   };
+}
+
+const BUILD_TUPLE_LENGTH = 12;
+
+function selectedIndex(build: VehicleBuild, key: keyof VehicleBuild, list: readonly { id: string }[]): number {
+  const value = build[key];
+  return list.findIndex((part) => part.id === value);
+}
+
+function packBuild(build: VehicleBuild): number[] {
+  const result = normalizeVehicleBuildDetailed(build).build;
+  const catalog = VEHICLE_PART_CATALOGS[result.baseId];
+  return [
+    VEHICLE_BASE_IDS.indexOf(result.baseId),
+    Number.parseInt(result.paintColor.slice(1), 16),
+    result.paintFinish === 'satin' ? 1 : result.paintFinish === 'matte' ? 2 : 0,
+    selectedIndex(result, 'suspensionId', catalog.suspension),
+    selectedIndex(result, 'tireId', catalog.tires),
+    selectedIndex(result, 'wheelId', catalog.wheels),
+    selectedIndex(result, 'frontBarId', catalog.frontBars),
+    selectedIndex(result, 'winchId', catalog.winches),
+    selectedIndex(result, 'snorkelId', catalog.snorkels),
+    selectedIndex(result, 'roofId', catalog.roofs),
+    selectedIndex(result, 'rearBodyId', catalog.rearBodies),
+    (result.frontLocker ? 1 : 0) | (result.rearLocker ? 2 : 0),
+  ];
+}
+
+function unpackBuild(value: unknown): VehicleBuild {
+  if (!Array.isArray(value) || value.length !== BUILD_TUPLE_LENGTH || value.some((v) => !Number.isSafeInteger(v))) {
+    throw new Error('build: malformed tuple');
+  }
+  const baseId = VEHICLE_BASE_IDS[value[0] as number];
+  const paint = value[1] as number;
+  const finish = value[2] as number;
+  const lockers = value[11] as number;
+  if (!baseId || paint < 0 || paint > 0xffffff || finish < 0 || finish > 2 || lockers < 0 || lockers > 3) {
+    throw new Error('build: out of range');
+  }
+  const catalog = VEHICLE_PART_CATALOGS[baseId];
+  const lists = [
+    catalog.suspension, catalog.tires, catalog.wheels, catalog.frontBars,
+    catalog.winches, catalog.snorkels, catalog.roofs, catalog.rearBodies,
+  ];
+  const selected = lists.map((list, index) => list[value[index + 3] as number]?.id);
+  if (selected.some((id) => !id)) throw new Error('build: part index out of range');
+  const raw = {
+    ...createStockBuild(baseId),
+    paintColor: `#${paint.toString(16).padStart(6, '0')}`,
+    paintFinish: finish === 1 ? 'satin' : finish === 2 ? 'matte' : 'gloss',
+    suspensionId: selected[0],
+    tireId: selected[1],
+    wheelId: selected[2],
+    frontBarId: selected[3],
+    winchId: selected[4],
+    snorkelId: selected[5],
+    roofId: selected[6],
+    rearBodyId: selected[7],
+    frontLocker: (lockers & 1) !== 0,
+    rearLocker: (lockers & 2) !== 0,
+  };
+  const result = normalizeVehicleBuildDetailed(raw);
+  if (result.issues.length > 0) throw new Error(`build: incompatible (${result.issues[0]})`);
+  return result.build;
 }
 
 function packPlayer(p: PlayerSnapshot): unknown[] {
   return [
     p.id,
     p.name,
-    CAR_KIND_TO_IDX[p.carKind] ?? 0,
+    packBuild(p.build),
+    p.buildRevision | 0,
+    p.workshopMode ? 1 : 0,
     p.stateSeq | 0,
     ...packVehicle(p.vehicle),
   ];
@@ -194,25 +321,29 @@ function packPlayer(p: PlayerSnapshot): unknown[] {
 
 function unpackPlayer(arr: unknown[]): PlayerSnapshot {
   if (
-    arr.length !== VEHICLE_TUPLE_LENGTH + 4 ||
+    arr.length !== VEHICLE_TUPLE_LENGTH + 6 ||
     typeof arr[0] !== 'string' ||
     typeof arr[1] !== 'string' ||
-    !isFiniteNum(arr[2]) ||
-    !Number.isSafeInteger(arr[3])
+    !Array.isArray(arr[2]) ||
+    !Number.isSafeInteger(arr[3]) ||
+    (arr[4] !== 0 && arr[4] !== 1) ||
+    !Number.isSafeInteger(arr[5])
   ) {
     throw new Error('snapshot: malformed player tuple');
   }
   const id = arr[0] as PlayerId;
   const name = arr[1] as string;
-  const carKind = CAR_KIND_FROM_IDX[arr[2] as number] ?? 'patrol';
-  const stateSeq = arr[3] as number;
-  return { id, name, carKind, vehicle: unpackVehicle(arr.slice(4)), stateSeq };
+  const build = unpackBuild(arr[2]);
+  const buildRevision = arr[3] as number;
+  const workshopMode = arr[4] === 1;
+  const stateSeq = arr[5] as number;
+  return { id, name, build, buildRevision, workshopMode, vehicle: unpackVehicle(arr.slice(6)), stateSeq };
 }
 
 /** Per-player tuple layout version. Bump whenever packPlayer's field
  *  order or count changes; unpackPlayer reads by position, so a stale
  *  decoder would silently misread every field as its neighbour. */
-export const SNAPSHOT_SCHEMA = 2;
+export const SNAPSHOT_SCHEMA = 3;
 
 function packSnapshot(snap: WorldSnapshot): unknown {
   return {
@@ -328,14 +459,18 @@ export function decodeClient(raw: Wire): ClientMessage {
   switch (m.t) {
     case 'hello': {
       if (typeof m.name !== 'string') throw new Error('hello: name must be a string');
-      const carKind = typeof m.carKind === 'string' ? (m.carKind as CarKind) : undefined;
+      // Old clients/saves sent carKind. It is accepted only as a migration
+      // source and immediately expanded to a complete stock VehicleBuild.
+      const build = normalizeVehicleBuildDetailed(
+        m.build ?? { carKind: typeof m.carKind === 'string' ? m.carKind : undefined },
+      ).build;
       // A mismatched version is NOT thrown here. Throwing lands in the ws
       // handler's catch, which returns silently - the player would sit on
       // a connected socket that never sends a welcome, with nothing on
       // screen explaining why. Pass the value through instead and let the
       // caller answer with a `bye` the client can display.
       const v = Number.isSafeInteger(m.v) ? (m.v as number) : 0;
-      return { t: 'hello', name: sanitiseUserText(m.name, NAME_MAX_LEN), carKind, v };
+      return { t: 'hello', name: sanitiseUserText(m.name, NAME_MAX_LEN), build, v };
     }
     case 'state': {
       if (m.s !== SNAPSHOT_SCHEMA) {
@@ -353,6 +488,24 @@ export function decodeClient(raw: Wire): ClientMessage {
     case 'chat': {
       if (typeof m.text !== 'string') throw new Error('chat: text must be a string');
       return { t: 'chat', text: sanitiseUserText(m.text, CHAT_MAX_LEN) };
+    }
+    case 'workshop-enter': {
+      if (typeof m.bayId !== 'string' || m.bayId.length > 64) throw new Error('workshop-enter: invalid bay');
+      return { t: 'workshop-enter', bayId: m.bayId };
+    }
+    case 'workshop-exit': {
+      if (typeof m.leaseId !== 'string' || m.leaseId.length > 128) throw new Error('workshop-exit: invalid lease');
+      return { t: 'workshop-exit', leaseId: m.leaseId };
+    }
+    case 'build-update': {
+      if (typeof m.leaseId !== 'string' || m.leaseId.length > 128) throw new Error('build-update: invalid lease');
+      const result = normalizeVehicleBuildDetailed(m.build);
+      return {
+        t: 'build-update',
+        leaseId: m.leaseId,
+        build: result.build,
+        normalizationIssues: result.issues,
+      };
     }
     default:
       throw new Error('client message: unknown type');
