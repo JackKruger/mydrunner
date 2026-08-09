@@ -544,20 +544,21 @@ describe('solid-axle vehicle: drivetrain', () => {
     // steer; assert the chassis rotated the way that turns the chassis
     // nose toward chassis-right.
     //
-    // Convention check: chassis spawned with no yaw (identity rotation)
-    // has chassis-forward = world +Z. A right turn yaws nose from +Z
-    // toward +X, which is positive rotation about world +Y by
-    // right-hand rule (verified against the Y-rotation matrix).
+    // This game uses chassis +Z as forward while the player's right from
+    // that heading is world -X, so a right turn is negative world-Y yaw.
     const { world, vehicle } = makeWorld();
     settle(world, 60);
     const startYaw = quatYaw(vehicle.getState().rotation);
-    for (let i = 1; i <= 300; i++) {
+    // Sample before the truck can complete more than half a circle: wrapped
+    // start/end yaw alone cannot distinguish a long right turn from a short
+    // left turn once total travel exceeds pi.
+    for (let i = 1; i <= 120; i++) {
       vehicle.setInput({ ...EMPTY_INPUT, seq: i, throttle: 1, steer: 1 });
       world.step();
     }
     const endYaw = quatYaw(vehicle.getState().rotation);
     const dyaw = angleDiff(endYaw, startYaw);
-    expect(dyaw).toBeGreaterThan(0);
+    expect(dyaw).toBeLessThan(0);
     world.dispose();
   });
 });

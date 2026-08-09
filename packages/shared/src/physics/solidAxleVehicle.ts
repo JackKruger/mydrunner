@@ -113,6 +113,22 @@ export function coupleLimitedSlip(left: number, right: number, coupling: number)
   return [left + correction, right - correction];
 }
 
+/** Speed-sensitive mechanical steering limit derived from
+ *  a_lat = v^2 * tan(steer) / wheelbase. Binary keyboard input otherwise
+ *  requests full lock at any speed, which is both unrealistic and capable of
+ *  tripping a fast car over its outside tyres. */
+export function steeringLimitForSpeed(
+  mechanicalLimit: number,
+  wheelbase: number,
+  speed: number,
+): number {
+  if (mechanicalLimit <= 0 || wheelbase <= 0) return 0;
+  const v = Math.max(0, Math.abs(speed));
+  if (v < 1e-3) return mechanicalLimit;
+  const dynamicLimit = Math.atan(wheelbase * VEHICLE.maxSteerLateralAccel / (v * v));
+  return Math.min(mechanicalLimit, dynamicLimit);
+}
+
 export class SolidAxleVehicle implements VehicleLike {
   private readonly world: World;
   readonly id: string;
@@ -321,15 +337,25 @@ export class SolidAxleVehicle implements VehicleLike {
     const alignmentPull = (1 - this.damage.steering) * 0.16;
     const lockerSteer = this.drivetrain.frontLocked ? 0.68
       : this.drivetrain.rearLocked ? 0.88 : 1;
+    const mechanicalSteerLimit = TUNING.maxSteer * this.geom.spec.maxSteerMult;
+    const activeSteerLimit = steeringLimitForSpeed(
+      mechanicalSteerLimit,
+      this.geom.spec.wheelbase,
+      groundSpeed,
+    );
     const targetSteer = clamp(
-      this.input.steer * TUNING.maxSteer * steeringAuthority * lockerSteer + alignmentPull,
-      -TUNING.maxSteer,
-      TUNING.maxSteer,
+      this.input.steer * mechanicalSteerLimit * steeringAuthority * lockerSteer + alignmentPull,
+      -activeSteerLimit,
+      activeSteerLimit,
     );
     const steerDelta = targetSteer - this.currentSteer;
     const maxStep = TUNING.steerSpeed * this.geom.spec.steeringResponse * dt;
-    this.currentSteer +=
-      Math.abs(steerDelta) < maxStep ? steerDelta : Math.sign(steerDelta) * maxStep;
+    this.currentSteer = clamp(
+      this.currentSteer
+        + (Math.abs(steerDelta) < maxStep ? steerDelta : Math.sign(steerDelta) * maxStep),
+      -activeSteerLimit,
+      activeSteerLimit,
+    );
 
     // 3. Per axle: raycast wheel-ends, integrate axle DOFs, apply chassis
     //    reaction forces. Raycast origins are FIXED in chassis-local space

@@ -81,6 +81,13 @@ export const VEHICLE = {
   // model without the old server round trip. Keep enough travel time for
   // keyboard steering to read as a wheel being turned rather than a snap.
   steerSpeed: 2.2,
+  // Keyboard steer is binary, so full input must mean "the strongest
+  // sensible turn at this speed", not full mechanical steering lock. The
+  // dynamic limit in solidAxleVehicle.ts converts this lateral-acceleration
+  // budget into a road-wheel angle using the bicycle model. Full lock is
+  // still available at trail speed; at road/rally speed this prevents a
+  // brief key press from asking the tyres for an instant rollover turn.
+  maxSteerLateralAccel: 6.5,
   // Wheel friction multipliers - front slightly less grippy than rear so
   // the car understeers (slides front-end-out) instead of pivoting hard
   // enough to flip on most turns. Rollover is still possible if you take
