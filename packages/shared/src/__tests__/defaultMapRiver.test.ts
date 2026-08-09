@@ -10,6 +10,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { EMPTY_INPUT, type CarKind } from '../types.js';
 import { applyMapDoc, baseChecksumOf } from '../map/applyMapDoc.js';
+import { carveRiver } from '../map/riverCarve.js';
 import { defaultMap } from '../map/maps/defaultMap.js';
 import { gridSpawn, resolveSpawn } from '../map/spawn.js';
 import { TERRAIN } from '../constants.js';
@@ -24,6 +25,35 @@ beforeAll(async () => {
 const map = applyMapDoc(defaultMap);
 const FORD_X = -40;
 const ROAD_Z = TERRAIN.roadZ;
+
+describe('the carve is a fixed point', () => {
+  // scripts/carveRiver.ts tells you to re-run it whenever the river moves,
+  // and its whole safety story is that a run which changes nothing writes
+  // nothing. That was untrue for a while: the reset was keyed on the last
+  // run's water grid, which excludes the graded bank, so every run re-cut
+  // the shoulders on top of their own previous cut and the valley crept
+  // deeper. Nothing failed - the map simply drifted a little each time
+  // somebody followed the instructions.
+  it('re-carving the shipped map reproduces it exactly', () => {
+    const again = carveRiver(defaultMap);
+    expect(again.doc.heightDelta).toEqual(defaultMap.heightDelta);
+    expect(again.doc.water).toEqual(defaultMap.water);
+  });
+
+  it('converges from any starting delta, not just the committed one', () => {
+    const once = carveRiver(defaultMap).doc;
+    const twice = carveRiver(once).doc;
+    expect(twice.heightDelta).toEqual(once.heightDelta);
+    expect(twice.water).toEqual(once.water);
+  });
+
+  it('cuts a bank wider than it floods, which is why the reset spans the footprint', () => {
+    // If these were ever equal the old water-keyed reset would have looked
+    // correct, and this whole class of drift would be invisible.
+    const { carved, wet } = carveRiver(defaultMap);
+    expect(wet).toBeLessThan(carved);
+  });
+});
 
 describe('the map still composes', () => {
   it('carries water', () => {
