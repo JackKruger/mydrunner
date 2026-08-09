@@ -14,6 +14,8 @@ export class EngineAudio {
   private intakeGain: GainNode | null = null;
   private masterGain: GainNode | null = null;
   private filter: BiquadFilterNode | null = null;
+  private winchOsc: OscillatorNode | null = null;
+  private winchGain: GainNode | null = null;
   private lastRpm = 800;
   private lastThrottle = 0;
   // Audio disabled by default - the procedural synth doesn't sound great
@@ -77,8 +79,41 @@ export class EngineAudio {
     this.intakeOsc = intakeOsc;
     this.intakeGain = intakeGain;
 
+    const winchOsc = ctx.createOscillator();
+    winchOsc.type = 'triangle';
+    winchOsc.frequency.value = 95;
+    const winchGain = ctx.createGain();
+    winchGain.gain.value = 0;
+    winchOsc.connect(winchGain).connect(filter);
+    winchOsc.start();
+    this.winchOsc = winchOsc;
+    this.winchGain = winchGain;
+
     // Fade master in.
     master.gain.setTargetAtTime(this.muted ? 0 : 0.18, ctx.currentTime, 0.5);
+  }
+
+  setWinch(motor: -1 | 0 | 1, load: number, status: string): void {
+    if (!this.ctx || !this.winchOsc || !this.winchGain) return;
+    const t = this.ctx.currentTime;
+    const running = motor !== 0;
+    const stalled = status === 'STALLED';
+    this.winchOsc.frequency.setTargetAtTime(stalled ? 58 : 95 + Math.abs(motor) * 25 - Math.min(1, load) * 30, t, 0.04);
+    this.winchGain.gain.setTargetAtTime(running ? (stalled ? 0.22 : 0.09 + Math.min(1, load) * 0.08) : 0, t, 0.035);
+  }
+
+  playWinchBreak(): void {
+    if (!this.ctx || !this.filter) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(180, this.ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(45, this.ctx.currentTime + 0.18);
+    gain.gain.setValueAtTime(0.18, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.2);
+    osc.connect(gain).connect(this.filter);
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.21);
   }
 
   /** Update from current vehicle telemetry. */
@@ -109,7 +144,11 @@ export class EngineAudio {
   }
 
   toggleMute(): boolean {
-    this.muted = !this.muted;
+    return this.setMuted(!this.muted);
+  }
+
+  setMuted(muted: boolean): boolean {
+    this.muted = muted;
     if (this.masterGain && this.ctx) {
       this.masterGain.gain.setTargetAtTime(this.muted ? 0 : 0.18, this.ctx.currentTime, 0.05);
     }

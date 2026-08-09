@@ -14,6 +14,8 @@ export type ToolId = SculptMode | 'paint' | 'water' | 'object' | 'spawn' | 'dele
  *  - erase: dry the cells out
  *  - flow:  stamp the drag direction into the velocity field */
 export type WaterMode = 'raise' | 'erase' | 'flow';
+export type DeleteMode = 'single' | 'radius';
+export type ObjectPlacementMode = 'ground' | 'offset' | 'absolute';
 
 export interface ToolState {
   tool: ToolId;
@@ -32,6 +34,12 @@ export interface ToolState {
    *  `Math.random()` at placement time, which made the ghost a lie: you
    *  aimed one thing and got another. */
   objectYaw: number;
+  /** How the next object's base/origin is resolved vertically. */
+  objectPlacementMode: ObjectPlacementMode;
+  /** Metres above (or below, when negative) the terrain under the object. */
+  objectYOffset: number;
+  /** Fixed world-space Y of the object's base/origin. */
+  objectWorldY: number;
   /** Facing written onto the next spawn point placed, in radians. */
   spawnYaw: number;
   waterMode: WaterMode;
@@ -40,6 +48,9 @@ export interface ToolState {
   waterDepth: number;
   /** Metres per second written by the flow mode and the auto-flow button. */
   waterSpeed: number;
+  /** Single picks one object under the pointer (or one nearby spawn).
+   *  Radius clears every object and spawn inside the brush ring. */
+  deleteMode: DeleteMode;
 }
 
 export function defaultToolState(): ToolState {
@@ -57,6 +68,9 @@ export function defaultToolState(): ToolState {
     objectHeight: Physics.objectInfo('rock').defaults.height,
     objectLength: 3,
     objectYaw: 0,
+    objectPlacementMode: 'ground',
+    objectYOffset: 0,
+    objectWorldY: 0,
     // pi/2 matches Room's road-grid spawn: local +Z rotated onto world +X.
     spawnYaw: Math.PI / 2,
     waterMode: 'raise',
@@ -65,7 +79,17 @@ export function defaultToolState(): ToolState {
     // separates the kinds.
     waterDepth: 0.9,
     waterSpeed: 1.8,
+    deleteMode: 'single',
   };
+}
+
+/** Resolve the next object's base for both the ghost and the placed record. */
+export function objectBaseY(state: ToolState, groundY: number): number {
+  switch (state.objectPlacementMode) {
+    case 'offset': return groundY + state.objectYOffset;
+    case 'absolute': return state.objectWorldY;
+    default: return groundY;
+  }
 }
 
 /** Tools that paint continuously while dragging. The rest act once per

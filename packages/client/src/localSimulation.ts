@@ -8,12 +8,16 @@
 import {
   BUTTON_RESET,
   VEHICLE,
+  WINCH,
   Maps,
   Physics,
   createStockBuild,
   type PlayerInput,
   type VehicleBuild,
   type VehicleState,
+  type WinchLinkSnapshot,
+  type WinchMotor,
+  type WinchRuntimeUpdate,
 } from '@mydrunner/shared';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { RemoteCollisionState } from './scene.js';
@@ -129,6 +133,8 @@ function slerpQuat(
 }
 
 interface RemoteProxy {
+  id: string;
+  build: VehicleBuild;
   buildRevision: number;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
@@ -136,6 +142,8 @@ interface RemoteProxy {
   targetRotation: { x: number; y: number; z: number; w: number };
   recvAtMs: number;
   enabled: boolean;
+  linVel: { x: number; y: number; z: number };
+  angVel: { x: number; y: number; z: number };
 }
 
 const REMOTE_PROXY_STALE_MS = 500;
@@ -150,12 +158,20 @@ export class LocalSimulation {
   private readonly rendered = makeState();
   private readonly remoteProxies = new Map<string, RemoteProxy>();
   private workshopMode = false;
+  private readonly localPlayerId: string;
+  private winchLinks: WinchLinkSnapshot[] = [];
+  private winchMotor: WinchMotor = 0;
+  private winchRuntimeState: Physics.WinchRuntimeState | null = null;
+  private winchRuntimeLinkId: string | null = null;
+  private pendingWinchBreak: string | null = null;
 
   constructor(
     map: Maps.MapWorld,
     spawn: { position: { x: number; y: number; z: number }; yaw?: number },
     build: VehicleBuild = createStockBuild(),
+    localPlayerId = 'local',
   ) {
+    this.localPlayerId = localPlayerId;
     this.world = new Physics.World({ map });
     this.spawn = { position: { ...spawn.position }, yaw: spawn.yaw ?? 0 };
     this.vehicle = this.world.spawnVehicle('local', this.spawn, build);
@@ -181,12 +197,68 @@ export class LocalSimulation {
     } else {
       this.vehicle.setInput(input);
       this.prepareRemoteProxies(performance.now());
+      this.applyWinchLoads();
       this.world.step();
       this.ejectIfOutsideWorld();
     }
     this.lastSteppedSeq = input.seq;
     copyVehicleState(this.vehicle.getState(), this.current);
     if ((input.buttons & BUTTON_RESET) !== 0) copyState(this.current, this.previous);
+  }
+
+  setWinchLinks(links: readonly WinchLinkSnapshot[]): void {
+    this.winchLinks = links.map((link) => ({ ...link, target: link.target.kind === 'obstacle'
+      ? { ...link.target, anchor: { ...link.target.anchor } }
+      : { ...link.target } }));
+    const owned = this.winchLinks.find((link) => link.ownerId === this.localPlayerId);
+    if (!owned) {
+      this.winchRuntimeState = null;
+      this.winchRuntimeLinkId = null;
+      this.winchMotor = 0;
+    } else if (owned.id !== this.winchRuntimeLinkId) {
+      this.winchRuntimeLinkId = owned.id;
+      this.winchRuntimeState = {
+        cableLength: owned.cableLength,
+        tension: owned.tension,
+        overloadTime: 0,
+        broken: false,
+      };
+    }
+  }
+
+  setWinchMotor(motor: WinchMotor): void {
+    this.winchMotor = this.winchRuntimeState ? motor : 0;
+  }
+
+  winchRuntime(): WinchRuntimeUpdate | undefined {
+    if (!this.winchRuntimeState || !this.winchRuntimeLinkId) return undefined;
+    return {
+      linkId: this.winchRuntimeLinkId,
+      cableLength: this.winchRuntimeState.cableLength,
+      motor: this.winchMotor,
+      tension: this.winchRuntimeState.tension,
+    };
+  }
+
+  consumeWinchBreak(): string | null {
+    const linkId = this.pendingWinchBreak;
+    this.pendingWinchBreak = null;
+    return linkId;
+  }
+
+  winchTelemetry(): { attached: boolean; cableLength: number; tension: number; motor: WinchMotor; status: string } {
+    const owned = this.winchLinks.find((link) => link.ownerId === this.localPlayerId);
+    if (!owned || !this.winchRuntimeState) return { attached: false, cableLength: 0, tension: 0, motor: 0, status: '' };
+    const tension = this.winchRuntimeState.tension;
+    return {
+      attached: true,
+      cableLength: this.winchRuntimeState.cableLength,
+      tension,
+      motor: this.winchMotor,
+      status: tension >= WINCH.breakForce * 0.99 ? 'OVERLOAD'
+        : this.winchMotor === 1 && tension >= WINCH.ratedPull * 0.98 ? 'STALLED'
+          : tension > 0 ? 'TAUT' : 'SLACK',
+    };
   }
 
   resetTo(spawn: { position: { x: number; y: number; z: number }; yaw: number }): void {
@@ -253,6 +325,8 @@ export class LocalSimulation {
       proxy.targetRotation.y = state.rotation.y;
       proxy.targetRotation.z = state.rotation.z;
       proxy.targetRotation.w = state.rotation.w;
+      proxy.linVel = { ...state.linVel };
+      proxy.angVel = { ...state.angVel };
       proxy.recvAtMs = state.recvAtMs;
       const fresh = !state.workshopMode && nowMs - state.recvAtMs <= REMOTE_PROXY_STALE_MS;
       if (!fresh && proxy.enabled) {
@@ -351,7 +425,7 @@ export class LocalSimulation {
     const geom = Physics.geomFor(state.build);
     const ext = geom.chassisHalfExtents;
     const radius = VEHICLE.chassisColliderRadius;
-    const colliderHalfHeight = (VEHICLE.cabinRoofY + ext.y) * 0.5;
+    const colliderHalfHeight = (geom.spec.collisionRoofY + ext.y) * 0.5;
     const colliderOffsetY = -ext.y + colliderHalfHeight;
     const body = this.world.world.createRigidBody(
       this.world.rapier.RigidBodyDesc.kinematicPositionBased()
@@ -372,6 +446,8 @@ export class LocalSimulation {
       body,
     );
     return {
+      id: state.id,
+      build: state.build,
       buildRevision: state.buildRevision,
       body,
       collider,
@@ -379,6 +455,58 @@ export class LocalSimulation {
       targetRotation: { ...state.rotation },
       recvAtMs: state.recvAtMs,
       enabled: true,
+      linVel: { ...state.linVel },
+      angVel: { ...state.angVel },
+    };
+  }
+
+  private applyWinchLoads(): void {
+    const localState = this.vehicle.getState();
+    const localGeom = Physics.geomFor(this.vehicle.build);
+    for (const link of this.winchLinks) {
+      const owns = link.ownerId === this.localPlayerId;
+      const targets = link.target.kind === 'vehicle' && link.target.playerId === this.localPlayerId;
+      if (!owns && !targets) continue;
+
+      const source = owns
+        ? endpointForState(localState, localGeom.recoveryPoints.fairlead)
+        : this.remoteEndpoint(link.ownerId, 'fairlead');
+      const target = link.target.kind === 'obstacle'
+        ? { position: link.target.anchor, velocity: { x: 0, y: 0, z: 0 } }
+        : targets
+          ? endpointForState(localState, localGeom.recoveryPoints[link.target.point])
+          : this.remoteEndpoint(link.target.playerId, link.target.point);
+      if (!source || !target) continue;
+      const cableLength = owns && this.winchRuntimeState && this.winchRuntimeLinkId === link.id
+        ? this.winchRuntimeState.cableLength : link.cableLength;
+      const force = Physics.computeWinchForce(source, target, cableLength);
+      if (owns && this.winchRuntimeState && this.winchRuntimeLinkId === link.id) {
+        this.winchRuntimeState = Physics.stepWinchRuntime(this.winchRuntimeState, this.winchMotor, force.demand);
+        if (this.winchRuntimeState.broken) {
+          this.pendingWinchBreak = link.id;
+          this.winchMotor = 0;
+        }
+      }
+      if (force.tension <= 0) continue;
+      const sign = owns ? 1 : -1;
+      this.vehicle.queueExternalPointLoad({
+        point: owns ? source.position : target.position,
+        force: {
+          x: force.direction.x * force.tension * sign,
+          y: force.direction.y * force.tension * sign,
+          z: force.direction.z * force.tension * sign,
+        },
+      });
+    }
+  }
+
+  private remoteEndpoint(id: string, point: 'fairlead' | 'front' | 'rear'): Physics.WinchEndpoint | null {
+    const proxy = this.remoteProxies.get(id);
+    if (!proxy?.enabled) return null;
+    const local = Physics.geomFor(proxy.build).recoveryPoints[point];
+    return {
+      position: Physics.transformPoint(local, proxy.targetPosition, proxy.targetRotation),
+      velocity: Physics.pointVelocity(local, proxy.targetRotation, proxy.linVel, proxy.angVel),
     };
   }
 
@@ -406,18 +534,27 @@ export class LocalSimulation {
   private ejectIfOutsideWorld(): void {
     const t = this.vehicle.body.translation();
     const half = this.world.terrain.size * 0.5;
-    const offX = Math.abs(t.x) > half - 6;
-    const offZ = Math.abs(t.z) > half - 6;
-    const fellThrough = t.y < -8;
-    if (!offX && !offZ && !fellThrough) return;
+    const offX = Math.abs(t.x) > half;
+    const offZ = Math.abs(t.z) > half;
+    if (!offX && !offZ) return;
     const len = Math.hypot(t.x, t.z) || 1;
     this.vehicle.body.setLinvel(
       { x: (-t.x / len) * 40, y: 35, z: (-t.z / len) * 40 },
       true,
     );
     this.vehicle.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-    if (fellThrough) {
+    if (t.y < -8) {
       this.vehicle.body.setTranslation({ x: t.x, y: 5, z: t.z }, true);
     }
   }
+}
+
+function endpointForState(
+  state: VehicleState,
+  local: { x: number; y: number; z: number },
+): Physics.WinchEndpoint {
+  return {
+    position: Physics.transformPoint(local, state.position, state.rotation),
+    velocity: Physics.pointVelocity(local, state.rotation, state.linVel, state.angVel),
+  };
 }

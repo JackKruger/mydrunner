@@ -13,6 +13,7 @@ import {
   Physics,
   FIXED_DT,
   SNAPSHOT_RATE,
+  BUTTON_RESET,
   createStockBuild,
   normalizeVehicleBaseId,
   type PlayerId,
@@ -21,10 +22,27 @@ import {
 
 import { EngineAudio } from './engineAudio.js';
 import { loadSavedJoin, saveJoin, showJoinScreen, type JoinChoice } from './joinScreen.js';
+import {
+  applyStartOptions,
+  createGameSave,
+  loadGameSaves,
+  loadStartOptions,
+  showStartScreen,
+  touchGameSave,
+  updateGameSave,
+} from './startScreen.js';
 import { initChat } from './chat.js';
 import { isDebugUser, initDebugPanel, updateAxleDebug } from './debugPanel.js';
 
-import { initInput, sampleInput, clearKeys, isHandbrakeOn } from './input.js';
+import {
+  initInput,
+  sampleInput,
+  clearKeys,
+  isHandbrakeOn,
+  requestTransferCase,
+  setDrivetrainControlsEnabled,
+  setManualGear,
+} from './input.js';
 import { getTouchState, initTouchInput, onTouchEdge } from './touchInput.js';
 import { resolveHandshakeMap } from './mapLoad.js';
 import { NetClient } from './net.js';
@@ -33,6 +51,7 @@ import { Scene } from './scene.js';
 import { LocalSimulation } from './localSimulation.js';
 import { readPreview } from './previewHandoff.js';
 import { WorkshopUI } from './workshop.js';
+import { WinchController } from './winchController.js';
 
 function getServerUrl(): string {
   const explicit = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -46,6 +65,8 @@ const app = document.getElementById('app')!;
 const playerUI = new PlayerUI(hud, {
   development: import.meta.env.DEV,
   version: __APP_VERSION__,
+  onGearSelection: setManualGear,
+  onTransferCaseSelection: requestTransferCase,
 });
 
 initInput();
@@ -163,9 +184,14 @@ onTouchEdge('mute', () => engineAudio.toggleMute());
 // sets DEV; production builds skip this) so production bundles do not ship
 // the internals to the window object.
 if (import.meta.env.DEV) {
-  const devWindow = window as unknown as { __scene: unknown; __playerUI: PlayerUI };
+  const devWindow = window as unknown as {
+    __scene: unknown;
+    __playerUI: PlayerUI;
+    __workshop: WorkshopUI;
+  };
   devWindow.__scene = scene;
   devWindow.__playerUI = playerUI;
+  devWindow.__workshop = workshop;
 }
 
 let localId: PlayerId | null = null;
@@ -175,7 +201,7 @@ let lastSnapTick = 0;
 let lastSpeed = 0;
 let lastRpm = 0;
 let lastGear = 0;
-let lastRange: 'high' | 'low' = 'high';
+let lastTransferCase: '2h' | '4h' | '4l' = '4h';
 let lastFrontLocked = false;
 let lastRearLocked = false;
 let lastBodyCondition = 1;
@@ -205,14 +231,22 @@ let stateSeq = 0;
 // is decoupled from rendering so a 30 FPS display still gets two physics
 // steps per frame and the truck's handling does not change with frame rate.
 let inputAcc = 0;
-/** Last sampled steer (-1..1) cached across render frames. Drives the local
- *  truck's front-wheel mesh visual override. */
-let lastInputSteer = 0;
 const HARD_STEP_CAP = 12; // catastrophic-stall safety net
 
 let fps = 0;
 let frameCount = 0;
 let lastFpsUpdate = performance.now();
+
+const winchController = new WinchController(scene, {
+  simulation: () => localSimulation,
+  net: () => currentNet,
+  online: () => connected && !previewMode,
+  blocked: () => chat.isOpen() || workshop.isOpen,
+});
+if (import.meta.env.DEV) {
+  (window as unknown as { __winchController: WinchController }).__winchController = winchController;
+}
+onTouchEdge('winch', () => winchController.touchHook());
 
 /** Compose a map, install it everywhere, and build the local sim.
  *
@@ -227,6 +261,7 @@ function enterWorld(
 ): void {
   localId = id;
   currentBuild = build;
+  configureDrivetrainControls(build);
   currentBuildRevision = 1;
   scene.setLocalPlayer(id, build, currentBuildRevision);
   // Compose the map ONCE and share it everywhere it's needed: the terrain
@@ -239,12 +274,22 @@ function enterWorld(
   // so the local Rapier world integrates against an identical heightmap and
   // obstacle set and starts at the same pose.
   localSimulation?.dispose();
-  localSimulation = new LocalSimulation(mapWorld, spawn, build);
+  localSimulation = new LocalSimulation(mapWorld, spawn, build, id);
+  winchController.reset(id, build);
   inputAcc = 0;
   stateUploadAcc = 0;
   stateSeq = 0;
   if (import.meta.env.DEV) {
     (window as unknown as { __localSimulation: unknown }).__localSimulation = localSimulation;
+  }
+}
+
+function configureDrivetrainControls(build: VehicleBuild): void {
+  const fixedRwd = Physics.geomFor(build).spec.drivetrain === 'fixed-rwd';
+  setDrivetrainControlsEnabled(!fixedRwd);
+  for (const id of ['range-btn', 'rear-locker-btn', 'front-locker-btn']) {
+    const control = document.getElementById(id);
+    if (control) control.hidden = fixedRwd;
   }
 }
 
@@ -354,6 +399,7 @@ function installPreviewControls(spawn: Maps.SpawnPose, build: VehicleBuild): voi
     }
     if (e.code === 'KeyR' && e.shiftKey && localSimulation) {
       e.preventDefault();
+      winchController.detach();
       const p = scene.localPosition();
       if (!p || !mapWorld) {
         localSimulation.resetTo(spawn);
@@ -370,27 +416,28 @@ function installPreviewControls(spawn: Maps.SpawnPose, build: VehicleBuild): voi
 }
 
 async function start(): Promise<void> {
-  // Rapier WASM init - needed before the local simulation World can be
-  // constructed (and by terrain generation helpers in the shared package).
-  await Physics.initRapier();
-
-  // Show the name + car picker on every load so the player can pick a
-  // different rig if they want; previous name + car are pre-filled from
-  // localStorage so the common case is one Enter to drive. URL param
-  // ?auto=1 skips the picker entirely (used by e2e tests).
+  // Resolve startup UI before compiling Rapier's WASM. This gets the menu on
+  // screen immediately on cold/mobile loads instead of showing a blank HUD
+  // while the physics runtime initialises. ?auto=1 remains the direct path
+  // used by e2e tests.
   const params = new URLSearchParams(location.search);
   const saved = loadSavedJoin();
+  const startOptions = loadStartOptions();
+  applyStartOptions(startOptions);
+  engineAudio.setMuted(!startOptions.engineAudio);
 
   // Previewing a map the editor handed over. Checked before the join
   // screen and before any NetClient exists: there is no server in this
   // mode, so there is nothing to join and no name to pick.
   if (params.get('preview') === '1') {
+    await Physics.initRapier();
     startPreview(params, saved?.build);
     return;
   }
 
   const auto = params.get('auto') === '1';
   let choice: JoinChoice;
+  let activeSaveId: string | null = null;
   if (auto) {
     const carParam = params.get('car');
     choice = {
@@ -399,9 +446,33 @@ async function start(): Promise<void> {
       carKind: carParam ? normalizeVehicleBaseId(carParam) : (saved?.build.baseId ?? 'ridgeback'),
     };
   } else {
-    choice = await showJoinScreen(saved ?? {});
+    const launch = await showStartScreen({
+      saves: loadGameSaves(saved),
+      // Authoring links are normally a development-build feature, but a
+      // deployed build can opt in explicitly with /?dev.
+      development: import.meta.env.DEV || params.has('dev'),
+      options: startOptions,
+      onOptionsChanged(options) {
+        engineAudio.setMuted(!options.engineAudio);
+      },
+    });
+    if (launch.type === 'play') {
+      activeSaveId = launch.save.id;
+      const played = touchGameSave(launch.save.id) ?? launch.save;
+      choice = { name: played.name, build: played.build, carKind: played.build.baseId };
+    } else {
+      // A new slot starts with the previous rig as a convenience, but leaves
+      // the driver name blank so it cannot silently overwrite an identity.
+      choice = await showJoinScreen(saved?.build ? { build: saved.build, carKind: saved.build.baseId } : {});
+      const created = createGameSave(choice);
+      activeSaveId = created.id;
+    }
     saveJoin(choice);
   }
+
+  // Needed before a LocalSimulation can be constructed by the welcome
+  // handshake. The menu gesture has already happened on the interactive path.
+  await Physics.initRapier();
   playerUI.setConnectionState({
     mode: 'connecting',
     message: 'connecting to rally control…',
@@ -449,6 +520,7 @@ async function start(): Promise<void> {
     onSnapshot(snap, recvAtMs) {
       lastSnapTick = snap.tick;
       scene.pushSnapshot(snap, recvAtMs);
+      winchController.setLinks(snap.winches ?? []);
       netDiagOnSnapshot(recvAtMs);
       if (localId) {
         const me = snap.players.find((player) => player.id === localId);
@@ -512,6 +584,7 @@ async function start(): Promise<void> {
         return;
       }
       if (msg.action === 'enter' && msg.leaseId && msg.pose && msg.build) {
+        winchController.detach();
         workshopLeaseId = msg.leaseId;
         workshopPose = msg.pose;
         localSimulation?.enterWorkshop(msg.pose);
@@ -524,6 +597,8 @@ async function start(): Promise<void> {
       }
       if (msg.action === 'apply' && msg.build && msg.pose && msg.buildRevision !== undefined) {
         currentBuild = msg.build;
+        configureDrivetrainControls(msg.build);
+        winchController.setBuild(msg.build);
         currentBuildRevision = msg.buildRevision;
         workshopPose = msg.pose;
         workshop.confirmApplied(msg.build);
@@ -532,6 +607,7 @@ async function start(): Promise<void> {
         choice.build = msg.build;
         choice.carKind = msg.build.baseId;
         saveJoin(choice);
+        if (activeSaveId) updateGameSave(activeSaveId, choice);
         if (workshopLeaseId) net.exitWorkshop(workshopLeaseId);
         return;
       }
@@ -542,6 +618,12 @@ async function start(): Promise<void> {
         workshopPose = null;
       }
     },
+    onWinchAck(msg) {
+      winchController.onAck(msg);
+    },
+    onWinchEvent(msg) {
+      winchController.onEvent(msg.linkId, msg.reason);
+    },
   });
   currentNet = net;
   net.connect();
@@ -551,6 +633,7 @@ async function start(): Promise<void> {
   const requestWorkshop = (): void => {
     if (!nearbyBayId || workshopEntryPending || workshop.isOpen) return;
     workshopEntryPending = true;
+    winchController.detach();
     workshopPrompt.classList.remove('visible');
     net.enterWorkshop(nearbyBayId);
   };
@@ -593,6 +676,8 @@ function frame(): void {
 
   // Preview drives the same accumulator with no socket on the other end.
   const simulationStart = performance.now();
+  const touch = getTouchState();
+  winchController.update(touch.winchIn > 0, touch.winchOut > 0);
   if (localSimulation && !previewMode) {
     localSimulation.syncRemoteVehicles(scene.remoteCollisionStates(), now);
   }
@@ -601,13 +686,13 @@ function frame(): void {
     let steps = 0;
     while (inputAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
       const input = sampleInput();
+      if ((input.buttons & BUTTON_RESET) !== 0) winchController.detach();
       if (localSimulation) localSimulation.step(input);
-      lastInputSteer = input.steer;
+      winchController.afterStep();
       inputAcc -= FIXED_DT;
       steps += 1;
     }
     if (steps >= HARD_STEP_CAP) inputAcc = 0;
-    scene.setLocalInputSteer(lastInputSteer);
   }
   const simulationMs = performance.now() - simulationStart;
   // Render between the two completed fixed steps. This is one fixed tick
@@ -621,7 +706,7 @@ function frame(): void {
     lastSpeed = telemetry.speed;
     lastRpm = telemetry.rpm;
     lastGear = telemetry.gear;
-    lastRange = telemetry.drivetrain.range;
+    lastTransferCase = telemetry.drivetrain.transferCase;
     lastFrontLocked = telemetry.drivetrain.frontLocked;
     lastRearLocked = telemetry.drivetrain.rearLocked;
     lastBodyCondition = telemetry.damage.body;
@@ -633,6 +718,9 @@ function frame(): void {
       drivetrainNoticeUntil = now + 2600;
     }
     engineAudio.set(telemetry.rpm, telemetry.throttle);
+    const winchAudio = winchController.audioState();
+    engineAudio.setWinch(winchAudio.motor, winchAudio.load, winchAudio.status);
+    if (winchController.consumeBreakCue()) engineAudio.playWinchBreak();
 
     // Publish canonical owner state independently of render/physics cadence.
     // At 30 Hz this matches the existing remote snapshot interpolation rate
@@ -645,6 +733,7 @@ function frame(): void {
         currentNet?.sendVehicleState({
           seq: ++stateSeq,
           vehicle: localSimulation.vehicleState(),
+          winch: winchController.runtime(),
         });
       }
     }
@@ -706,13 +795,15 @@ function updateHud(): void {
       engineStatus: engineStatusLabel(),
       fps,
       previewDiagnostic: 'offline physics',
-      range: t?.drivetrain.range ?? 'high',
+      transferCase: t?.drivetrain.transferCase ?? '4h',
       frontLocked: t?.drivetrain.frontLocked ?? false,
       rearLocked: t?.drivetrain.rearLocked ?? false,
+      fixedRwd: Physics.geomFor(currentBuild).spec.drivetrain === 'fixed-rwd',
       bodyCondition: t?.damage.body ?? 1,
       engineCondition: t?.damage.engine ?? 1,
       steeringCondition: t?.damage.steering ?? 1,
       drivetrainNotice: performance.now() < drivetrainNoticeUntil ? drivetrainNotice : '',
+      winchStatus: winchController.statusText(),
     });
     return;
   }
@@ -726,13 +817,15 @@ function updateHud(): void {
     tick: lastSnapTick,
     fps,
     previewDiagnostic: '',
-    range: lastRange,
+    transferCase: lastTransferCase,
     frontLocked: lastFrontLocked,
     rearLocked: lastRearLocked,
+    fixedRwd: Physics.geomFor(currentBuild).spec.drivetrain === 'fixed-rwd',
     bodyCondition: lastBodyCondition,
     engineCondition: lastEngineCondition,
     steeringCondition: lastSteeringCondition,
     drivetrainNotice: performance.now() < drivetrainNoticeUntil ? drivetrainNotice : '',
+    winchStatus: winchController.statusText(),
   });
 }
 

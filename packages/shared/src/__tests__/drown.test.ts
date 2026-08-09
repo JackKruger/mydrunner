@@ -92,7 +92,10 @@ describe('the air intake decides who drowns', () => {
   });
 
   it('lets the expedition Longreach survive water that drowns the work ute', () => {
-    const level = (intakeWorldY('longreach') + intakeWorldY('stockman-single')) / 2;
+    // Buoyancy unloads both trucks slightly relative to their dry intake
+    // heights. Bias the separating level upward enough to keep the work
+    // ute submerged while retaining the Longreach's large intake margin.
+    const level = (intakeWorldY('longreach') + intakeWorldY('stockman-single')) / 2 + 0.08;
 
     const a = floodedWorld(level);
     expect(run(a, 'stockman-single', WATER.drownTicks + 40).waterStatus().drowned).toBe(true);

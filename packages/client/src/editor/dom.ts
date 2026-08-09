@@ -43,6 +43,47 @@ export interface SliderHandle {
   setVisible(v: boolean): void;
 }
 
+export interface NumberHandle {
+  set(v: number): void;
+  setLabel(label: string): void;
+  setVisible(v: boolean): void;
+}
+
+/** Exact decimal entry for values where slider quantisation is harmful.
+ *  Empty/non-finite edits never reach state and blur restores the last
+ *  accepted value. */
+export function numberField(
+  parent: HTMLElement,
+  label: string,
+  value: number,
+  onInput: (v: number) => void,
+): NumberHandle {
+  const row = el('label', 'ed-field');
+  const name = el('span', 'ed-label');
+  const input = document.createElement('input');
+  let accepted = value;
+  name.textContent = label;
+  input.type = 'number';
+  input.step = 'any';
+  input.value = String(value);
+  input.addEventListener('input', () => {
+    const next = input.valueAsNumber;
+    if (!Number.isFinite(next)) return;
+    accepted = next;
+    onInput(next);
+  });
+  input.addEventListener('blur', () => {
+    if (!Number.isFinite(input.valueAsNumber)) input.value = String(accepted);
+  });
+  row.append(name, input);
+  parent.appendChild(row);
+  return {
+    set(v) { accepted = v; input.value = String(v); },
+    setLabel(next) { name.textContent = next; },
+    setVisible(v) { row.style.display = v ? '' : 'none'; },
+  };
+}
+
 export function slider(
   parent: HTMLElement,
   label: string,

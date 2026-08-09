@@ -4,7 +4,6 @@
 
 import * as THREE from 'three';
 import {
-  VEHICLE,
   Maps,
   Physics,
   createStockBuild,
@@ -13,15 +12,19 @@ import {
   type VehicleState,
   type WorldSnapshot,
   type PlayerId,
+  type WinchLinkSnapshot,
 } from '@mydrunner/shared';
+import type { WinchAttachTarget } from '@mydrunner/shared/net';
 import { RENDER_DELAY_MS } from './net.js';
 import { buildCarMesh, colorHash } from './carMesh.js';
+import type { SuspensionVisual } from './suspensionVisual.js';
 import { createNameplate, disposeNameplate } from './nameplate.js';
 import { VehicleEffects } from './vehicleEffects.js';
-import { ChaseCamera } from './camera.js';
+import { ChaseCamera, type CameraMode } from './camera.js';
 import { Minimap, type MinimapPlayer } from './minimap.js';
 import { WorldView } from './worldView.js';
 import { disposeObject3D } from './three/dispose.js';
+import { WinchView } from './winchView.js';
 
 const TWO_PI = Math.PI * 2;
 
@@ -59,10 +62,18 @@ interface VehicleVisual {
    *  these groups, so moving the axle moves both wheels as one rigid
    *  beam - the visual signature of solid-axle articulation. */
   axles: [THREE.Group, THREE.Group];
+  suspension: SuspensionVisual;
   nameplate: THREE.Sprite | null;
   nameplateText: string;
   build: VehicleBuild;
   buildRevision: number;
+  recovery: { fairlead: THREE.Object3D; front: THREE.Object3D; rear: THREE.Object3D };
+}
+
+export interface WinchPick {
+  target: WinchAttachTarget;
+  point: { x: number; y: number; z: number };
+  label: string;
 }
 
 export class Scene {
@@ -97,13 +108,13 @@ export class Scene {
     { rideY: 0, rollAngle: 0 },
   ];
   private _localHasState = false;
-  // Immediate visual override for the local front-wheel steer angle. The
-  // physics steering rack still ramps toward lock; showing the sampled
-  // input immediately makes that mechanical response readable.
-  private _localInputSteer = 0;
   private _localState: VehicleState | null = null;
   private _present = new Set<PlayerId>();
   private _remoteCollisionStates: RemoteCollisionState[] = [];
+  private readonly winchView = new WinchView();
+  private readonly winchRaycaster = new THREE.Raycaster();
+  private mapWorld: Maps.MapWorld | null = null;
+  private localWinches: WinchLinkSnapshot[] = [];
 
   constructor(canvasParent: HTMLElement) {
     // Renderer, lighting, sky, terrain, obstacles and landmarks all live
@@ -117,6 +128,7 @@ export class Scene {
 
     this.effects = new VehicleEffects();
     this.scene.add(this.effects.group);
+    this.scene.add(this.winchView.group);
 
     window.addEventListener('resize', () => {
       this.cam.setAspect(window.innerWidth / window.innerHeight);
@@ -129,7 +141,7 @@ export class Scene {
   // reaching into private internals.
   get cameraYaw(): number { return this.cam.yaw; }
   get cameraTarget(): THREE.Vector3 { return this.cam.target; }
-  get cameraMode(): 'chase' | 'hood' | 'free' { return this.cam.mode; }
+  get cameraMode(): CameraMode { return this.cam.mode; }
 
   setLocalPlayer(id: PlayerId, build: VehicleBuild = createStockBuild(), buildRevision = 1): void {
     this.localId = id;
@@ -144,6 +156,7 @@ export class Scene {
    *  bring back the deleted ones, and the truck would collide with rocks
    *  nobody could see. */
   setWorld(map: Maps.MapWorld): void {
+    this.mapWorld = map;
     const terrain = map.terrain;
     this.view.setWorld({
       terrain,
@@ -153,6 +166,50 @@ export class Scene {
     this.minimap.setTerrain(terrain);
     this.effects.setTerrain(terrain);
     this.cam.setTerrain({ heightAt: (x, z) => this.view.heightAt(x, z) });
+  }
+
+  setLocalWinchLinks(links: readonly WinchLinkSnapshot[]): void {
+    this.localWinches = [...links];
+  }
+
+  setWinchTarget(point: { x: number; y: number; z: number } | null, valid = false): void {
+    this.winchView.setTarget(point, valid);
+  }
+
+  pickWinchTarget(): WinchPick | null {
+    if (!this.localId || !this.mapWorld) return null;
+    this.winchRaycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+    this.winchRaycaster.far = 80;
+    const roots: THREE.Object3D[] = [];
+    if (this.view.obstacleGroup) roots.push(this.view.obstacleGroup);
+    if (this.view.terrainMesh) roots.push(this.view.terrainMesh.mesh);
+    for (const [id, visual] of this.vehicles) if (id !== this.localId) roots.push(visual.group);
+    const hits = this.winchRaycaster.intersectObjects(roots, true);
+    const source = this.localPosition();
+    if (!source || hits.length === 0) return null;
+    const hit = hits[0]!;
+    let node: THREE.Object3D | null = hit.object;
+    while (node) {
+      const obstacleId = node.userData.obstacleId as string | undefined;
+      if (obstacleId) {
+        const obstacle = this.mapWorld.obstacles.find((entry) => entry.id === obstacleId);
+        const anchor = obstacle ? Physics.winchAnchorForObstacle(obstacle, source) : null;
+        if (!anchor || Math.hypot(anchor.x - source.x, anchor.y - source.y, anchor.z - source.z) > 30) return null;
+        return { target: { kind: 'obstacle', obstacleId }, point: anchor, label: obstacle!.kind };
+      }
+      const playerId = node.userData.playerId as string | undefined;
+      if (playerId) {
+        const visual = this.vehicles.get(playerId);
+        if (!visual) return null;
+        const localHit = visual.group.worldToLocal(hit.point.clone());
+        const point = localHit.z >= 0 ? 'front' : 'rear';
+        const worldPoint = visual.recovery[point].getWorldPosition(new THREE.Vector3());
+        if (worldPoint.distanceTo(new THREE.Vector3(source.x, source.y, source.z)) > 30) return null;
+        return { target: { kind: 'vehicle', playerId, point }, point: worldPoint, label: `vehicle ${point}` };
+      }
+      node = node.parent;
+    }
+    return null;
   }
 
   cycleCameraMode(): void {
@@ -217,11 +274,14 @@ export class Scene {
       group: built.group,
       wheels: built.wheels,
       axles: built.axles,
+      suspension: built.suspension,
       nameplate: null,
       nameplateText: '',
       build,
       buildRevision,
+      recovery: built.recovery,
     };
+    v.group.userData.playerId = id;
     this.vehicles.set(id, v);
     return v;
   }
@@ -273,11 +333,6 @@ export class Scene {
   remoteCollisionStates(): readonly RemoteCollisionState[] {
     return this._remoteCollisionStates;
   }
-  /** Push the latest sampled input steer (range -1..1) so the local
-   *  truck's front wheels can show the player's intent immediately. */
-  setLocalInputSteer(steer: number): void {
-    this._localInputSteer = Math.max(-1, Math.min(1, steer)) * VEHICLE.maxSteer;
-  }
 
   /** Debug-only: lock the camera at fixed world coordinates looking at
    *  a fixed target. Pass null to clear and resume normal chase/sky
@@ -318,18 +373,11 @@ export class Scene {
 
   /** Pose the two axle groups from per-axle (rideY, rollAngle) state.
    *
-   *  The physics spring extends world-down (the raycasts use dir={0,-1,0}).
-   *  To match that in the visual, the spring extension must be applied in
-   *  world-Y, then converted back into the chassis-local frame. The chassis
-   *  local-Y axis has world-Y component = up.y = cos(pitch). Dividing the
-   *  world-down extension by up.y gives the chassis-local offset that
-   *  produces exactly that world-Y displacement. Without this correction
-   *  the axle extends along chassis-Y, which on any slope is shorter than
-   *  world-down by a cos(θ) factor, causing wheels to visually float above
-   *  the terrain.
-   *
-   *  The same division applies to the mud sink so it stays a world-vertical
-   *  effect regardless of chassis roll/pitch. */
+   *  Suspension rays and physical wheel travel both use chassis-local Y, so
+   *  spring extension must remain in that same frame. The old world-down
+   *  correction divided extension by cos(pitch), pushing wheels progressively
+   *  through the ground on even modest slopes. Mud sink is intentionally a
+   *  world-vertical visual effect, so only that offset needs conversion. */
   private poseAxles(
     v: VehicleVisual,
     axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
@@ -341,13 +389,7 @@ export class Scene {
       { x: 0, y: 1, z: 0 },
       { x: q.x, y: q.y, z: q.z, w: q.w },
     );
-    // Clamp upY: the cos correction is meaningful for a chassis on a
-    // slope (mild tilt), but blows up the visual spring length when the
-    // chassis is heavily tilted or inverted. At upY=0.15 the spring
-    // visually extended ~3.7 m below the attachment, making the wheels
-    // appear detached from the body during a flip. Clamping at 0.7
-    // preserves the slope correction up to ~45° tilt and bounds the
-    // visual extension to ~0.8 m past that.
+    // Bound only the cosmetic sink conversion while heavily tilted/inverted.
     const upY = Math.max(0.7, chassisUp.y);
     for (let i = 0; i < 2; i++) {
       const ag = i === 0 ? geom.front : geom.rear;
@@ -359,13 +401,14 @@ export class Scene {
       const springExt = ag.suspensionRestLength - ax.rideY;
       v.axles[i]!.position.set(
         0,
-        ag.centerLocalY - (springExt + sink) / upY,
+        ag.centerLocalY - springExt - sink / upY,
         ag.centerLocalZ,
       );
       // Roll about chassis-forward (local +Z). YXZ ordering keeps the
       // small-angle visual stable - rollAngle is the dominant DOF.
       v.axles[i]!.rotation.set(0, 0, ax.rollAngle);
     }
+    v.suspension.update();
   }
 
   /** Pose the local truck from the owner-simulation override.
@@ -383,9 +426,9 @@ export class Scene {
     for (let i = 0; i < 4; i++) {
       const wheel = vis.wheels[i]!;
       const ws = ov.wheels[i];
-      // Front wheels take the most recent input steer so the player gets
-      // immediate visual feedback; rears come from the sim.
-      const steer = i < 2 ? this._localInputSteer : (ws ? ws.steer : 0);
+      // Render the steering rack's simulated angle so keyboard input shows
+      // the same progressive travel that the tyre forces actually use.
+      const steer = ws ? ws.steer : 0;
       wheel.rotation.set(ws ? ws.spin : 0, -steer, 0);
     }
     this._localAxlesLast[0]!.rideY = ov.axles[0].rideY;
@@ -469,12 +512,7 @@ export class Scene {
           const wheel = vis.wheels[i]!;
           const wa = pa.vehicle.wheels[i];
           const wb = pb.vehicle.wheels[i];
-          // Local truck's front wheels override snapshot steer with the
-          // most recent input so the player gets immediate visual
-          // feedback. Rear wheels and remote vehicles still come from
-          // the snapshot.
-          const useInputSteer = isLocal && i < 2;
-          const steer = useInputSteer ? this._localInputSteer : (wa ? wa.steer : 0);
+          const steer = wa ? wa.steer : 0;
           // spin arrives wrapped to [0, 2pi) (see messages.ts SPIN_SCALE
           // packing), so lerp along the shortest wrapped arc. A naive lerp
           // sweeps backwards through a full revolution every time the value
@@ -598,7 +636,7 @@ export class Scene {
     // trap for whoever adds a second vehicle to an offline mode later.
     if (pair || present.size > 0) this.removeMissing(present);
 
-    // Ground-response visuals (mud thrown by spinning wheels) read the
+    // Ground-response visuals (mud, dust or smoke from spinning wheels) read the
     // poses just written above, so they show exactly what is on screen.
     // VehicleEffects owns the snapshot-arrival gate.
     const frameDt = this.lastFrameTimeMs > 0 ? nowMs - this.lastFrameTimeMs : 16;
@@ -632,7 +670,18 @@ export class Scene {
     this._minimapBuf.length = mi;
     this.minimap.update(this._minimapBuf);
 
+    const renderedLinks = [...(pair?.b.snap.winches ?? [])];
+    for (const link of this.localWinches) {
+      if (!renderedLinks.some((entry) => entry.id === link.id)) renderedLinks.push(link);
+    }
+    this.winchView.update(renderedLinks, (link, end) => this.winchEndpoint(link, end));
     this.view.render(this.camera);
+  }
+
+  private winchEndpoint(link: WinchLinkSnapshot, end: 'source' | 'target'): THREE.Vector3 | null {
+    if (end === 'source') return this.vehicles.get(link.ownerId)?.recovery.fairlead.getWorldPosition(new THREE.Vector3()) ?? null;
+    if (link.target.kind === 'obstacle') return new THREE.Vector3(link.target.anchor.x, link.target.anchor.y, link.target.anchor.z);
+    return this.vehicles.get(link.target.playerId)?.recovery[link.target.point].getWorldPosition(new THREE.Vector3()) ?? null;
   }
 
   /** The TerrainData the world was built from, or null before the

@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>mydrunner</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/src/player.css" />
   </head>
   <body>
@@ -13,7 +14,9 @@
       <div class="help-row"><span><kbd>WASD / ARROWS</kbd></span><strong>DRIVE</strong></div>
       <div class="help-row"><span><kbd>SPACE / SHIFT</kbd></span><strong>HANDBRAKE / BRAKE</strong></div>
       <div class="help-row"><span><kbd>R / C / M / T</kbd></span><strong>RESET / CAM / MUTE / RADIO</strong></div>
-      <div class="help-row"><span><kbd>V / Z / X</kbd></span><strong>LOW RANGE / REAR LOCK / FRONT LOCK</strong></div>
+      <div class="help-row"><span><kbd>V / Z / X</kbd></span><strong>TRANSFER / REAR LOCK / FRONT LOCK</strong></div>
+      <div class="help-row"><span><kbd>G / [ / ]</kbd></span><strong>WINCH / OUT / IN</strong></div>
+      <div class="help-row"><span><kbd>H-PATTERN</kbd></span><strong>AUTO / MANUAL GEARS</strong></div>
     </div>
 
     <div id="touch-controls">
@@ -27,11 +30,14 @@
         <button class="aux-btn" id="cam-btn" type="button" aria-label="Change camera">cam</button>
         <button class="aux-btn" id="reset-btn" type="button" aria-label="Reset vehicle">reset</button>
         <button class="aux-btn" id="starter-btn" type="button" aria-label="Crank the starter">start</button>
-        <button class="aux-btn" id="range-btn" type="button" aria-label="Toggle high or low range">low</button>
+        <button class="aux-btn" id="range-btn" type="button" aria-label="Cycle 2H, 4H, and 4L">2H<br/>4L</button>
         <button class="aux-btn" id="rear-locker-btn" type="button" aria-label="Toggle rear locker">R lock</button>
         <button class="aux-btn" id="front-locker-btn" type="button" aria-label="Toggle front locker">F lock</button>
         <button class="aux-btn" id="mute-btn" type="button" aria-label="Toggle engine audio">mute</button>
         <button class="aux-btn" id="chat-btn" type="button" aria-label="Open team radio">chat</button>
+        <button class="aux-btn" id="winch-btn" type="button" aria-label="Target, attach, or detach winch">hook</button>
+        <button class="aux-btn" id="winch-out-btn" type="button" aria-label="Reel winch out">out</button>
+        <button class="aux-btn" id="winch-in-btn" type="button" aria-label="Reel winch in">in</button>
       </div>
     </div>
 

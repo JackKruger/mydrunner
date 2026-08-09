@@ -71,8 +71,10 @@ test.describe('@screenshot', () => {
     await page.waitForTimeout(2000);
     await page.screenshot({ path: join(outDir, '05-into-mud.png') });
 
-    // Cycle camera mode (chase -> hood).
+    // Cycle past the far and suspension views to the hood camera.
     await page.keyboard.up('KeyW');
+    await page.keyboard.press('KeyC');
+    await page.keyboard.press('KeyC');
     await page.keyboard.press('KeyC');
     await page.waitForTimeout(500);
     await page.keyboard.down('KeyW');

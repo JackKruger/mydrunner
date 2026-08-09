@@ -19,11 +19,13 @@ export type VehicleBaseId =
   | 'overlander'
   | 'stockman-single'
   | 'stockman-dual'
-  | 'longreach';
+  | 'longreach'
+  | 'outclaw'
+  | 'dustback-rs';
 
 /**
  * Compatibility input accepted at old save/editor boundaries. Production
- * selections are the five VehicleBaseIds above; the four legacy values are
+ * selections are the seven VehicleBaseIds above; the four legacy values are
  * immediately migrated by normalizeCarKind/normalizeVehicleBaseId.
  */
 export type CarKind = VehicleBaseId | 'patrol' | 'hilux' | 'ute' | 'motorbike';
@@ -36,6 +38,8 @@ export function normalizeVehicleBaseId(v: unknown): VehicleBaseId {
     case 'stockman-single':
     case 'stockman-dual':
     case 'longreach':
+    case 'outclaw':
+    case 'dustback-rs':
     case 'ridgeback':
       return v;
     // Patrol and both removed novelty vehicles migrate to the Ridgeback.
@@ -65,6 +69,7 @@ export interface VehicleBuild {
   paintColor: string;
   paintFinish: PaintFinish;
   suspensionId: string;
+  axleId: string;
   tireId: string;
   wheelId: string;
   frontBarId: string;
@@ -76,10 +81,10 @@ export interface VehicleBuild {
   rearLocker: boolean;
 }
 
-export type TransferRange = 'high' | 'low';
+export type TransferCaseMode = '2h' | '4h' | '4l';
 
 export interface DrivetrainState {
-  range: TransferRange;
+  transferCase: TransferCaseMode;
   frontLocked: boolean;
   rearLocked: boolean;
 }
@@ -108,9 +113,16 @@ export interface PlayerInput {
   steer: number;    // -1 left .. 1 right
   brake: number;    // 0..1
   handbrake: number; // 0..1
+  /** null leaves the automatic gearbox in control. Otherwise this is the
+   *  driver's H-pattern selection: reverse, neutral, or first through fifth. */
+  manualGear: ManualGear | null;
+  /** One-shot direct selection from the on-screen transfer-case stick. */
+  transferCase: TransferCaseMode | null;
   // Bitfield of misc actions. See BUTTON_* below.
   buttons: number;
 }
+
+export type ManualGear = -1 | 0 | 1 | 2 | 3 | 4 | 5;
 
 /** Bits in PlayerInput.buttons.
  *
@@ -135,6 +147,8 @@ export const EMPTY_INPUT: PlayerInput = {
   steer: 0,
   brake: 0,
   handbrake: 0,
+  manualGear: null,
+  transferCase: null,
   buttons: 0,
 };
 
@@ -179,6 +193,34 @@ export interface WheelState {
   angVel: number;
 }
 
+export type WinchMotor = -1 | 0 | 1; // out, hold, in
+export type VehicleRecoveryPoint = 'front' | 'rear';
+
+export type WinchTarget =
+  | { kind: 'obstacle'; obstacleId: string; anchor: Vec3 }
+  | { kind: 'vehicle'; playerId: PlayerId; point: VehicleRecoveryPoint };
+
+export type WinchStatus = 'attached' | 'stalled' | 'overload';
+
+/** Server-authoritative cable relationship broadcast with snapshots. */
+export interface WinchLinkSnapshot {
+  id: string;
+  ownerId: PlayerId;
+  target: WinchTarget;
+  cableLength: number;
+  motor: WinchMotor;
+  tension: number;
+  status: WinchStatus;
+}
+
+/** Owner-authoritative cable mechanics uploaded beside vehicle state. */
+export interface WinchRuntimeUpdate {
+  linkId: string;
+  cableLength: number;
+  motor: WinchMotor;
+  tension: number;
+}
+
 export interface PlayerSnapshot {
   id: PlayerId;
   name: string;
@@ -194,6 +236,7 @@ export interface PlayerSnapshot {
 export interface VehicleStateUpdate {
   seq: number;
   vehicle: VehicleState;
+  winch?: WinchRuntimeUpdate;
 }
 
 export interface WorldSnapshot {
@@ -202,4 +245,5 @@ export interface WorldSnapshot {
   // Server time in ms (monotonic).
   serverTimeMs: number;
   players: PlayerSnapshot[];
+  winches?: WinchLinkSnapshot[];
 }

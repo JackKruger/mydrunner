@@ -26,6 +26,49 @@ async function waitConnected(page: Page): Promise<void> {
 }
 
 test.describe('driving', () => {
+  test('rendered front wheels follow the progressive steering rack', async ({ page }) => {
+    await page.goto('/?auto=1');
+    await waitConnected(page);
+    await page.waitForTimeout(800);
+
+    const measurement = page.evaluate(async () => {
+      const w = window as unknown as {
+        __scene: {
+          localId: string;
+          vehicles: Map<string, { wheels: { rotation: { y: number } }[] }>;
+        };
+      };
+      await new Promise<void>((resolve) => {
+        window.addEventListener('keydown', (event) => {
+          if (event.code === 'KeyA') resolve();
+        }, { capture: true, once: true });
+      });
+
+      const startedAt = performance.now();
+      let earlyPeak = 0;
+      let finalAngle = 0;
+      while (performance.now() - startedAt < 600) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const vehicle = w.__scene.vehicles.get(w.__scene.localId);
+        finalAngle = Math.abs(vehicle?.wheels[0]?.rotation.y ?? 0);
+        if (performance.now() - startedAt <= 120) earlyPeak = Math.max(earlyPeak, finalAngle);
+      }
+      return { earlyPeak, finalAngle };
+    });
+
+    await page.waitForTimeout(50);
+    await page.keyboard.down('KeyA');
+    const result = await measurement;
+    await page.keyboard.up('KeyA');
+
+    // A raw-input visual override jumps straight to maxSteer (0.72 rad).
+    // The simulated rack should still be travelling at 120 ms, then reach
+    // lock comfortably within the 600 ms measurement window.
+    expect(result.earlyPeak).toBeGreaterThan(0.05);
+    expect(result.earlyPeak).toBeLessThan(0.45);
+    expect(result.finalAngle).toBeGreaterThan(0.6);
+  });
+
   test('rendered wheel rotations are stable while driving + turning', async ({ page }) => {
     await page.goto('/?auto=1');
     await waitConnected(page);

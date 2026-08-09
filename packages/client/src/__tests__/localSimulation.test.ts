@@ -80,4 +80,33 @@ describe('LocalSimulation', () => {
     expect(sim.vehicleState().position.x).toBeLessThan(spawn.position.x - 0.05);
     sim.dispose();
   });
+
+  it('does not eject a vehicle from low terrain inside the map', () => {
+    const map = Maps.applyMapDoc(Maps.proceduralDoc());
+    map.terrain.heights.fill(-20);
+    const spawn = Maps.resolveSpawn(map, 0, 'patrol');
+    const sim = new LocalSimulation(map, spawn, createStockBuild());
+
+    sim.step({ ...EMPTY_INPUT, seq: 1 });
+
+    expect(sim.vehicleState().position.y).toBeLessThan(-10);
+    expect(sim.vehicleState().linVel.y).toBeLessThan(1);
+    sim.dispose();
+  });
+
+  it('only ejects after the vehicle centre crosses the map edge', () => {
+    const { sim } = makeSimulation();
+    const half = Maps.applyMapDoc(Maps.proceduralDoc()).terrain.size * 0.5;
+    sim.resetTo({ position: { x: half - 1, y: 5, z: 0 }, yaw: 0 });
+
+    sim.step({ ...EMPTY_INPUT, seq: 1 });
+
+    expect(sim.vehicleState().linVel.y).toBeLessThan(30);
+
+    sim.resetTo({ position: { x: half + 1, y: 5, z: 0 }, yaw: 0 });
+    sim.step({ ...EMPTY_INPUT, seq: 2 });
+
+    expect(sim.vehicleState().linVel.y).toBe(35);
+    sim.dispose();
+  });
 });

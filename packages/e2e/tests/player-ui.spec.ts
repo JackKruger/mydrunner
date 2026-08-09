@@ -14,21 +14,32 @@ async function boxesOverlap(a: Locator, b: Locator): Promise<boolean> {
     && ra.y + ra.height > rb.y;
 }
 
-test('join briefing, connected instruments, and radio retain their behavior', async ({ page }) => {
+test('start screen, join briefing, connected instruments, and radio retain their behavior', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/');
 
+  const start = page.locator('#start-overlay');
+  // Rapier initialises before the menu; cold CI can spend most of a minute
+  // compiling its WASM module.
+  await expect(start).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole('button', { name: /Continue/ })).toBeDisabled();
+  await page.getByRole('button', { name: /Dev tools/ }).click();
+  await expect(page.getByRole('link', { name: /Asset designer/ })).toHaveAttribute('href', 'asset-editor.html');
+  await expect(page.getByRole('link', { name: /Map editor/ })).toHaveAttribute('href', 'editor.html');
+  await page.getByRole('button', { name: 'Back to main menu' }).click();
+  await page.getByRole('button', { name: /New game/ }).click();
+
   const dialog = page.getByRole('dialog', { name: 'mydrunner' });
-  await expect(dialog).toBeVisible({ timeout: 20_000 });
-  const patrol = page.getByRole('radio', { name: /Patrol GQ/ });
-  const hilux = page.getByRole('radio', { name: /^Hilux/ });
-  await expect(patrol).toHaveAttribute('aria-checked', 'true');
+  await expect(dialog).toBeVisible();
+  const ridgeback = page.getByRole('radio', { name: /Ridgeback Wagon/ });
+  const overlander = page.getByRole('radio', { name: /Overlander Wagon/ });
+  await expect(ridgeback).toHaveAttribute('aria-checked', 'true');
 
   await page.getByLabel('Driver call sign').fill('Rally Ada');
-  await patrol.focus();
+  await ridgeback.focus();
   await page.keyboard.press('ArrowRight');
-  await expect(hilux).toHaveAttribute('aria-checked', 'true');
-  await page.getByRole('button', { name: 'Drive' }).click();
+  await expect(overlander).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('button', { name: 'Drive', exact: true }).click();
 
   await waitConnected(page);
   await expect(page.locator('#hud-speed-value')).toHaveText(/\d+/);
@@ -39,7 +50,11 @@ test('join briefing, connected instruments, and radio retain their behavior', as
   await expect.poll(() => page.evaluate(() => ({
     name: localStorage.getItem('mydrunner.name'),
     car: localStorage.getItem('mydrunner.carKind'),
-  }))).toEqual({ name: 'Rally Ada', car: 'hilux' });
+  }))).toEqual({ name: 'Rally Ada', car: 'overlander' });
+  await expect.poll(() => page.evaluate(() => {
+    const saves = JSON.parse(localStorage.getItem('mydrunner.saves.v1') ?? '[]') as Array<{ name: string }>;
+    return saves.map((save) => save.name);
+  })).toEqual(['Rally Ada']);
 
   await page.keyboard.press('KeyT');
   const radioInput = page.getByLabel('Team radio // transmit');
@@ -90,9 +105,33 @@ test('desktop and touch layouts keep instruments and controls separated', async 
   const session = page.locator('.hud-session');
   const minimap = page.locator('#minimap-wrap');
   const cluster = page.locator('.hud-cluster');
+  const shifter = page.locator('#hud-shifter');
   const help = page.locator('#help');
   expect(await boxesOverlap(session, minimap)).toBe(false);
   expect(await boxesOverlap(cluster, help)).toBe(false);
+  expect(await boxesOverlap(cluster, shifter)).toBe(false);
+
+  await page.getByRole('button', { name: 'Third gear' }).click();
+  await expect(shifter).toHaveAttribute('data-mode', 'manual');
+  await expect(page.locator('#hud-gear-value')).toHaveText('3');
+  await page.getByRole('button', { name: 'MANUAL' }).click();
+  await expect(shifter).toHaveAttribute('data-mode', 'auto');
+
+  const gateBox = await page.locator('#gear-gate').boundingBox();
+  if (!gateBox) throw new Error('H-pattern gate is not visible');
+  await page.mouse.move(gateBox.x + gateBox.width * 0.5, gateBox.y + gateBox.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(gateBox.x + gateBox.width * 0.2, gateBox.y + gateBox.height * 0.18, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.locator('#gear-mode-hint')).toHaveText('1 SELECTED');
+  await expect(page.locator('#hud-gear-value')).toHaveText('1');
+  await page.getByRole('button', { name: 'MANUAL' }).click();
+
+  await page.getByRole('button', { name: 'Two wheel drive high' }).click();
+  await expect(page.locator('#transfer-mode-hint')).toHaveText('2WD HIGH');
+  await expect(page.locator('#hud-drivetrain')).toContainText('2H');
+  await page.getByRole('button', { name: 'Four wheel drive high' }).click();
+  await expect(page.locator('#hud-drivetrain')).toContainText('4H');
 
   await page.keyboard.press('KeyT');
   expect(await boxesOverlap(page.locator('#chat-input-wrap'), cluster)).toBe(false);
@@ -104,6 +143,8 @@ test('desktop and touch layouts keep instruments and controls separated', async 
   expect(await boxesOverlap(cluster, minimap)).toBe(false);
   expect(await boxesOverlap(cluster, page.locator('#steer-pad'))).toBe(false);
   expect(await boxesOverlap(cluster, page.locator('#pedal-stack'))).toBe(false);
+  expect(await boxesOverlap(cluster, shifter)).toBe(false);
+  expect(await boxesOverlap(shifter, page.locator('#pedal-stack'))).toBe(false);
 
   for (const id of ['#cam-btn', '#reset-btn', '#mute-btn', '#chat-btn']) {
     const box = await page.locator(id).boundingBox();
@@ -123,6 +164,8 @@ test('desktop and touch layouts keep instruments and controls separated', async 
   expect(await boxesOverlap(cluster, page.locator('#steer-pad'))).toBe(false);
   expect(await boxesOverlap(cluster, page.locator('#pedal-stack'))).toBe(false);
   expect(await boxesOverlap(page.locator('#aux-row'), minimap)).toBe(false);
+  expect(await boxesOverlap(cluster, shifter)).toBe(false);
+  expect(await boxesOverlap(shifter, page.locator('#pedal-stack'))).toBe(false);
 
   const transitionMs = await page.locator('#steer-knob').evaluate((el) => {
     const duration = getComputedStyle(el).transitionDuration.split(',')[0]!.trim();

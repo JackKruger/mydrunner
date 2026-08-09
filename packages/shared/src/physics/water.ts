@@ -238,7 +238,7 @@ export function computeWaterLoad(
   // Displacement lost to flooding. A swamped hull displaces less, so it
   // sits lower, so it swamps no faster — the ramp is in floodFrac, not
   // in a runaway feedback loop.
-  // The five bases have genuinely different masses. Scale the effective
+  // The production bases have genuinely different masses. Scale the effective
   // sealed volume with the resolved mass so "barely floats, then swamps"
   // remains true for a 1.77 t work ute and a 2.46 t tourer alike instead
   // of making heavy vehicles ignore buoyancy entirely.

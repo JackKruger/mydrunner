@@ -4,14 +4,11 @@
 //   rideY     - vertical translation along the axle's mount.
 //   rollAngle - rotation of the axle beam about the chassis-forward axis.
 //
-// The model is kinematic: each tick we set rideY to track average ground
-// compression and rollAngle to track terrain slope across the wheels,
-// both clamped at their travel limits. The "spring" dynamics live on the
-// chassis: the per-tick ride and roll forces produced here drive the
-// chassis Rapier rigid body, and Rapier integrates the chassis bounce.
-// This avoids the stability headache of a separate axle integrator at a
-// tick rate where axle natural frequencies (omega ~ sqrt(k/m_axle) ~ 27
-// rad/s) are close to Nyquist.
+// The axle pose follows average ground compression and terrain slope with
+// damped unsprung-mass dynamics. It is still kinematic from Rapier's point
+// of view (there is no separate rigid body), but rideY/rollAngle cannot
+// teleport when a support ray is gained or lost. The chassis spring forces
+// remain in SolidAxleVehicle; this integration is for the beam/wheel pose.
 //
 // The articulation cap is enforced here: when terrain demands more roll
 // than maxArticulation, rollAngle clamps and the surplus torque dumps
@@ -27,12 +24,18 @@ export interface AxleState {
   /** Vertical offset of the axle from its chassis-local centerLocalY
    *  attachment, positive = up. Clamped to [-droopMax, +bumpMax]. */
   rideY: number;
+  /** Instantaneous support-derived ride pose used by contact queries.
+   *  rideY follows this value with unsprung-mass dynamics for visuals. */
+  targetRideY: number;
   /** Rate of change of rideY (m/s). */
   rideVelY: number;
   /** Rotation of the axle beam about the chassis-forward axis (rad).
    *  Positive = right-hand wheel up, left-hand wheel down. Clamped to
    *  +/- maxArticulation. */
   rollAngle: number;
+  /** Instantaneous support-derived roll used by physical contact queries.
+   *  rollAngle follows this value with axle rotational inertia. */
+  targetRollAngle: number;
   /** Rate of change of rollAngle (rad/s). */
   rollVel: number;
   /** Last computed left-wheel ground contact depth (m, >=0).  */
@@ -48,8 +51,10 @@ export function createAxleState(geom: AxleGeom): AxleState {
   return {
     geom,
     rideY: 0,
+    targetRideY: 0,
     rideVelY: 0,
     rollAngle: 0,
+    targetRollAngle: 0,
     rollVel: 0,
     leftDepth: 0,
     rightDepth: 0,
@@ -60,8 +65,10 @@ export function createAxleState(geom: AxleGeom): AxleState {
 
 export function resetAxleState(s: AxleState): void {
   s.rideY = 0;
+  s.targetRideY = 0;
   s.rideVelY = 0;
   s.rollAngle = 0;
+  s.targetRollAngle = 0;
   s.rollVel = 0;
   s.leftDepth = 0;
   s.rightDepth = 0;
@@ -94,26 +101,83 @@ export interface StepAxleInputs {
    *  (TUNING.axleFront / axleRear). Passed in rather than imported so
    *  this module stays free of shared mutable state and the axle tests
    *  can exercise a scale factor directly. Default 1 = use geom as-is. */
+  rideStiffnessMult?: number;
+  rideDampingMult?: number;
   rollStiffnessMult?: number;
   maxArticulationMult?: number;
 }
 
-/** Advance an AxleState one fixed timestep. Kinematic: rideY tracks
- *  average ground compression, rollAngle tracks terrain slope; both
- *  clamped at their travel limits. Returns the per-tick reaction force
- *  on the chassis (ride spring + damper) and roll torque (only non-zero
- *  past the articulation cap). */
+export interface AntiRollLoadInput {
+  /** Suspension pose relative to the chassis. Unsupported ends should be
+   *  passed at full droop so one-wheel articulation can tension the bar. */
+  leftDepth: number;
+  rightDepth: number;
+  leftRate: number;
+  rightRate: number;
+  leftSupported: boolean;
+  rightSupported: boolean;
+  trackHalf: number;
+  torqueStiffness: number;
+  torqueDamping: number;
+  maxTransferForce: number;
+}
+
+export interface AntiRollLoadTransfer {
+  /** Additions to the existing wheel-end support forces (N). */
+  leftForce: number;
+  rightForce: number;
+}
+
+/** Convert relative axle articulation into paired wheel-end load transfer.
+ * There is deliberately no chassis/world orientation in this calculation:
+ * a sway bar reacts suspension displacement, not gravity. Unsupported ends
+ * cannot pass their half of the pair into the chassis, and with neither end
+ * supported the bar cannot act at all. */
+export function computeAntiRollLoadTransfer(input: AntiRollLoadInput): AntiRollLoadTransfer {
+  if (!input.leftSupported && !input.rightSupported) {
+    return { leftForce: 0, rightForce: 0 };
+  }
+  const track = Math.max(1e-6, input.trackHalf * 2);
+  const forceStiffness = input.torqueStiffness / (track * track);
+  const forceDamping = input.torqueDamping / (track * track);
+  // Compression displacement and compression velocity have opposite
+  // force conventions: the spring pushes the chassis toward the less-
+  // compressed end, while the damper opposes the end currently gaining
+  // compression. Keeping the signs explicit avoids turning the bar into
+  // positive feedback on cross-slopes.
+  const rawTransfer =
+    -forceStiffness * (input.leftDepth - input.rightDepth)
+    + forceDamping * (input.leftRate - input.rightRate);
+  const limit = Math.max(0, input.maxTransferForce);
+  const transfer = Math.max(-limit, Math.min(limit, rawTransfer));
+  if (Math.abs(transfer) < 1e-12) return { leftForce: 0, rightForce: 0 };
+  return {
+    leftForce: input.leftSupported ? transfer : 0,
+    rightForce: input.rightSupported ? -transfer : 0,
+  };
+}
+
+/** Advance an AxleState one fixed timestep. The target pose comes from
+ *  wheel support, while a stable implicit spring step gives the axle its
+ *  unsprung mass/inertia instead of snapping straight to that target.
+ *  Returns the per-tick reaction force on the chassis (ride spring +
+ *  damper) and roll torque (only non-zero past the articulation cap). */
 export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   const g = s.geom;
 
   const lc = input.leftContact ? input.leftDepth : 0;
   const rc = input.rightContact ? input.rightDepth : 0;
+  // A wheel with no support hangs at the suspension's droop stop. Treating
+  // it as zero compression put it at the nominal rest position instead,
+  // which made a one-wheel-loaded axle look parallel to the leaning body.
+  const leftPoseDepth = input.leftContact ? input.leftDepth : -g.droopMax;
+  const rightPoseDepth = input.rightContact ? input.rightDepth : -g.droopMax;
   s.leftDepth = lc;
   s.rightDepth = rc;
   s.leftContact = input.leftContact;
   s.rightContact = input.rightContact;
 
-  // rideY: average compression. Visual only — solidAxleVehicle.ts
+  // rideY target: average compression. Visual only — solidAxleVehicle.ts
   // ignores stepAxle's chassisRideForce and applies per-wheel-end ride
   // forces directly, so the cap here only affects the wheel-mesh
   // position, not the suspension force. We allow rideY to track the
@@ -122,54 +186,108 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   // doesn't visibly intersect the chassis body when a sharp rise
   // pushes the ray reading deep).
   //
-  // In-air handling: when neither wheel is in contact we hold the
-  // previous rideY rather than snapping to zero (full droop). The
-  // snap-to-zero behaviour produced a visible "diffs extend / wheels
-  // detach from the body" pop the moment all four wheels left the
-  // ground (jumps, flips, the airborne phase of cresting a sharp
-  // ridge). Holding lets the wheels stay where they were last loaded;
-  // when they next make contact the visual catches up to the new
-  // ground reading next tick. rideY is visual-only so this doesn't
-  // change the physics behaviour at all.
+  // In-air handling: when neither wheel is in contact the target moves to
+  // full droop, but the unsprung-mass step below makes the axle extend
+  // progressively. It therefore hangs naturally without the old one-frame
+  // "diffs extend / wheels detach" pop on jumps and ridge crests.
   const visualMax = g.suspensionRestLength * 0.85;
-  const prevY = s.rideY;
   let targetY: number;
   if (!input.leftContact && !input.rightContact) {
     targetY = -g.droopMax;
   } else {
-    const avgComp = 0.5 * (lc + rc);
+    const avgComp = 0.5 * (leftPoseDepth + rightPoseDepth);
     targetY = avgComp;
     if (targetY > visualMax) targetY = visualMax;
     // Allow negative rideY for droop (wheels hanging below rest).
     // Clamped at -droopMax to match physical limit.
     if (targetY < -g.droopMax) targetY = -g.droopMax;
   }
-  s.rideY = targetY;
-  s.rideVelY = input.dt > 0 ? (s.rideY - prevY) / input.dt : 0;
+  s.targetRideY = targetY;
+  if (input.dt > 0) {
+    [s.rideY, s.rideVelY] = stepDampedDof(
+      s.rideY,
+      s.rideVelY,
+      targetY,
+      g.rideStiffness * (input.rideStiffnessMult ?? 1),
+      g.rideDamping * (input.rideDampingMult ?? 1),
+      g.axleMass,
+      input.dt,
+    );
+    [s.rideY, s.rideVelY] = clampDof(
+      s.rideY,
+      s.rideVelY,
+      -g.droopMax,
+      visualMax,
+    );
+  }
 
-  // rollAngle tracks terrain slope across the wheels, clamped at the
-  // articulation cap. Anything past the cap dumps surplus into the
-  // chassis as a torque - that's the body-lean-over-a-rock behaviour.
+  // rollAngle targets terrain slope across the wheels. The beam's roll
+  // inertia and damping stop a contact transition from rotating the whole
+  // axle in one frame. Anything past the articulation cap still dumps its
+  // surplus into the chassis as a torque.
   const maxArticulation = g.maxArticulation * (input.maxArticulationMult ?? 1);
-  const targetRoll = Math.atan2(rc - lc, 2 * g.trackHalf);
+  const targetRoll = Math.atan2(
+    rightPoseDepth - leftPoseDepth,
+    2 * g.trackHalf,
+  );
   let clampedRoll = targetRoll;
   if (clampedRoll > maxArticulation) clampedRoll = maxArticulation;
   else if (clampedRoll < -maxArticulation) clampedRoll = -maxArticulation;
-  const prevRoll = s.rollAngle;
-  s.rollAngle = clampedRoll;
-  s.rollVel = input.dt > 0 ? (s.rollAngle - prevRoll) / input.dt : 0;
+  s.targetRollAngle = clampedRoll;
+  if (input.dt > 0) {
+    [s.rollAngle, s.rollVel] = stepDampedDof(
+      s.rollAngle,
+      s.rollVel,
+      clampedRoll,
+      g.rollStiffness * (input.rollStiffnessMult ?? 1),
+      g.rollDamping,
+      g.axleRollInertia,
+      input.dt,
+    );
+    [s.rollAngle, s.rollVel] = clampDof(
+      s.rollAngle,
+      s.rollVel,
+      -maxArticulation,
+      maxArticulation,
+    );
+  }
 
-  // Ride force on chassis: positive (up) when axle is compressed
-  // (rideY > 0). The damping term is scaled by spring engagement
-  // (rideY / restLength), so a chassis hitting the spring at speed
+  // A tyre cannot visually lag *through* rising ground. Keep the damped axle
+  // DOFs for unloading and articulation, then treat support as a one-sided
+  // constraint by lifting the rigid beam just enough that neither supported
+  // end is below its geometric depth. On a one-wheel rise this may briefly
+  // leave the other wheel above ground while roll catches up, which is the
+  // physically valid alternative to drawing the loaded tyre underground.
+  const sinVisualRoll = Math.sin(s.rollAngle);
+  const visualLeftDepth = s.rideY - g.trackHalf * sinVisualRoll;
+  const visualRightDepth = s.rideY + g.trackHalf * sinVisualRoll;
+  let supportCorrection = 0;
+  if (input.leftContact) {
+    supportCorrection = Math.max(supportCorrection, leftPoseDepth - visualLeftDepth);
+  }
+  if (input.rightContact) {
+    supportCorrection = Math.max(supportCorrection, rightPoseDepth - visualRightDepth);
+  }
+  if (supportCorrection > 0) {
+    s.rideY = Math.min(visualMax, s.rideY + supportCorrection);
+    s.rideVelY = 0;
+  }
+
+  // Ride force on chassis: positive (up) when the support target is
+  // compressed. The damping term is scaled by spring engagement
+  // (targetY / restLength), so a chassis hitting the spring at speed
   // gets a soft initial response that builds with compression - this
   // matches a real shock absorber where fluid bandwidth limits the
   // peak force at the moment of contact, and avoids huge impulses
   // that otherwise launch the chassis off its first contact.
-  const engagement = Math.min(1, s.rideY / g.suspensionRestLength);
+  // The legacy aggregate is retained for callers/tests even though the
+  // production vehicle applies its ride forces separately at each wheel.
+  // An unsupported end contributes no spring force, not negative force.
+  const supportRideY = 0.5 * (lc + rc);
+  const engagement = Math.min(1, supportRideY / g.suspensionRestLength);
   const chassisRideForce =
-    s.rideY > 1e-6
-      ? g.rideStiffness * s.rideY
+    supportRideY > 1e-6
+      ? g.rideStiffness * supportRideY
         - g.rideDamping * engagement * input.chassisVertVelAtAnchor
       : 0;
 
@@ -180,6 +298,42 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   }
 
   return { chassisRideForce, chassisRollTorque };
+}
+
+/** Implicit Euler step for a damped spring following a moving target.
+ *  Unlike an explicit spring step this remains stable when the axle's
+ *  natural frequency is a sizeable fraction of the 60 Hz physics rate. */
+function stepDampedDof(
+  position: number,
+  velocity: number,
+  target: number,
+  stiffness: number,
+  damping: number,
+  mass: number,
+  dt: number,
+): [number, number] {
+  const safeMass = Math.max(1e-6, mass);
+  const stiffnessPerMass = Math.max(0, stiffness) / safeMass;
+  const dampingPerMass = Math.max(0, damping) / safeMass;
+  const nextVelocity = (
+    velocity + dt * stiffnessPerMass * (target - position)
+  ) / (
+    1 + dt * dampingPerMass + dt * dt * stiffnessPerMass
+  );
+  return [position + dt * nextVelocity, nextVelocity];
+}
+
+/** Stop a DOF cleanly at a mechanical limit without retaining velocity
+ *  that points farther through the stop. */
+function clampDof(
+  position: number,
+  velocity: number,
+  min: number,
+  max: number,
+): [number, number] {
+  if (position < min) return [min, velocity < 0 ? 0 : velocity];
+  if (position > max) return [max, velocity > 0 ? 0 : velocity];
+  return [position, velocity];
 }
 
 export interface AxleSnap {
@@ -193,7 +347,9 @@ export function axleSnap(s: AxleState): AxleSnap {
 
 export function applyAxleSnap(s: AxleState, snap: AxleSnap): void {
   s.rideY = snap.rideY;
+  s.targetRideY = snap.rideY;
   s.rollAngle = snap.rollAngle;
+  s.targetRollAngle = snap.rollAngle;
   s.rideVelY = 0;
   s.rollVel = 0;
 }

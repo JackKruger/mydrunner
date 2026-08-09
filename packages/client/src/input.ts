@@ -6,7 +6,9 @@ import {
   BUTTON_REAR_LOCKER,
   BUTTON_RESET,
   BUTTON_STARTER,
+  type ManualGear,
   type PlayerInput,
+  type TransferCaseMode,
 } from '@mydrunner/shared';
 
 import { getTouchState } from './touchInput.js';
@@ -16,6 +18,29 @@ const KEYS = new Set<string>();
  *  no longer reports "Space is held" - it reports "the handbrake state
  *  is currently on / off". */
 let handbrakeOn = false;
+let manualGear: ManualGear | null = null;
+let pendingTransferCase: TransferCaseMode | null = null;
+let drivetrainControlsEnabled = true;
+
+/** Disable all transfer/locker input sources for fixed-drivetrain vehicles. */
+export function setDrivetrainControlsEnabled(enabled: boolean): void {
+  drivetrainControlsEnabled = enabled;
+  if (!enabled) pendingTransferCase = null;
+}
+
+/** Select a physical gear, or return control to the automatic gearbox. */
+export function setManualGear(gear: ManualGear | null): void {
+  manualGear = gear;
+}
+
+export function getManualGear(): ManualGear | null {
+  return manualGear;
+}
+
+/** Queue one transfer-case movement for the next fixed simulation tick. */
+export function requestTransferCase(mode: TransferCaseMode): void {
+  if (drivetrainControlsEnabled) pendingTransferCase = mode;
+}
 
 /** True when a key event is destined for a text field, so game bindings
  *  must keep their hands off it.
@@ -87,27 +112,35 @@ let seq = 0;
 export function sampleInput(): PlayerInput {
   seq += 1;
   const t = getTouchState();
+  const keyboardReverse = KEYS.has('KeyS') || KEYS.has('ArrowDown');
   const fwd = (KEYS.has('KeyW') || KEYS.has('ArrowUp') ? 1 : 0)
-            + (KEYS.has('KeyS') || KEYS.has('ArrowDown') ? -1 : 0);
+            + (manualGear === null && keyboardReverse ? -1 : 0);
   const turn = (KEYS.has('KeyD') || KEYS.has('ArrowRight') ? 1 : 0)
              + (KEYS.has('KeyA') || KEYS.has('ArrowLeft') ? -1 : 0);
   // Touch wins when keyboard is idle; otherwise the larger-magnitude wins so
   // a player using a keyboard with a touchscreen still gets full deflection.
   const throttle = Math.abs(t.throttle - t.brake) > Math.abs(fwd) ? t.throttle - t.brake : fwd;
   const steer = Math.abs(t.steer) > Math.abs(turn) ? t.steer : turn;
-  const kbBrake = KEYS.has('ShiftLeft') || KEYS.has('ShiftRight') ? 1 : 0;
+  // Once the lever supplies direction, S / ArrowDown becomes the natural
+  // brake binding instead of an automatic request for reverse.
+  const kbBrake = KEYS.has('ShiftLeft') || KEYS.has('ShiftRight')
+    || (manualGear !== null && keyboardReverse) ? 1 : 0;
   const kbHandbrake = handbrakeOn ? 1 : 0;
   const reset = KEYS.has('KeyR') || t.reset > 0;
   const starter = KEYS.has('KeyE') || t.starter > 0;
-  const range = KEYS.has('KeyV') || t.range > 0;
-  const rearLocker = KEYS.has('KeyZ') || t.rearLocker > 0;
-  const frontLocker = KEYS.has('KeyX') || t.frontLocker > 0;
+  const range = drivetrainControlsEnabled && (KEYS.has('KeyV') || t.range > 0);
+  const rearLocker = drivetrainControlsEnabled && (KEYS.has('KeyZ') || t.rearLocker > 0);
+  const frontLocker = drivetrainControlsEnabled && (KEYS.has('KeyX') || t.frontLocker > 0);
+  const transferCase = drivetrainControlsEnabled ? pendingTransferCase : null;
+  pendingTransferCase = null;
   return {
     seq,
     throttle,
     steer,
     brake: Math.max(kbBrake, t.brake),
     handbrake: Math.max(kbHandbrake, t.handbrake),
+    manualGear,
+    transferCase,
     buttons: (reset ? BUTTON_RESET : 0)
       | (starter ? BUTTON_STARTER : 0)
       | (range ? BUTTON_RANGE : 0)

@@ -8,7 +8,15 @@
 // handbrake engaged.
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { clearKeys, initInput, isHandbrakeOn, sampleInput } from '../input.js';
+import {
+  clearKeys,
+  initInput,
+  isHandbrakeOn,
+  requestTransferCase,
+  sampleInput,
+  setDrivetrainControlsEnabled,
+  setManualGear,
+} from '../input.js';
 
 beforeAll(() => {
   initInput();
@@ -36,6 +44,42 @@ function withInput<T>(fn: (el: HTMLInputElement) => T): T {
 }
 
 describe('game keys targeting the page', () => {
+  it('includes the H-pattern manual selection in sampled input', () => {
+    setManualGear(4);
+    expect(sampleInput().manualGear).toBe(4);
+    setManualGear(null);
+    expect(sampleInput().manualGear).toBeNull();
+  });
+
+  it('uses S as the brake when the lever supplies direction', () => {
+    setManualGear(2);
+    press('KeyS', document.body);
+    const input = sampleInput();
+    expect(input.throttle).toBe(0);
+    expect(input.brake).toBe(1);
+    release('KeyS', document.body);
+    setManualGear(null);
+  });
+
+  it('emits a transfer-case stick selection for one simulation tick', () => {
+    requestTransferCase('2h');
+    expect(sampleInput().transferCase).toBe('2h');
+    expect(sampleInput().transferCase).toBeNull();
+  });
+
+  it('suppresses keyboard and direct drivetrain requests for a fixed-RWD car', () => {
+    setDrivetrainControlsEnabled(false);
+    requestTransferCase('4l');
+    press('KeyV', document.body);
+    press('KeyZ', document.body);
+    press('KeyX', document.body);
+    const input = sampleInput();
+    expect(input.transferCase).toBeNull();
+    expect(input.buttons).toBe(0);
+    for (const key of ['KeyV', 'KeyZ', 'KeyX']) release(key, document.body);
+    setDrivetrainControlsEnabled(true);
+  });
+
   it('preventDefaults the movement keys and space', () => {
     for (const code of ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'Space', 'ArrowUp']) {
       expect(press(code, document.body), code).toBe(true);

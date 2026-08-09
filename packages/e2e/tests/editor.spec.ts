@@ -60,7 +60,7 @@ function maxRise(before: number[], after: number[]): number {
 
 /** Where the placement ghost is sitting, out of the editor's dev hook. */
 async function ghostState(page: Page): Promise<{
-  visible: boolean; x: number; z: number; yaw: number; children: number;
+  visible: boolean; x: number; y: number; z: number; yaw: number; children: number;
 }> {
   return page.evaluate(() => {
     const w = window as unknown as {
@@ -68,7 +68,7 @@ async function ghostState(page: Page): Promise<{
         ghost: {
           group: {
             visible: boolean;
-            position: { x: number; z: number };
+            position: { x: number; y: number; z: number };
             rotation: { y: number };
             children: unknown[];
           };
@@ -79,6 +79,7 @@ async function ghostState(page: Page): Promise<{
     return {
       visible: g.visible,
       x: g.position.x,
+      y: g.position.y,
       z: g.position.z,
       yaw: g.rotation.y,
       // One child group holding the built meshes; zero means the ghost is
@@ -102,9 +103,11 @@ async function openEditor(page: Page): Promise<string[]> {
   return errors;
 }
 
-test('editor loads the procedural map without errors', async ({ page }) => {
+test('editor loads the authored default map without errors', async ({ page }) => {
   const errors = await openEditor(page);
-  await expect(page.locator('.ed-status')).toContainText('procedural');
+  await expect(page.locator('.ed-status')).toContainText('default map');
+  await expect(page.locator('.ed-section', { hasText: 'Map' }).locator('input').first())
+    .toHaveValue('procedural');
   const canvas = page.locator('#app canvas');
   const box = await canvas.boundingBox();
   expect(box?.width ?? 0).toBeGreaterThan(100);
@@ -141,6 +144,10 @@ test('undo restores the ground a stroke changed', async ({ page }) => {
 
 test('the placed object survives a save and reload of the document', async ({ page }) => {
   await openEditor(page);
+  const before = await page.evaluate(() => {
+    const w = window as unknown as { __editor: { doc(): unknown } };
+    return (w.__editor.doc() as { objects: { added: unknown[] } }).objects.added.length;
+  });
   // Switch to the object tool by its keyboard shortcut, then click.
   await page.keyboard.press('Digit6');
   const box = (await page.locator('#app canvas').boundingBox())!;
@@ -154,7 +161,49 @@ test('the placed object survives a save and reload of the document', async ({ pa
     const doc = w.__editor.doc() as { objects: { added: unknown[] } };
     return doc.objects.added.length;
   });
-  expect(survived).toBe(1);
+  expect(survived).toBe(before + 1);
+});
+
+test('the delete tool can clear every item inside its radius', async ({ page }) => {
+  await openEditor(page);
+  const authoredIds = await page.evaluate(() => {
+    const w = window as unknown as { __editor: { doc(): unknown } };
+    return (w.__editor.doc() as { objects: { added: Array<{ id: string }> } })
+      .objects.added.map((object) => object.id);
+  });
+  const box = (await page.locator('#app canvas').boundingBox())!;
+  const x = box.x + box.width * 0.4;
+  const y = box.y + box.height * 0.72;
+
+  await page.keyboard.press('Digit6');
+  await page.mouse.click(x, y);
+  await page.mouse.click(x, y);
+  const placedIds = await page.evaluate((existing) => {
+    const w = window as unknown as { __editor: { doc(): unknown } };
+    return (w.__editor.doc() as { objects: { added: Array<{ id: string }> } })
+      .objects.added.map((object) => object.id).filter((id) => !existing.includes(id));
+  }, authoredIds);
+  expect(placedIds).toHaveLength(2);
+
+  await page.keyboard.press('Digit8');
+  await page.locator('.ed-section', { hasText: 'Delete' }).locator('select')
+    .selectOption('radius');
+  await page.mouse.click(x, y);
+  await expect(page.locator('.ed-status')).toContainText('deleted');
+
+  const placedStillPresent = () => page.evaluate((ids) => {
+    const w = window as unknown as { __editor: { doc(): unknown } };
+    const present = new Set(
+      (w.__editor.doc() as { objects: { added: Array<{ id: string }> } })
+        .objects.added.map((object) => object.id),
+    );
+    return ids.filter((id) => present.has(id)).length;
+  }, placedIds);
+  expect(await placedStillPresent()).toBe(0);
+
+  // A bulk clear is one authoring operation, not one history entry per item.
+  await page.keyboard.press('KeyZ');
+  expect(await placedStillPresent()).toBe(2);
 });
 
 test('a ghost of the object appears under the cursor and follows it', async ({ page }) => {
@@ -207,14 +256,51 @@ test('the ghost aims with the bracket keys, and the object lands at that yaw', a
   const placed = await page.evaluate(() => {
     const w = window as unknown as { __editor: { doc(): unknown } };
     const doc = w.__editor.doc() as { objects: { added: Array<{ yaw: number }> } };
-    return doc.objects.added[0]!.yaw;
+    return doc.objects.added.at(-1)!.yaw;
   });
   expect(placed).toBeCloseTo(aimed, 5);
 });
 
+test('absolute placement puts the ghost and object base at an exact world Y', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('Digit6');
+  const box = (await page.locator('#app canvas').boundingBox())!;
+  const cx = box.x + box.width * 0.4;
+  const cy = box.y + box.height * 0.72;
+  await page.mouse.move(cx, cy);
+
+  const object = page.locator('.ed-section', { hasText: 'Object' });
+  await object.locator('.ed-field', { hasText: 'placement' }).locator('select')
+    .selectOption('absolute');
+  await object.locator('input[type="number"]').fill('17.375');
+  await page.waitForFunction(() => {
+    const w = window as unknown as { __editor: { ghost: { group: { position: { y: number } } } } };
+    return Math.abs(w.__editor.ghost.group.position.y - 17.375) < 1e-6;
+  });
+  expect((await ghostState(page)).y).toBeCloseTo(17.375, 6);
+
+  await page.mouse.click(cx, cy);
+  const placed = await page.evaluate(() => {
+    const w = window as unknown as {
+      __editor: {
+        doc(): { objects: { added: Array<{ id: string; y?: number; yOffset?: number }> } };
+        session(): { world: { obstacles: Array<{ id: string; y: number }> } };
+      };
+    };
+    const authored = w.__editor.doc().objects.added.at(-1)!;
+    const live = w.__editor.session().world.obstacles.find((o) => o.id === authored.id)!;
+    return { authoredY: authored.y, yOffset: authored.yOffset, liveY: live.y };
+  });
+  expect(placed.authoredY).toBe(17.375);
+  expect(placed.yOffset).toBeUndefined();
+  expect(placed.liveY).toBe(17.375);
+});
+
 test('picking a kind reseeds its own dimensions and previews that kind', async ({ page }) => {
   await openEditor(page);
-  await page.locator('.ed-section', { hasText: 'Object' }).locator('select')
+  await page.keyboard.press('Digit6');
+  await page.locator('.ed-section', { hasText: 'Object' })
+    .locator('.ed-field', { hasText: 'kind' }).locator('select')
     .selectOption('shippingContainer');
   const box = (await page.locator('#app canvas').boundingBox())!;
   await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.72);
@@ -293,7 +379,9 @@ test('@editor-shots capture', async ({ page }) => {
   // own because it is the whole point of the object tool now — and because
   // "is the ghost the same shape as what lands" is a question only a
   // picture answers.
-  await page.locator('.ed-section', { hasText: 'Object' }).locator('select')
+  await page.keyboard.press('Digit6');
+  await page.locator('.ed-section', { hasText: 'Object' })
+    .locator('.ed-field', { hasText: 'kind' }).locator('select')
     .selectOption('shippingContainer');
   // Clear of the crater the sculpt above dug, and far enough up the frame
   // that the whole object and its brush ring fit in shot.

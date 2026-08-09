@@ -5,6 +5,7 @@
 
 import {
   SNAPSHOT_INTERVAL_MS,
+  WINCH,
   PROTOCOL_VERSION,
   Maps,
   Net,
@@ -17,6 +18,7 @@ import {
   type VehicleState,
   type VehicleStateUpdate,
   type WorldSnapshot,
+  type WinchLinkSnapshot,
   type CarKind,
   type VehicleBuild,
 } from '@mydrunner/shared';
@@ -41,6 +43,13 @@ interface InternalPlayer {
   buildRevision: number;
   workshopMode: boolean;
   leaseId: string | null;
+  winchCommandSeq: number;
+  winchRevision: number;
+  lastWinchAttachAtMs: number;
+}
+
+interface InternalWinch extends WinchLinkSnapshot {
+  lastRuntimeAtMs: number;
 }
 
 interface BayLease {
@@ -57,6 +66,7 @@ export class Room {
   readonly mapRev: number;
   private readonly players = new Map<PlayerId, InternalPlayer>();
   private readonly bayLeases = new Map<string, BayLease>();
+  private readonly winches = new Map<PlayerId, InternalWinch>();
   private tick = 0;
   private readonly startedAtMs = performance.now();
   private loopHandle: NodeJS.Timeout | null = null;
@@ -123,7 +133,7 @@ export class Room {
     const { slot, ...spawn } = this.nextSpawn(build);
     this.players.set(handle.id, {
       handle,
-      state: initialVehicleState(spawn),
+      state: initialVehicleState(spawn, build),
       stateSeq: 0,
       spawn,
       slot,
@@ -132,6 +142,9 @@ export class Room {
       buildRevision: 1,
       workshopMode: false,
       leaseId: null,
+      winchCommandSeq: 0,
+      winchRevision: 0,
+      lastWinchAttachAtMs: Number.NEGATIVE_INFINITY,
     });
     handle.send(
       Net.encode({
@@ -148,6 +161,7 @@ export class Room {
   }
 
   removePlayer(id: PlayerId): void {
+    this.removeWinchesForPlayer(id, 'target-lost');
     this.releaseLease(id);
     this.players.delete(id);
   }
@@ -159,12 +173,17 @@ export class Room {
     if (!isFiniteVehicleState(update.vehicle)) return;
     if ((update.vehicle.drivetrain.frontLocked && !p.build.frontLocker)
       || (update.vehicle.drivetrain.rearLocked && !p.build.rearLocker)) return;
+    if (Physics.geomFor(p.build).spec.drivetrain === 'fixed-rwd'
+      && (update.vehicle.drivetrain.transferCase !== '2h'
+        || update.vehicle.drivetrain.frontLocked
+        || update.vehicle.drivetrain.rearLocked)) return;
     // While leased, the server's authored bay pose is canonical. Ignoring
     // owner uploads prevents a modified client from driving its collision
     // proxy through the workshop while everyone else sees customization.
     if (p.workshopMode) return;
     p.state = update.vehicle;
     p.stateSeq = update.seq;
+    this.applyWinchRuntime(id, update.winch);
     this.relayUpdates += 1;
   }
 
@@ -185,6 +204,7 @@ export class Room {
     if (distance > marker.radius) return this.sendWorkshopAck(p, 'enter', false, 'Drive fully into the marked bay.');
     if (speed > 0.8) return this.sendWorkshopAck(p, 'enter', false, 'Stop the vehicle before opening the workshop.');
     if (upY < 0.65) return this.sendWorkshopAck(p, 'enter', false, 'The vehicle must be upright.');
+    this.removeWinchesForPlayer(id, 'invalid');
     this.releaseLease(id);
     const ground = Physics.sampleHeightBilinear(this.map.terrain, marker.x, marker.z);
     const pose = {
@@ -203,7 +223,7 @@ export class Room {
     });
     p.workshopMode = true;
     p.leaseId = leaseId;
-    p.state = initialVehicleState(pose);
+    p.state = initialVehicleState(pose, p.build);
     this.sendWorkshopAck(p, 'enter', true, undefined, { leaseId, bayId, pose, build: p.build, buildRevision: p.buildRevision });
   }
 
@@ -232,7 +252,7 @@ export class Room {
     if (lease) {
       const ground = Physics.sampleHeightBilinear(this.map.terrain, lease.pose.position.x, lease.pose.position.z);
       lease.pose.position.y = ground + Physics.spawnYAboveGround(p.build);
-      p.state = initialVehicleState(lease.pose);
+      p.state = initialVehicleState(lease.pose, p.build);
     }
     // workshopMode remains true until the client receives this confirmed
     // revision, rebuilds owner physics, then requests exit.
@@ -241,6 +261,114 @@ export class Room {
       leaseId, build: p.build, buildRevision: p.buildRevision,
       pose: lease?.pose,
     });
+  }
+
+  requestWinchCommand(id: PlayerId, message: Extract<Net.ClientMessage, { t: 'winch-command' }>): void {
+    const player = this.players.get(id);
+    if (!player || message.seq <= player.winchCommandSeq) return;
+    player.winchCommandSeq = message.seq;
+    if (!('target' in message)) {
+      const link = this.winches.get(id);
+      if (!link) return this.sendWinchAck(player, message.seq, false, 'No winch cable is attached.');
+      this.winches.delete(id);
+      this.sendWinchAck(player, message.seq, true);
+      return;
+    }
+    const now = performance.now();
+    if (now - player.lastWinchAttachAtMs < 100) {
+      return this.sendWinchAck(player, message.seq, false, 'Winch request rate limited.');
+    }
+    player.lastWinchAttachAtMs = now;
+    if (player.workshopMode) return this.sendWinchAck(player, message.seq, false, 'Leave the workshop before using the winch.');
+    if (!player.build.winchId.endsWith('.fitted') || !player.build.frontBarId.endsWith('.steel-winch')) {
+      return this.sendWinchAck(player, message.seq, false, 'Fit a recovery winch and steel winch bar first.');
+    }
+    if (this.winches.has(id)) return this.sendWinchAck(player, message.seq, false, 'A cable is already attached.');
+
+    const source = Physics.transformPoint(
+      Physics.geomFor(player.build).recoveryPoints.fairlead,
+      player.state.position,
+      player.state.rotation,
+    );
+    let target: WinchLinkSnapshot['target'];
+    let targetPoint: { x: number; y: number; z: number };
+    if (message.target.kind === 'obstacle') {
+      const obstacleId = message.target.obstacleId;
+      const obstacle = this.map.obstacles.find((entry) => entry.id === obstacleId);
+      const anchor = obstacle ? Physics.winchAnchorForObstacle(obstacle, source) : null;
+      if (!obstacle || !anchor) return this.sendWinchAck(player, message.seq, false, 'That object is not a recovery anchor.');
+      target = { kind: 'obstacle', obstacleId: obstacle.id, anchor };
+      targetPoint = anchor;
+    } else {
+      const targetPlayer = this.players.get(message.target.playerId);
+      if (!targetPlayer || targetPlayer.handle.id === id || targetPlayer.workshopMode) {
+        return this.sendWinchAck(player, message.seq, false, 'That vehicle is unavailable.');
+      }
+      const duplicate = [...this.winches.values()].some((link) =>
+        link.target.kind === 'vehicle'
+        && ((link.ownerId === id && link.target.playerId === targetPlayer.handle.id)
+          || (link.ownerId === targetPlayer.handle.id && link.target.playerId === id)));
+      if (duplicate) return this.sendWinchAck(player, message.seq, false, 'Those vehicles are already linked.');
+      const incoming = [...this.winches.values()].filter((link) =>
+        link.target.kind === 'vehicle' && link.target.playerId === targetPlayer.handle.id).length;
+      if (incoming >= WINCH.maxIncomingLinks) return this.sendWinchAck(player, message.seq, false, 'That vehicle has no free recovery point.');
+      const local = Physics.geomFor(targetPlayer.build).recoveryPoints[message.target.point];
+      targetPoint = Physics.transformPoint(local, targetPlayer.state.position, targetPlayer.state.rotation);
+      target = { kind: 'vehicle', playerId: targetPlayer.handle.id, point: message.target.point };
+    }
+    const distance = Math.hypot(targetPoint.x - source.x, targetPoint.y - source.y, targetPoint.z - source.z);
+    if (!Number.isFinite(distance) || distance > WINCH.maxAttachDistance) {
+      return this.sendWinchAck(player, message.seq, false, 'The recovery point is out of range.');
+    }
+    const link: InternalWinch = {
+      id: `${id}:${++player.winchRevision}`,
+      ownerId: id,
+      target,
+      cableLength: Math.max(WINCH.minCableLength, Math.min(WINCH.maxCableLength, distance + WINCH.attachSlack)),
+      motor: 0,
+      tension: 0,
+      status: 'attached',
+      lastRuntimeAtMs: performance.now(),
+    };
+    this.winches.set(id, link);
+    this.sendWinchAck(player, message.seq, true, undefined, link);
+  }
+
+  private applyWinchRuntime(id: PlayerId, runtime: VehicleStateUpdate['winch']): void {
+    const link = this.winches.get(id);
+    if (!link || !runtime || runtime.linkId !== link.id) return;
+    if (!Number.isFinite(runtime.cableLength) || !Number.isFinite(runtime.tension)
+      || runtime.cableLength < WINCH.minCableLength || runtime.cableLength > WINCH.maxCableLength
+      || runtime.tension < 0 || runtime.tension > WINCH.breakForce
+      || ![-1, 0, 1].includes(runtime.motor)) return;
+    const now = performance.now();
+    const elapsed = Math.max(0, (now - link.lastRuntimeAtMs) / 1000);
+    const maxChange = WINCH.reelOutSpeed * elapsed + 0.1;
+    if (Math.abs(runtime.cableLength - link.cableLength) > maxChange) return;
+    link.cableLength = runtime.cableLength;
+    link.motor = runtime.motor;
+    link.tension = runtime.tension;
+    link.status = runtime.tension >= WINCH.breakForce * 0.99
+      ? 'overload'
+      : runtime.motor === 1 && runtime.tension >= WINCH.ratedPull * 0.98
+        ? 'stalled' : 'attached';
+    link.lastRuntimeAtMs = now;
+  }
+
+  private sendWinchAck(player: InternalPlayer, seq: number, ok: boolean, reason?: string, link?: WinchLinkSnapshot): void {
+    const message: Extract<Net.ServerMessage, { t: 'winch-ack' }> = { t: 'winch-ack', seq, ok };
+    if (reason) message.reason = reason;
+    if (link) message.link = link;
+    player.handle.send(Net.encode(message));
+  }
+
+  private removeWinchesForPlayer(id: PlayerId, reason: 'target-lost' | 'invalid'): void {
+    for (const [ownerId, link] of [...this.winches]) {
+      if (ownerId !== id && !(link.target.kind === 'vehicle' && link.target.playerId === id)) continue;
+      this.winches.delete(ownerId);
+      const owner = this.players.get(ownerId);
+      if (owner) owner.handle.send(Net.encode({ t: 'winch-event', linkId: link.id, reason }));
+    }
   }
 
   private sendWorkshopAck(
@@ -278,6 +406,24 @@ export class Room {
   /** Exposed for deterministic tests; production calls it from runLoop. */
   broadcastSnapshot(): void {
     this.expireLeases();
+    const now = performance.now();
+    for (const [ownerId, link] of [...this.winches]) {
+      if (now - link.lastRuntimeAtMs > 250) link.motor = 0;
+      if (now - link.lastRuntimeAtMs > 500) {
+        link.tension = 0;
+        link.status = 'attached';
+      }
+      const endpoints = this.winchEndpoints(link);
+      if (!endpoints || Math.hypot(
+        endpoints.target.x - endpoints.source.x,
+        endpoints.target.y - endpoints.source.y,
+        endpoints.target.z - endpoints.source.z,
+      ) > WINCH.maxCableLength + WINCH.separationGrace) {
+        this.winches.delete(ownerId);
+        const owner = this.players.get(ownerId);
+        owner?.handle.send(Net.encode({ t: 'winch-event', linkId: link.id, reason: 'target-lost' }));
+      }
+    }
     const players: PlayerSnapshot[] = [];
     for (const p of this.players.values()) {
       players.push({
@@ -294,11 +440,23 @@ export class Room {
       tick: this.tick,
       serverTimeMs: this.nowMs(),
       players,
+      winches: [...this.winches.values()].map(({ lastRuntimeAtMs: _ignored, ...link }) => link),
     };
     const msg = Net.encode({ t: 'snapshot', snap });
     for (const p of this.players.values()) p.handle.send(msg);
     this.snapshotBytes += msg.length;
     if (msg.length > this.snapshotMaxBytes) this.snapshotMaxBytes = msg.length;
+  }
+
+  private winchEndpoints(link: InternalWinch): { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null {
+    const owner = this.players.get(link.ownerId);
+    if (!owner) return null;
+    const source = Physics.transformPoint(Physics.geomFor(owner.build).recoveryPoints.fairlead, owner.state.position, owner.state.rotation);
+    if (link.target.kind === 'obstacle') return { source, target: link.target.anchor };
+    const targetPlayer = this.players.get(link.target.playerId);
+    if (!targetPlayer) return null;
+    const local = Physics.geomFor(targetPlayer.build).recoveryPoints[link.target.point];
+    return { source, target: Physics.transformPoint(local, targetPlayer.state.position, targetPlayer.state.rotation) };
   }
 
   broadcastChat(handle: PlayerHandle, text: string): void {
@@ -337,6 +495,7 @@ export class Room {
 
 function initialVehicleState(
   spawn: { position: { x: number; y: number; z: number }; yaw: number },
+  build: VehicleBuild = createStockBuild(),
 ): VehicleState {
   const half = spawn.yaw * 0.5;
   return {
@@ -347,7 +506,11 @@ function initialVehicleState(
     rpm: 0,
     gear: 0,
     throttle: 0,
-    drivetrain: { range: 'high', frontLocked: false, rearLocked: false },
+    drivetrain: {
+      transferCase: Physics.geomFor(build).spec.drivetrain === 'fixed-rwd' ? '2h' : '4h',
+      frontLocked: false,
+      rearLocked: false,
+    },
     damage: { ...UNDAMAGED_VEHICLE },
     wheels: Array.from({ length: 4 }, () => ({
       steer: 0,
@@ -382,7 +545,11 @@ function isFiniteVehicleState(v: VehicleState): boolean {
     && v.damage.engine >= 0 && v.damage.engine <= 1
     && v.damage.steering >= 0 && v.damage.steering <= 1
     && (v.damage.stoppedCause === 'none' || v.damage.stoppedCause === 'collision' || v.damage.stoppedCause === 'flooding');
-  const drivetrainValid = (v.drivetrain.range === 'high' || v.drivetrain.range === 'low')
+  const drivetrainValid = (
+    v.drivetrain.transferCase === '2h'
+    || v.drivetrain.transferCase === '4h'
+    || v.drivetrain.transferCase === '4l'
+  )
     && typeof v.drivetrain.frontLocked === 'boolean'
     && typeof v.drivetrain.rearLocked === 'boolean';
   return v.wheels.length === 4 && numbers.every(Number.isFinite) && damageValid && drivetrainValid;

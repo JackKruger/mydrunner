@@ -1,6 +1,5 @@
-// Pooled mud-splatter particles. Driven from the renderer when a wheel
-// is spinning on mud (wheel surface speed clearly faster than vehicle
-// ground speed). Pure visual: doesn't affect physics or networking.
+// Pooled ground-response particles: mud clods, dust, tyre smoke and water
+// spray. Pure visual: doesn't affect physics or networking.
 
 import * as THREE from 'three';
 
@@ -15,6 +14,11 @@ interface Particle {
   active: boolean;
   /** Base size this particle was emitted at; the fade scales around it. */
   scale: number;
+  /** Per-particle acceleration allows heavy mud and buoyant smoke to share
+   *  one pool without splitting the renderer into effect-specific systems. */
+  gravity: number;
+  endScale: number;
+  opacity: number;
 }
 
 /** Per-emission overrides. Everything defaults to the mud behaviour. */
@@ -31,6 +35,11 @@ export interface EmitOptions {
   lifeMs?: number;
   lifeVarMs?: number;
   scale?: number;
+  /** Vertical acceleration in m/s². Defaults to gravity for mud/water. */
+  gravity?: number;
+  /** Size multiplier at the end of life. Defaults to 0.6 (shrinking clod). */
+  endScale?: number;
+  opacity?: number;
 }
 
 export class ParticleSystem {
@@ -62,6 +71,9 @@ export class ParticleSystem {
         lifeMs: 0,
         active: false,
         scale: 1,
+        gravity: GRAVITY,
+        endScale: 0.6,
+        opacity: 1,
       });
     }
   }
@@ -88,9 +100,12 @@ export class ParticleSystem {
     p.active = true;
     p.mesh.visible = true;
     p.scale = opts.scale ?? 1;
+    p.gravity = opts.gravity ?? GRAVITY;
+    p.endScale = opts.endScale ?? 0.6;
+    p.opacity = opts.opacity ?? 1;
     (p.mesh.material as THREE.MeshStandardMaterial).color.setHex(color);
-    (p.mesh.material as THREE.MeshStandardMaterial).opacity = 1;
-    p.mesh.scale.setScalar(p.scale);
+    (p.mesh.material as THREE.MeshStandardMaterial).opacity = p.opacity;
+    p.mesh.scale.setScalar(p.scale * 1.2);
   }
 
   /** Step the active particles forward. */
@@ -105,12 +120,12 @@ export class ParticleSystem {
         continue;
       }
       // Integrate.
-      p.vel.y += GRAVITY * dt;
+      p.vel.y += p.gravity * dt;
       this.tmp.copy(p.vel).multiplyScalar(dt);
       p.mesh.position.add(this.tmp);
       const alpha = 1 - p.ageMs / p.lifeMs;
-      (p.mesh.material as THREE.MeshStandardMaterial).opacity = alpha;
-      p.mesh.scale.setScalar(p.scale * (0.6 + alpha * 0.6));
+      (p.mesh.material as THREE.MeshStandardMaterial).opacity = p.opacity * alpha;
+      p.mesh.scale.setScalar(p.scale * (p.endScale + alpha * (1.2 - p.endScale)));
     }
   }
 

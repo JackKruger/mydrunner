@@ -42,7 +42,7 @@ function vehicleState(over: Partial<VehicleState> = {}): VehicleState {
     rpm: 1000,
     gear: 1,
     throttle: 0,
-    drivetrain: { range: 'high', frontLocked: false, rearLocked: false },
+    drivetrain: { transferCase: '4h', frontLocked: false, rearLocked: false },
     damage: { body: 1, engine: 1, steering: 1, stoppedCause: 'none' },
     wheels: [0, 1, 2, 3].map(() => ({
       steer: 0, spin: 0, contact: true, suspensionLength: 0.3, angVel: 0,
@@ -76,6 +76,88 @@ function live(fx: VehicleEffects): number {
   });
   return n;
 }
+
+function liveMeshes(fx: VehicleEffects): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = [];
+  fx.group.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh && o.visible) meshes.push(o as THREE.Mesh);
+  });
+  return meshes;
+}
+
+function withWheelSpeed(v: VehicleState, angVel: number): VehicleState {
+  return {
+    ...v,
+    wheels: v.wheels.map((wheel) => ({ ...wheel, angVel })),
+  };
+}
+
+describe('wheelspin ground response', () => {
+  it('shows dust when driven wheels spin on ordinary dirt', () => {
+    const fx = new VehicleEffects();
+    fx.setTerrain(terrain());
+    const v = withWheelSpeed(vehicleState(), 12);
+    fx.spawnFromSnapshot(snapshot(v), 1, () => pose());
+    expect(live(fx)).toBeGreaterThan(0);
+    fx.dispose();
+  });
+
+  it('starts the plume at the tyre contact edge, not above the wheel centre', () => {
+    const fx = new VehicleEffects();
+    fx.setTerrain(terrain());
+    const g = pose();
+    g.position.y = 2;
+    const v = withWheelSpeed(vehicleState(), 12);
+    fx.spawnFromSnapshot(snapshot(v), 1, () => g);
+
+    const geom = Physics.geomFor(BUILD);
+    const mountY = Physics.restWheelPositions(BUILD)[0]!.y;
+    const expectedY = g.position.y + mountY
+      - v.wheels[0]!.suspensionLength - geom.wheelRadius;
+    expect(liveMeshes(fx)[0]!.position.y).toBeCloseTo(expectedY, 5);
+    fx.dispose();
+  });
+
+  it('increases plume density with lost-traction severity', () => {
+    const weak = new VehicleEffects();
+    weak.setTerrain(terrain());
+    weak.spawnFromSnapshot(snapshot(withWheelSpeed(vehicleState(), 4)), 1, () => pose());
+    const weakCount = live(weak);
+
+    const strong = new VehicleEffects();
+    strong.setTerrain(terrain());
+    strong.spawnFromSnapshot(snapshot(withWheelSpeed(vehicleState(), 32)), 1, () => pose());
+    const strongCount = live(strong);
+
+    expect(weakCount).toBeGreaterThan(0);
+    expect(strongCount).toBeGreaterThan(weakCount);
+    weak.dispose();
+    strong.dispose();
+  });
+
+  it('does not emit while the tyres are rolling at road speed', () => {
+    const fx = new VehicleEffects();
+    fx.setTerrain(terrain());
+    const radius = Physics.geomFor(BUILD).wheelRadius;
+    const rolling = withWheelSpeed(
+      vehicleState({ linVel: { x: 0, y: 0, z: 8 } }),
+      8 / radius,
+    );
+    fx.spawnFromSnapshot(snapshot(rolling), 1, () => pose());
+    expect(live(fx)).toBe(0);
+    fx.dispose();
+  });
+
+  it('does not emit from an airborne spinning wheel', () => {
+    const fx = new VehicleEffects();
+    fx.setTerrain(terrain());
+    const v = withWheelSpeed(vehicleState(), 32);
+    v.wheels = v.wheels.map((wheel) => ({ ...wheel, contact: false }));
+    fx.spawnFromSnapshot(snapshot(v), 1, () => pose());
+    expect(live(fx)).toBe(0);
+    fx.dispose();
+  });
+});
 
 describe('water spray', () => {
   it('throws spray from a wheel driving through water', () => {

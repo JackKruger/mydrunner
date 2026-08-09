@@ -141,6 +141,10 @@ async function main(): Promise<void> {
           if (!joined) return;
           room.requestBuildUpdate(id, msg.leaseId, msg.build, msg.normalizationIssues);
           break;
+        case 'winch-command':
+          if (!joined) return;
+          room.requestWinchCommand(id, msg);
+          break;
       }
     });
 

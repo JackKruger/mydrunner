@@ -5,11 +5,11 @@
 
 import { Physics } from '@mydrunner/shared';
 import {
-  button, caption, checkbox, el, section, select, slider, textField,
-  type SelectHandle, type SliderHandle,
+  button, caption, checkbox, el, numberField, section, select, slider, textField,
+  type NumberHandle, type SelectHandle, type SliderHandle,
 } from './dom.js';
 import {
-  TOOL_KEYS, paintableSurfaces, placeableKinds, type ToolId, type ToolState,
+  TOOL_KEYS, isSculpt, paintableSurfaces, placeableKinds, type ToolId, type ToolState,
 } from './tools.js';
 
 export interface UiCallbacks {
@@ -28,6 +28,8 @@ export interface UiCallbacks {
    *  rebuilds the placement ghost. The panel does not do it itself because
    *  the same reseed happens from the keyboard. */
   onObjectKindChange(kind: Physics.ObstacleKind): void;
+  /** Placement mode/value changed: re-seat the ghost immediately. */
+  onObjectPlacementChange(): void;
   /** Derive the whole flow field from the water surface's slope. */
   onAutoFlow(): void;
 }
@@ -39,11 +41,22 @@ export class EditorUi {
   private fileInput: HTMLInputElement;
   private idInput: HTMLInputElement;
   private nameInput: HTMLInputElement;
+  private brushSection: HTMLElement;
+  private paintSection: HTMLElement;
+  private waterSection: HTMLElement;
+  private objectSection: HTMLElement;
+  private spawnSection: HTMLElement;
+  private deleteSection: HTMLElement;
+  private radiusSlider: SliderHandle;
+  private strengthSlider: SliderHandle;
+  private hardnessSlider: SliderHandle;
   private kindSelect: SelectHandle;
   private sizeSlider: SliderHandle;
   private heightSlider: SliderHandle;
   private lengthSlider: SliderHandle;
   private yawSlider: SliderHandle;
+  private placementModeSelect: SelectHandle;
+  private placementYInput: NumberHandle;
   private dimsCaption: { set(t: string): void };
 
   constructor(parent: HTMLElement, private state: ToolState, private cb: UiCallbacks) {
@@ -68,13 +81,16 @@ export class EditorUi {
     }
 
     // --- Brush ---
-    const brush = section(this.root, 'Brush');
-    slider(brush, 'radius', 1, 60, 0.5, state.radius, (v) => { this.state.radius = v; });
-    slider(brush, 'strength', 0.2, 30, 0.2, state.strength, (v) => { this.state.strength = v; });
-    slider(brush, 'hardness', 0, 1, 0.05, state.hardness, (v) => { this.state.hardness = v; });
+    this.brushSection = section(this.root, 'Brush');
+    this.radiusSlider = slider(this.brushSection, 'radius', 1, 60, 0.5, state.radius,
+      (v) => { this.state.radius = v; });
+    this.strengthSlider = slider(this.brushSection, 'strength', 0.2, 30, 0.2, state.strength,
+      (v) => { this.state.strength = v; });
+    this.hardnessSlider = slider(this.brushSection, 'hardness', 0, 1, 0.05, state.hardness,
+      (v) => { this.state.hardness = v; });
 
     // --- Paint ---
-    const paint = section(this.root, 'Surface');
+    const paint = this.paintSection = section(this.root, 'Surface');
     select(
       paint,
       'surface',
@@ -84,7 +100,7 @@ export class EditorUi {
     );
 
     // --- Water ---
-    const water = section(this.root, 'Water');
+    const water = this.waterSection = section(this.root, 'Water');
     select(
       water,
       'mode',
@@ -104,7 +120,7 @@ export class EditorUi {
     caption(water).set('depth is measured from the ground under the stroke centre');
 
     // --- Objects ---
-    const objects = section(this.root, 'Object');
+    const objects = this.objectSection = section(this.root, 'Object');
     this.kindSelect = select(
       objects,
       'kind',
@@ -123,11 +139,44 @@ export class EditorUi {
       (v) => { this.state.objectLength = v; });
     this.yawSlider = slider(objects, 'yaw', -Math.PI, Math.PI, 0.02, state.objectYaw,
       (v) => { this.state.objectYaw = v; });
+    this.placementModeSelect = select(
+      objects,
+      'placement',
+      [
+        { value: 'ground', label: 'snap to ground' },
+        { value: 'offset', label: 'above ground' },
+        { value: 'absolute', label: 'absolute world Y' },
+      ],
+      state.objectPlacementMode,
+      (v) => {
+        this.state.objectPlacementMode = v as ToolState['objectPlacementMode'];
+        this.syncPlacement();
+        this.cb.onObjectPlacementChange();
+      },
+    );
+    this.placementYInput = numberField(objects, 'offset above ground', state.objectYOffset, (v) => {
+      if (this.state.objectPlacementMode === 'offset') this.state.objectYOffset = v;
+      else if (this.state.objectPlacementMode === 'absolute') this.state.objectWorldY = v;
+      this.cb.onObjectPlacementChange();
+    });
     this.dimsCaption = caption(objects);
 
     // --- Spawn ---
-    const spawn = section(this.root, 'Spawn');
+    const spawn = this.spawnSection = section(this.root, 'Spawn');
     slider(spawn, 'yaw', -Math.PI, Math.PI, 0.05, state.spawnYaw, (v) => { this.state.spawnYaw = v; });
+
+    // --- Delete ---
+    const remove = this.deleteSection = section(this.root, 'Delete');
+    select(
+      remove,
+      'mode',
+      [
+        { value: 'single', label: 'single item' },
+        { value: 'radius', label: 'within radius' },
+      ],
+      state.deleteMode,
+      (v) => { this.state.deleteMode = v as ToolState['deleteMode']; },
+    );
 
     // --- File ---
     const file = section(this.root, 'File');
@@ -179,6 +228,21 @@ export class EditorUi {
     for (const [tool, b] of this.toolButtons) {
       b.classList.toggle('active', tool === this.state.tool);
     }
+
+    const tool = this.state.tool;
+    const usesRadius = isSculpt(tool) || tool === 'paint' || tool === 'water' || tool === 'delete';
+    this.brushSection.hidden = !usesRadius;
+    this.radiusSlider.setVisible(usesRadius);
+    // Smooth and flatten have a fixed convergence rate; the strength value
+    // is only consumed by the additive raise/lower brushes.
+    this.strengthSlider.setVisible(tool === 'raise' || tool === 'lower');
+    this.hardnessSlider.setVisible(isSculpt(tool));
+
+    this.paintSection.hidden = tool !== 'paint';
+    this.waterSection.hidden = tool !== 'water';
+    this.objectSection.hidden = tool !== 'object';
+    this.spawnSection.hidden = tool !== 'spawn';
+    this.deleteSection.hidden = tool !== 'delete';
   }
 
   /** Push the object state back into the panel: after a kind change, and
@@ -207,7 +271,24 @@ export class EditorUi {
       this.lengthSlider.set(this.state.objectLength);
     }
     this.yawSlider.set(this.state.objectYaw);
-    this.dimsCaption.set('wheel or [ ] to aim');
+    this.syncPlacement();
+  }
+
+  private syncPlacement(): void {
+    const mode = this.state.objectPlacementMode;
+    this.placementModeSelect.set(mode);
+    this.placementYInput.setVisible(mode !== 'ground');
+    if (mode === 'offset') {
+      this.placementYInput.setLabel('offset above ground');
+      this.placementYInput.set(this.state.objectYOffset);
+      this.dimsCaption.set('offset is relative to local terrain · wheel or [ ] to aim');
+    } else if (mode === 'absolute') {
+      this.placementYInput.setLabel('base world Y');
+      this.placementYInput.set(this.state.objectWorldY);
+      this.dimsCaption.set('world Y is the object base; geometry height stays separate · wheel or [ ] to aim');
+    } else {
+      this.dimsCaption.set('base snaps to terrain · wheel or [ ] to aim');
+    }
   }
 
   status(text: string, kind: 'info' | 'error' = 'info'): void {

@@ -268,7 +268,9 @@ describe('swamping is driven by hull submersion, not the air intake', () => {
     // that is what a snorkel is for - so intake-gated flooding meant it
     // drifted forever. Water still gets in through everything else.
     const world = pondWorld({ level: 2.5, bed: -6 });
-    const v = spawn(world, 'patrol', 0);
+    const ridgeback = createStockBuild('ridgeback');
+    const snorkelled = { ...ridgeback, snorkelId: 'ridgeback.snorkel.fitted' };
+    const v = spawn(world, snorkelled, 0);
     coast(world, 200, v);
     const st = v.waterStatus();
     expect(st.intakeSubmerged).toBe(false);

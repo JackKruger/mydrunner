@@ -48,7 +48,7 @@ export const defaultMap: MapDoc = {
       "z": 55
     }
   ],
-  "formatVersion": 2,
+  "formatVersion": 3,
   "heightDelta": {
     "cells": [
       {

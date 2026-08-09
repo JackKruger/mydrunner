@@ -222,8 +222,8 @@ export class EditSession {
     return this.pendingId;
   }
 
-  /** Place an object. Y is resolved from the live ground at save/compose
-   *  time, so only x/z are stored here. */
+  /** Place an object. Its authored Y fields determine whether it sits on,
+   *  follows, or stays independent from the live terrain. */
   addObject(o: Omit<Maps.PlacedObject, 'id'>): Maps.PlacedObject {
     this.pushUndo();
     const placed: Maps.PlacedObject = { ...o, id: this.previewId() };
@@ -237,10 +237,33 @@ export class EditSession {
    *  go on the removed list, which is what survives regeneration. */
   deleteObject(id: string): void {
     this.pushUndo();
+    this.removeObject(id);
+    this.rebuildObjects();
+  }
+
+  /** Delete every object and spawn whose anchor lies inside a brush.
+   *  The entire clear is one history entry, regardless of how many things
+   *  it catches. Returns counts so the panel can report exactly what went. */
+  deleteInRadius(x: number, z: number, radius: number): { objects: number; spawns: number } {
+    const within = Math.max(0, radius);
+    const objectIds = this.world.obstacles
+      .filter((o) => Math.hypot(o.x - x, o.z - z) <= within)
+      .map((o) => o.id);
+    const keptSpawns = this.spawns.filter((s) => Math.hypot(s.x - x, s.z - z) > within);
+    const spawnCount = this.spawns.length - keptSpawns.length;
+    if (objectIds.length === 0 && spawnCount === 0) return { objects: 0, spawns: 0 };
+
+    this.pushUndo();
+    for (const id of objectIds) this.removeObject(id);
+    this.spawns = keptSpawns;
+    if (objectIds.length > 0) this.rebuildObjects();
+    return { objects: objectIds.length, spawns: spawnCount };
+  }
+
+  private removeObject(id: string): void {
     const i = this.added.findIndex((o) => o.id === id);
     if (i >= 0) this.added.splice(i, 1);
     else if (!this.removed.includes(id)) this.removed.push(id);
-    this.rebuildObjects();
   }
 
   addSpawn(s: Maps.SpawnPoint): void {
@@ -379,14 +402,14 @@ export class EditSession {
   }
 }
 
-/** Seat an authored object on the ground, matching applyMapDoc's rule so
- *  the editor's preview and the loaded map agree. */
+/** Resolve an authored object, matching applyMapDoc's placement rule so the
+ *  editor's preview and the loaded map agree. */
 function resolvePlaced(p: Maps.PlacedObject, t: Physics.TerrainData): Physics.Obstacle {
   return {
     id: p.id,
     kind: p.kind,
     x: p.x,
-    y: Physics.sampleHeightBilinear(t, p.x, p.z) + (p.yOffset ?? 0),
+    y: p.y ?? Physics.sampleHeightBilinear(t, p.x, p.z) + (p.yOffset ?? 0),
     z: p.z,
     size: p.size,
     height: p.height,

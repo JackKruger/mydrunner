@@ -306,7 +306,7 @@ visibly pulled with it, axle tilts, chassis can lean.
 - [ ] Coalesce rut deltas into one message per flush.
 
 ### P3 — stretch
-- [ ] Winch (rope constraint between vehicles for recovery).
+- [x] Winch (physics-driven recovery from scenery anchors and other vehicles).
 - [ ] Destructible terrain features (knock down trees with the bullbar).
 - [ ] Water bodies the chassis floats in / bogs down in.
 - [ ] Day/night cycle + headlight illumination (headlight cones already

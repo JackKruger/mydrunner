@@ -28,10 +28,11 @@ describe('join briefing', () => {
     expect(document.querySelector('#join-overlay')).toBeNull();
   });
 
-  it('offers exactly the five fictional 4x4 bases', () => {
+  it('offers all seven fictional rigs', () => {
     void showJoinScreen({ name: 'Ada', build: createStockBuild('ridgeback') });
     const ids = [...document.querySelectorAll<HTMLElement>('[data-car-kind]')].map((element) => element.dataset.carKind);
-    expect(ids).toEqual(['ridgeback', 'overlander', 'stockman-single', 'stockman-dual', 'longreach']);
+    expect(ids).toEqual(['ridgeback', 'overlander', 'stockman-single', 'stockman-dual', 'longreach', 'outclaw', 'dustback-rs']);
+    expect(document.body.textContent).toContain('Seven rigs available');
     expect(document.body.textContent).not.toMatch(/Falcon|motorbike/i);
   });
 

@@ -10,6 +10,7 @@ import {
   type VehicleStateUpdate,
 } from '@mydrunner/shared';
 import type { MapHandshake, SpawnHandshake } from '@mydrunner/shared/net';
+import type { WinchAttachTarget } from '@mydrunner/shared/net';
 
 export interface NetEvents {
   onWelcome(id: PlayerId, serverTimeMs: number, map: MapHandshake, spawn: SpawnHandshake, build: VehicleBuild): void;
@@ -23,6 +24,8 @@ export interface NetEvents {
   onClose(reason: string, fatal: boolean): void;
   onOpen(): void;
   onWorkshopAck(msg: Extract<Net.ServerMessage, { t: 'workshop-ack' }>): void;
+  onWinchAck(msg: Extract<Net.ServerMessage, { t: 'winch-ack' }>): void;
+  onWinchEvent(msg: Extract<Net.ServerMessage, { t: 'winch-event' }>): void;
 }
 
 export class NetClient {
@@ -85,6 +88,12 @@ export class NetClient {
           if (msg.ok && msg.build) this.build = msg.build;
           this.events.onWorkshopAck(msg);
           break;
+        case 'winch-ack':
+          this.events.onWinchAck(msg);
+          break;
+        case 'winch-event':
+          this.events.onWinchEvent(msg);
+          break;
       }
     });
     // Ignore events from superseded sockets: connect() may be called again
@@ -135,6 +144,16 @@ export class NetClient {
   exitWorkshop(leaseId: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(Net.encode({ t: 'workshop-exit', leaseId }));
+  }
+
+  sendWinchCommand(seq: number, action: 'attach', target: WinchAttachTarget): void;
+  sendWinchCommand(seq: number, action: 'detach' | 'break'): void;
+  sendWinchCommand(seq: number, action: 'attach' | 'detach' | 'break', target?: WinchAttachTarget): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const message: Net.ClientMessage = action === 'attach'
+      ? { t: 'winch-command', seq, action, target: target! }
+      : { t: 'winch-command', seq, action };
+    this.ws.send(Net.encode(message));
   }
 
   close(): void {

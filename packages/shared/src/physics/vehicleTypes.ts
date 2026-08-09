@@ -11,6 +11,11 @@ export interface VehicleSpawn {
   yaw?: number;
 }
 
+export interface ExternalPointLoad {
+  force: { x: number; y: number; z: number };
+  point: { x: number; y: number; z: number };
+}
+
 /** Water state of one vehicle, for the HUD and the spray effects.
  *
  *  Not part of VehicleState and not on the wire: a drowned engine
@@ -33,6 +38,7 @@ export interface VehicleLike {
   readonly build: VehicleBuild;
   readonly body: RAPIER.RigidBody;
   setInput(input: PlayerInput): void;
+  queueExternalPointLoad(load: ExternalPointLoad): void;
   resetTo(spawn: VehicleSpawn): void;
   preStep(): void;
   postStep(): void;

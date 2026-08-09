@@ -30,7 +30,14 @@
 //    behaves in it.
 // 8: complete VehicleBuild identities, drivetrain/damage telemetry and
 //    acknowledged workshop leasing/build messages.
-export const PROTOCOL_VERSION = 8;
+// 9: drivetrain telemetry carries the transfer-case position (2H/4H/4L)
+//    in place of the old high/low-only flag.
+// 10: authoritative winch links and owner-uploaded winch runtime.
+// 11: Outclaw vehicle identity and geometry. Mixed builds would disagree on
+//     its chassis, axle track and suspension tune.
+// 12: workshop builds add selectable axle widths plus wider 37/40-inch
+//     tyre packages, changing both the build tuple and vehicle geometry.
+export const PROTOCOL_VERSION = 13;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // The client-owned vehicle simulation advances at this fixed cadence.
@@ -70,13 +77,39 @@ export const VEHICLE = {
   driveSplit: { front: 0.5, rear: 0.5 },
   brakeForce: 4500,
   maxSteer: 0.72,
-  steerSpeed: 7,
+  // Owner physics now runs locally, so input already reaches the steering
+  // model without the old server round trip. Keep enough travel time for
+  // keyboard steering to read as a wheel being turned rather than a snap.
+  steerSpeed: 2.2,
   // Wheel friction multipliers - front slightly less grippy than rear so
   // the car understeers (slides front-end-out) instead of pivoting hard
   // enough to flip on most turns. Rollover is still possible if you take
   // a slope at speed or hit a rut sideways - which is the point.
   frontGripMult: 1.0,
   rearGripMult: 1.0,
+  // Exact rigid-body mass properties removed the accidental extra mass of
+  // the roof-height collider. Preserve the already-approved flat-road
+  // acceleration/shift character while the chassis now reports its real kg.
+  massPropertyDriveScale: 0.52,
+} as const;
+
+/** Recovery-winch tuning. Forces are deliberately softer than a rigid
+ * constraint so the 60 Hz owner simulation remains stable under latency. */
+export const WINCH = {
+  maxAttachDistance: 30,
+  maxCableLength: 35,
+  minCableLength: 1.5,
+  attachSlack: 0.2,
+  stiffness: 90_000,
+  damping: 18_000,
+  ratedPull: 55_000,
+  breakForce: 85_000,
+  breakDelay: 0.2,
+  overloadRecoveryRate: 2,
+  reelInSpeed: 0.75,
+  reelOutSpeed: 1.25,
+  separationGrace: 2,
+  maxIncomingLinks: 2,
 } as const;
 
 // Tire slip model. Real tires have a Pacejka-style "magic formula"
@@ -297,6 +330,17 @@ export const WHEEL = {
 export const SUSPENSION = {
   rayLift: 0.5,
   dampingEngageComp: 0.05,
+  // A cylinder cast on a triangle seam can precede the centre ray by tiny
+  // floating-point noise even on flat ground. Only prefer volume support when
+  // it finds meaningfully higher terrain under the tread.
+  volumeSupportMinAdvance: 0.005,
+  // Heightfields are continuous ground even when an authored cell is very
+  // steep. Reject only effectively vertical faces; those remain ledge contacts.
+  terrainSupportMinNormalY: 0.05,
+  // Support is solved before Rapier integrates the chassis but rendered from
+  // the post-integration pose. Sample one horizontal tick ahead so a moving
+  // tyre cannot tunnel into the next heightfield triangle in that interval.
+  supportLookaheadTicks: 1,
 } as const;
 
 // Sharp-edge tyre contacts. Suspension rays remain the source of vertical
@@ -369,17 +413,18 @@ export const LEDGE_CONTACT = {
   depthCatchupRate: 0.8,
 } as const;
 
-// Anti-roll bar: chassis-frame torque proportional to world-roll about
-// the chassis-forward axis. The per-wheel-end ride forces already give
-// static roll stability, but hard cornering unloads (or lifts) the
-// inside wheels exactly when the restoring torque is needed most; the
-// sway bar fills that gap. Tuned soft enough that cornering produces
-// visible body lean while still preventing unbounded roll. Damping at
-// ~critical for this stiffness so roll oscillation settles in one cycle:
-//   c_crit = 2*sqrt(k*I) ~ 2*sqrt(70000*900) ~ 15900 N*m*s/rad.
+// Anti-roll bar. This is suspension-relative load transfer, never a
+// chassis-to-world upright spring. torqueStiffness / torqueDamping retain
+// the useful flat-corner magnitudes of the previous controller; each axle
+// converts its share to paired wheel-end forces through its track width.
+// Transfer is capped by that axle's static weight so a drooped wheel can
+// tension the bar without turning it into an unlimited self-righting motor.
 export const ANTI_ROLL = {
-  stiffness: 70_000,
-  damping: 16_000,
+  torqueStiffness: 70_000,
+  torqueDamping: 16_000,
+  frontShare: 0.55,
+  rearShare: 0.45,
+  maxStaticLoadTransfer: 0.45,
 } as const;
 
 // Hill-climb traction assist. Real 4x4s lose grip on slopes because

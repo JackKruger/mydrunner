@@ -26,6 +26,14 @@ function reparse(doc: MapDoc): MapDoc {
   return decodeMapDoc(JSON.parse(encodeMapDoc(doc)));
 }
 
+function docWithRaisedGround(rise: number): MapDoc {
+  const doc = proceduralDoc();
+  doc.heightDelta = encodeInt16Grid(
+    new Int16Array(RES * RES).fill(rise * HEIGHT_DELTA_SCALE), RES,
+  );
+  return doc;
+}
+
 describe('the procedural document reproduces the shipped world', () => {
   const world = applyMapDoc(proceduralDoc());
   const direct = generateTerrain();
@@ -143,6 +151,19 @@ describe('authored objects', () => {
     expect(yb - ya).toBeCloseTo(3, 6);
   });
 
+  it('keeps an absolute object at the same world Y over different terrain', () => {
+    const flat = proceduralDoc();
+    const hill = docWithRaisedGround(8);
+    const placed = {
+      id: 'fixed', kind: 'plankBridge' as const,
+      x: 0, y: 12.375, z: 0, size: 2, height: 3, yaw: 0,
+    };
+    flat.objects.added = [placed];
+    hill.objects.added = [placed];
+    expect(applyMapDoc(flat).obstacles.find((o) => o.id === 'fixed')!.y).toBe(12.375);
+    expect(applyMapDoc(hill).obstacles.find((o) => o.id === 'fixed')!.y).toBe(12.375);
+  });
+
   it('removes a procedural obstacle by id', () => {
     const doc = proceduralDoc();
     const victim = applyMapDoc(doc).obstacles[5]!.id;
@@ -253,6 +274,11 @@ describe('decodeMapDoc rejects malformed documents', () => {
   it('rejects a future format version', () => {
     bad((d) => { d.formatVersion = MAP_FORMAT_VERSION + 1; }, /formatVersion/);
   });
+  it('opens v2 maps and upgrades them in memory', () => {
+    const raw = JSON.parse(encodeMapDoc(proceduralDoc()));
+    raw.formatVersion = 2;
+    expect(decodeMapDoc(raw).formatVersion).toBe(MAP_FORMAT_VERSION);
+  });
   it('rejects a non-object', () => {
     expect(() => decodeMapDoc('nope')).toThrow(/must be an object/);
   });
@@ -268,6 +294,20 @@ describe('decodeMapDoc rejects malformed documents', () => {
         { id: 'x', kind: 'spaceship', x: 0, z: 0, size: 1, height: 1, yaw: 0 },
       ];
     }, /not a known obstacle kind/);
+  });
+  it('rejects conflicting absolute and relative object heights', () => {
+    bad((d) => {
+      (d.objects as Record<string, unknown>).added = [
+        { id: 'x', kind: 'rock', x: 0, y: 3, yOffset: 2, z: 0, size: 1, height: 1, yaw: 0 },
+      ];
+    }, /both y and yOffset/);
+  });
+  it('rejects a non-finite absolute object height', () => {
+    bad((d) => {
+      (d.objects as Record<string, unknown>).added = [
+        { id: 'x', kind: 'rock', x: 0, y: null, z: 0, size: 1, height: 1, yaw: 0 },
+      ];
+    }, /finite number/);
   });
   it('rejects an unknown marker kind', () => {
     bad((d) => {

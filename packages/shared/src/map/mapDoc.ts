@@ -20,7 +20,8 @@ import type { TileGrid } from './tileGrid.js';
 
 /** Bumped when the document shape changes incompatibly. decodeMapDoc
  *  refuses anything it does not recognise rather than guessing. */
-export const MAP_FORMAT_VERSION = 2;
+export const MAP_FORMAT_VERSION = 3;
+const LEGACY_MAP_FORMAT_VERSION = 2;
 
 /** Height deltas are stored in centimetres so the grid can be int16.
  *  ±327 m of range against a 70 m peak, and 1 cm over a 2.5 m cell is a
@@ -71,12 +72,9 @@ export interface Marker {
   label: string;
 }
 
-/** An obstacle as authored.
- *
- *  Deliberately not an `Obstacle`: it stores no absolute `y`. Sculpting
- *  under a placed rock must re-seat it, not leave it floating, so height
- *  is resolved from the *composed* terrain at load time and `yOffset`
- *  carries the author's intent ("2 m up a cliff face") instead. */
+/** An obstacle as authored. Placement has three deliberately exclusive
+ *  forms: neither Y field seats on the terrain, `yOffset` follows the
+ *  terrain at a relative height, and `y` fixes the base at a world height. */
 export interface PlacedObject {
   id: string;
   kind: ObstacleKind;
@@ -92,6 +90,8 @@ export interface PlacedObject {
   length?: number;
   /** Metres above the composed ground. Default 0 = sits on terrain. */
   yOffset?: number;
+  /** Absolute world-space Y of the object's base/origin. */
+  y?: number;
 }
 
 export interface MapDoc {
@@ -204,8 +204,11 @@ export function decodeMapDoc(input: unknown): MapDoc {
   const o = obj(input, 'root');
 
   const formatVersion = num(o.formatVersion, 'formatVersion');
-  if (formatVersion !== MAP_FORMAT_VERSION) {
-    fail('formatVersion', `is ${formatVersion}, this build reads ${MAP_FORMAT_VERSION}`);
+  if (formatVersion !== LEGACY_MAP_FORMAT_VERSION && formatVersion !== MAP_FORMAT_VERSION) {
+    fail(
+      'formatVersion',
+      `is ${formatVersion}, this build reads ${LEGACY_MAP_FORMAT_VERSION} or ${MAP_FORMAT_VERSION}`,
+    );
   }
 
   const base = obj(o.base, 'base');
@@ -219,7 +222,9 @@ export function decodeMapDoc(input: unknown): MapDoc {
   const waterRaw = obj(o.water, 'water');
 
   return {
-    formatVersion,
+    // v2 has the same document shape except for absolute object Y. Upgrade
+    // it in memory so the next save clearly advertises v3 semantics.
+    formatVersion: MAP_FORMAT_VERSION,
     id: str(o.id, 'id'),
     name: str(o.name, 'name'),
     base: { seed: num(base.seed, 'base.seed'), size, resolution },
@@ -240,7 +245,8 @@ export function decodeMapDoc(input: unknown): MapDoc {
     },
     objects: {
       includeProcedural: bool(objects.includeProcedural, 'objects.includeProcedural'),
-      added: arr(objects.added, 'objects.added').map((p, i) => decodePlaced(p, `objects.added[${i}]`)),
+      added: arr(objects.added, 'objects.added').map((p, i) =>
+        decodePlaced(p, `objects.added[${i}]`, formatVersion)),
       removed: arr(objects.removed, 'objects.removed').map((s, i) => str(s, `objects.removed[${i}]`)),
     },
     spawns: arr(o.spawns, 'spawns').map((s, i) => {
@@ -296,7 +302,7 @@ function decodePad(v: unknown, path: string): PetrolStationPad {
   };
 }
 
-function decodePlaced(v: unknown, path: string): PlacedObject {
+function decodePlaced(v: unknown, path: string, formatVersion: number): PlacedObject {
   const o = obj(v, path);
   // Validated against the catalog, not a list kept here. The copy that
   // used to live at this line had no compile-time link to the kind union,
@@ -304,6 +310,12 @@ function decodePlaced(v: unknown, path: string): PlacedObject {
   // remembered this file existed.
   const kind = str(o.kind, `${path}.kind`);
   if (!isObstacleKind(kind)) fail(`${path}.kind`, `is not a known obstacle kind`);
+  if (formatVersion === LEGACY_MAP_FORMAT_VERSION && o.y !== undefined) {
+    fail(`${path}.y`, `requires formatVersion ${MAP_FORMAT_VERSION}`);
+  }
+  if (o.y !== undefined && o.yOffset !== undefined) {
+    fail(path, 'cannot contain both y and yOffset');
+  }
   return {
     id: str(o.id, `${path}.id`),
     kind,
@@ -314,6 +326,7 @@ function decodePlaced(v: unknown, path: string): PlacedObject {
     yaw: num(o.yaw, `${path}.yaw`),
     length: o.length === undefined ? undefined : num(o.length, `${path}.length`),
     yOffset: o.yOffset === undefined ? undefined : num(o.yOffset, `${path}.yOffset`),
+    y: o.y === undefined ? undefined : num(o.y, `${path}.y`),
   };
 }
 

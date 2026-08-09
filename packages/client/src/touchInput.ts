@@ -8,7 +8,7 @@
 //   - aux buttons: cam, reset, mute (edge-triggered events)
 //   - starter, held to crank a flooded engine back to life
 
-type Edge = 'cam' | 'reset' | 'mute' | 'chat';
+type Edge = 'cam' | 'reset' | 'mute' | 'chat' | 'winch';
 
 const state = {
   steer: 0,
@@ -20,6 +20,8 @@ const state = {
   range: 0,
   rearLocker: 0,
   frontLocker: 0,
+  winchIn: 0,
+  winchOut: 0,
 };
 
 const edgeListeners: Record<Edge, Array<() => void>> = {
@@ -27,6 +29,7 @@ const edgeListeners: Record<Edge, Array<() => void>> = {
   reset: [],
   mute: [],
   chat: [],
+  winch: [],
 };
 
 function fireEdge(name: Edge): void {
@@ -53,7 +56,7 @@ function isTouchDevice(): boolean {
 /** Bind a button so it sets `state[key]` to 1 while held, 0 on release. */
 function bindHoldButton(
   el: HTMLElement,
-  key: 'throttle' | 'brake' | 'handbrake' | 'reset' | 'starter' | 'range' | 'rearLocker' | 'frontLocker',
+  key: 'throttle' | 'brake' | 'handbrake' | 'reset' | 'starter' | 'range' | 'rearLocker' | 'frontLocker' | 'winchIn' | 'winchOut',
 ): void {
   const press = (e: Event): void => {
     e.preventDefault();
@@ -162,6 +165,9 @@ export function initTouchInput(): void {
   const cam = document.getElementById('cam-btn');
   const mute = document.getElementById('mute-btn');
   const chat = document.getElementById('chat-btn');
+  const winch = document.getElementById('winch-btn');
+  const winchIn = document.getElementById('winch-in-btn');
+  const winchOut = document.getElementById('winch-out-btn');
 
   if (pad && knob) bindSteerPad(pad, knob);
   if (throttle) bindHoldButton(throttle, 'throttle');
@@ -177,6 +183,9 @@ export function initTouchInput(): void {
   if (cam) bindEdgeButton(cam, 'cam');
   if (mute) bindEdgeButton(mute, 'mute');
   if (chat) bindEdgeButton(chat, 'chat');
+  if (winch) bindEdgeButton(winch, 'winch');
+  if (winchIn) bindHoldButton(winchIn, 'winchIn');
+  if (winchOut) bindHoldButton(winchOut, 'winchOut');
 
   // Stop the page from rubber-banding when the player drags on the controls.
   document.getElementById('touch-controls')?.addEventListener(

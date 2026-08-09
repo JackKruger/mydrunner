@@ -13,12 +13,12 @@ interface TestPlayer {
   messages: Net.ServerMessage[];
 }
 
-function addPlayer(room: Room, id: PlayerId): TestPlayer {
+function addPlayer(room: Room, id: PlayerId, build = createStockBuild('ridgeback')): TestPlayer {
   const messages: Net.ServerMessage[] = [];
   room.addPlayer({
     id,
     name: id,
-    build: createStockBuild('ridgeback'),
+    build,
     send: (bytes) => messages.push(Net.decodeServer(bytes)),
   });
   return { id, messages };
@@ -53,6 +53,20 @@ function parkInBay(room: Room, player: TestPlayer, bayId = 'service-bay-1', seq 
 }
 
 describe('workshop bay leases', () => {
+  it('initializes and validates Dustback owner state as fixed rear drive', () => {
+    const room = new Room();
+    const player = addPlayer(room, 'rally', createStockBuild('dustback-rs'));
+    room.broadcastSnapshot();
+    const initial = latestSnapshot(player).snap.players[0]!;
+    expect(initial.vehicle.drivetrain).toEqual({ transferCase: '2h', frontLocked: false, rearLocked: false });
+    room.applyVehicleState(player.id, {
+      seq: 1,
+      vehicle: { ...initial.vehicle, drivetrain: { transferCase: '4h', frontLocked: false, rearLocked: false } },
+    });
+    room.broadcastSnapshot();
+    expect(latestSnapshot(player).snap.players[0]!.stateSeq).toBe(0);
+  });
+
   it('leases a bay, atomically applies a complete build, then exits', () => {
     const room = new Room();
     const player = addPlayer(room, 'owner');

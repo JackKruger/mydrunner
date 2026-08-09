@@ -197,6 +197,59 @@ function runCross(slopeDeg: number, surface: Physics.Surface, durationS = 6): Cr
   return result;
 }
 
+function yawOf(q: { x: number; y: number; z: number; w: number }): number {
+  return Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
+}
+
+function wrappedAngleDelta(a: number, b: number): number {
+  let delta = a - b;
+  while (delta > Math.PI) delta -= Math.PI * 2;
+  while (delta < -Math.PI) delta += Math.PI * 2;
+  return delta;
+}
+
+function runFlatCorner() {
+  const { world, vehicle } = makeWorld(crossSlopeTerrain(0, Physics.Surface.Road));
+  settle(world, 60);
+  const input: PlayerInput = { ...EMPTY_INPUT, throttle: 1, seq: 1 };
+  for (let i = 0; i < 120; i++) {
+    input.seq++;
+    vehicle.setInput(input);
+    world.step();
+  }
+  const entry = vehicle.getState();
+  const entrySpeed = Math.hypot(entry.linVel.x, entry.linVel.z);
+  const entryYaw = yawOf(entry.rotation);
+  input.throttle = 0.35;
+  input.steer = 0.25;
+  let maxRollDeg = 0;
+  let rolledOver = false;
+  for (let i = 0; i < 90; i++) {
+    input.seq++;
+    vehicle.setInput(input);
+    world.step();
+    const state = vehicle.getState();
+    const rightY = 2 * (state.rotation.x * state.rotation.y + state.rotation.w * state.rotation.z);
+    maxRollDeg = Math.max(maxRollDeg, Math.abs(Math.asin(clampUnit(rightY))) * 180 / Math.PI);
+    const upY = 1 - 2 * (state.rotation.x * state.rotation.x + state.rotation.z * state.rotation.z);
+    if (upY < 0.5) rolledOver = true;
+  }
+  const end = vehicle.getState();
+  const result = {
+    entrySpeed,
+    endSpeed: Math.hypot(end.linVel.x, end.linVel.z),
+    yawDeltaDeg: Math.abs(wrappedAngleDelta(yawOf(end.rotation), entryYaw)) * 180 / Math.PI,
+    maxRollDeg,
+    rolledOver,
+  };
+  world.dispose();
+  return result;
+}
+
+function clampUnit(value: number): number {
+  return Math.max(-1, Math.min(1, value));
+}
+
 describe('arena: hill climb', () => {
   it('reports throttle-up climb on slopes x surfaces', () => {
     const surfaces = [Physics.Surface.Road, Physics.Surface.Dirt, Physics.Surface.Mud];
@@ -260,6 +313,25 @@ describe('arena: cross-slope body roll', () => {
     // world-up formulation).
     const r30 = rows.find((r) => r.surface === 'Road' && r.slopeDeg === 30)!;
     expect(r30.maxRollDeg).toBeGreaterThan(10);
+    expect(r30.maxRollDeg).toBeLessThan(55);
+    expect(r30.rolledOver).toBe(false);
+    const flatRoad = rows.find((r) => r.surface === 'Road' && r.slopeDeg === 0)!;
+    // Pre-mass-fix baseline travelled 88.5 m from x=-30 in this fixture.
+    expect(flatRoad.finalX + 30).toBeGreaterThan(79.5);
+    expect(flatRoad.finalX + 30).toBeLessThan(97.5);
+  });
+
+  it('preserves controlled flat-road cornering', () => {
+    const result = runFlatCorner();
+    console.log('\n[arena/corner]', result);
+    expect(result.entrySpeed).toBeGreaterThan(9);
+    expect(result.entrySpeed).toBeLessThan(13);
+    expect(result.yawDeltaDeg).toBeGreaterThan(40);
+    expect(result.yawDeltaDeg).toBeLessThan(80);
+    expect(result.maxRollDeg).toBeGreaterThan(8);
+    expect(result.maxRollDeg).toBeLessThan(18);
+    expect(result.endSpeed).toBeGreaterThan(5);
+    expect(result.rolledOver).toBe(false);
   });
 });
 

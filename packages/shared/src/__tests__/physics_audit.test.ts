@@ -112,14 +112,18 @@ describe('physics audit: suspension droop', () => {
     const pos = vehicle.body.translation();
     vehicle.body.setTranslation({ x: pos.x, y: pos.y + 2.0, z: pos.z }, true);
 
-    // Step once to update raycasts and axle state
+    // The first step starts the unsprung axle moving toward droop without
+    // teleporting the wheel assembly there in one rendered frame.
     world.step();
 
     const state1 = vehicle.getState();
-    const airRideY = state1.axles![0].rideY;
-    // rideY should be negative (droop) in the air
+    const firstAirRideY = state1.axles![0].rideY;
+    expect(firstAirRideY).toBeLessThan(restRideY);
+
+    for (let i = 0; i < 30; i++) world.step();
+    const airRideY = vehicle.getState().axles![0].rideY;
     expect(airRideY).toBeLessThan(0);
-    expect(airRideY).toBeLessThan(restRideY);
+    expect(airRideY).toBeLessThan(firstAirRideY);
 
     world.dispose();
   });

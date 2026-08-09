@@ -41,6 +41,11 @@ export interface VehicleGeom {
   massMult: number;
   powerMult: number;
   airIntakeY: number;
+  recoveryPoints: {
+    fairlead: { x: number; y: number; z: number };
+    front: { x: number; y: number; z: number };
+    rear: { x: number; y: number; z: number };
+  };
   spec: ResolvedVehicleSpec;
 }
 
@@ -68,7 +73,6 @@ function buildGeom(value: CarKind | VehicleBuild): VehicleGeom {
     droopMax: spec.droop,
     bumpMax: 0.21,
     maxArticulation: spec.articulation,
-    hasDrive: true,
     diffLocked: false,
   };
   return {
@@ -84,6 +88,7 @@ function buildGeom(value: CarKind | VehicleBuild): VehicleGeom {
       rollDamping: 1_900,
       axleMass: 120,
       axleRollInertia: 26,
+      hasDrive: spec.drivetrain !== 'fixed-rwd',
       hasSteering: true,
     },
     rear: {
@@ -95,11 +100,17 @@ function buildGeom(value: CarKind | VehicleBuild): VehicleGeom {
       rollDamping: 1_650,
       axleMass: 135,
       axleRollInertia: 29,
+      hasDrive: true,
       hasSteering: false,
     },
     massMult: spec.massKg / VEHICLE.mass,
     powerMult: spec.powerMult,
     airIntakeY: spec.intakeHeight,
+    recoveryPoints: {
+      fairlead: { x: 0, y: -half.y * 0.02, z: half.z + 0.45 },
+      front: { x: 0, y: -half.y * 0.12, z: half.z + 0.18 },
+      rear: { x: 0, y: -half.y * 0.12, z: -half.z - 0.12 },
+    },
     spec,
   };
 }
@@ -110,6 +121,8 @@ const STOCK_GEOM = {
   'stockman-single': buildGeom('stockman-single'),
   'stockman-dual': buildGeom('stockman-dual'),
   longreach: buildGeom('longreach'),
+  outclaw: buildGeom('outclaw'),
+  'dustback-rs': buildGeom('dustback-rs'),
 } as const;
 
 /** Stock base geometry table retained for diagnostics and tuning tools. */

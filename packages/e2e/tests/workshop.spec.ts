@@ -70,8 +70,10 @@ test('repairs, switches and fits a vehicle while another client observes the ato
     click('[data-id="overlander"]');
     category('Suspension');
     click('[data-id="overlander.suspension.flex-100"]');
+    category('Axles');
+    click('[data-id="overlander.axle.portal-240"]');
     category('Tyres');
-    click('[data-id="overlander.tire.mt-35"]');
+    click('[data-id="overlander.tire.xt-40-wide"]');
     category('Front bar');
     click('[data-id="overlander.frontBar.steel-winch"]');
     category('Winch');
@@ -97,7 +99,7 @@ test('repairs, switches and fits a vehicle while another client observes the ato
 
   // The fitted drivetrain controls become functional again after exit.
   await owner.keyboard.down('KeyV');
-  await expect(owner.locator('#hud-drivetrain')).toContainText('LOW RANGE', { timeout: 10_000 });
+  await expect(owner.locator('#hud-drivetrain')).toContainText('4L', { timeout: 10_000 });
   await owner.keyboard.up('KeyV');
   await owner.keyboard.down('KeyZ');
   await expect(owner.locator('#hud-drivetrain')).toContainText('R LOCK', { timeout: 10_000 });
@@ -108,4 +110,39 @@ test('repairs, switches and fits a vehicle while another client observes the ato
 
   await ownerContext.close();
   await observerContext.close();
+});
+
+test('Dustback workshop choices fit an LSD and leave its driving controls fixed-RWD', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/?auto=1&name=dustback-workshop');
+  await waitForVehicle(page);
+  await parkInWorkshop(page);
+  await page.keyboard.press('KeyF');
+  await expect(page.locator('#workshop-overlay')).toBeVisible({ timeout: 10_000 });
+  await page.locator('[data-id="dustback-rs"]').evaluate((button: HTMLButtonElement) => button.click());
+
+  await expect(page.locator('[data-category="Winch"]')).toBeHidden();
+  await expect(page.locator('[data-category="Snorkel"]')).toBeHidden();
+  await expect(page.locator('[data-category="Front bar"]')).toHaveText('Front equipment');
+  await expect(page.locator('[data-category="Lockers"]')).toHaveText('Drivetrain');
+  await page.locator('[data-category="Lockers"]').evaluate((button: HTMLButtonElement) => button.click());
+  await expect(page.locator('.workshop-toggle')).toHaveCount(1);
+  await expect(page.locator('.workshop-toggle')).toContainText('Rear limited-slip differential');
+  await page.locator('.workshop-toggle input').check();
+
+  await page.locator('[data-action="apply"]').evaluate((button: HTMLButtonElement) => button.click());
+  await expect(page.locator('#workshop-overlay')).toBeHidden({ timeout: 15_000 });
+  await expect(page.locator('#hud-drivetrain')).toHaveText('RWD · FIXED HIGH');
+  await expect(page.locator('#transfer-mode-hint')).toHaveText('RWD · FIXED HIGH');
+  await expect(page.locator('#transfer-gate')).toHaveAttribute('aria-disabled', 'true');
+  for (const id of ['#range-btn', '#rear-locker-btn', '#front-locker-btn']) await expect(page.locator(id)).toBeHidden();
+
+  await page.keyboard.press('KeyV');
+  await page.keyboard.press('KeyZ');
+  await page.keyboard.press('KeyX');
+  await expect(page.locator('#hud-drivetrain')).toHaveText('RWD · FIXED HIGH');
+  expect(await page.evaluate(() => {
+    const sim = (window as unknown as { __localSimulation: any }).__localSimulation;
+    return sim.vehicle.drivetrainStatus();
+  })).toEqual({ transferCase: '2h', frontLocked: false, rearLocked: false });
 });

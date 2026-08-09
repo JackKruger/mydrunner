@@ -14,7 +14,7 @@ import {
   encode,
 } from '../net/messages.js';
 import { PROTOCOL_VERSION } from '../constants.js';
-import { createStockBuild } from '../vehicleBuild.js';
+import { createStockBuild, VEHICLE_PART_CATALOGS } from '../vehicleBuild.js';
 import type { VehicleState } from '../types.js';
 
 const raw = (obj: unknown): Uint8Array => msgpackEncode(obj);
@@ -27,7 +27,7 @@ const vehicle: VehicleState = {
   rpm: 900,
   gear: 2,
   throttle: 0.5,
-  drivetrain: { range: 'low', frontLocked: true, rearLocked: true },
+  drivetrain: { transferCase: '4l', frontLocked: true, rearLocked: true },
   damage: { body: 0.75, engine: 0.5, steering: 0.9, stoppedCause: 'collision' },
   wheels: Array.from({ length: 4 }, () => ({
     steer: 0,
@@ -48,6 +48,17 @@ describe('decodeClient validation', () => {
       encode({ t: 'hello', name: 'jack', build: createStockBuild('stockman-dual'), v: PROTOCOL_VERSION }),
     );
     expect(msg).toEqual({ t: 'hello', name: 'jack', build: createStockBuild('stockman-dual'), v: PROTOCOL_VERSION });
+  });
+
+  it('round-trips a Dustback hello build', () => {
+    const build = {
+      ...createStockBuild('dustback-rs'),
+      tireId: 'dustback-rs.tire.gravel-rally',
+      roofId: 'dustback-rs.roof.rally-vent',
+      rearLocker: true,
+    };
+    const msg = decodeClient(encode({ t: 'hello', name: 'Ari', build, v: PROTOCOL_VERSION }));
+    expect(msg).toEqual({ t: 'hello', name: 'Ari', build, v: PROTOCOL_VERSION });
   });
 
   it('reports a missing or malformed hello version as 0 rather than throwing', () => {
@@ -71,6 +82,40 @@ describe('decodeClient validation', () => {
     if (msg.t !== 'state') throw new Error('expected state');
     expect(msg.update.seq).toBe(42);
     expect(msg.update.vehicle.position.x).toBeCloseTo(1.23, 2);
+  });
+
+  it('round-trips winch runtime and snapshot links', () => {
+    const update = {
+      seq: 43,
+      vehicle,
+      winch: { linkId: 'owner:1', cableLength: 8.125, motor: 1 as const, tension: 42_340 },
+    };
+    const decodedUpdate = decodeClient(encode({ t: 'state', update }));
+    if (decodedUpdate.t !== 'state') throw new Error('expected state');
+    expect(decodedUpdate.update.winch).toEqual(update.winch);
+
+    const decodedSnapshot = decodeServer(encode({
+      t: 'snapshot',
+      snap: {
+        tick: 1, serverTimeMs: 2, players: [],
+        winches: [{
+          id: 'owner:1', ownerId: 'owner', cableLength: 8.125, motor: 1,
+          tension: 42_340, status: 'attached',
+          target: { kind: 'obstacle', obstacleId: 'tree-1', anchor: { x: 1.25, y: 2.5, z: -3.75 } },
+        }],
+      },
+    }));
+    if (decodedSnapshot.t !== 'snapshot') throw new Error('expected snapshot');
+    expect(decodedSnapshot.snap.winches![0]).toMatchObject({ id: 'owner:1', cableLength: 8.125, tension: 42_340 });
+  });
+
+  it('round-trips every transfer-case position', () => {
+    for (const transferCase of ['2h', '4h', '4l'] as const) {
+      const update = { seq: 42, vehicle: { ...vehicle, drivetrain: { ...vehicle.drivetrain, transferCase } } };
+      const msg = decodeClient(encode({ t: 'state', update }));
+      if (msg.t !== 'state') throw new Error('expected state');
+      expect(msg.update.vehicle.drivetrain.transferCase).toBe(transferCase);
+    }
   });
 
   it('rejects hello with a non-string name', () => {
@@ -137,6 +182,42 @@ describe('decodeServer schema guard', () => {
     expect(player.workshopMode).toBe(false);
     expect(player.vehicle.drivetrain).toEqual(vehicle.drivetrain);
     expect(player.vehicle.damage).toEqual(vehicle.damage);
+  });
+
+  it('round-trips the wider axle and 40-inch tyre selections', () => {
+    const catalog = VEHICLE_PART_CATALOGS.ridgeback;
+    const build = {
+      ...createStockBuild('ridgeback'),
+      suspensionId: catalog.suspension.find((part) => part.id.endsWith('.flex-100'))!.id,
+      axleId: catalog.axles.find((part) => part.id.endsWith('.portal-240'))!.id,
+      tireId: catalog.tires.find((part) => part.id.endsWith('.xt-40-wide'))!.id,
+    };
+    const out = decodeServer(encode({
+      t: 'snapshot',
+      snap: { ...snap, players: [{ ...snap.players[0]!, build }] },
+    }));
+    if (out.t !== 'snapshot') throw new Error('expected snapshot');
+    expect(out.snap.players[0]!.build).toEqual(build);
+  });
+
+  it('round-trips Dustback rally parts and its rear-LSD bit in the existing build tuple', () => {
+    const build = {
+      ...createStockBuild('dustback-rs'),
+      suspensionId: 'dustback-rs.suspension.gravel-rally',
+      axleId: 'dustback-rs.axle.widened-rally',
+      tireId: 'dustback-rs.tire.gravel-rally',
+      wheelId: 'dustback-rs.wheel.period-alloy',
+      frontBarId: 'dustback-rs.frontBar.lamp-pod',
+      roofId: 'dustback-rs.roof.rally-antenna',
+      rearBodyId: 'dustback-rs.rearBody.option-b',
+      rearLocker: true,
+    };
+    const out = decodeServer(encode({
+      t: 'snapshot',
+      snap: { ...snap, players: [{ ...snap.players[0]!, build }] },
+    }));
+    if (out.t !== 'snapshot') throw new Error('expected snapshot');
+    expect(out.snap.players[0]!.build).toEqual(build);
   });
 
   it('rejects a snapshot from an unknown schema version', () => {

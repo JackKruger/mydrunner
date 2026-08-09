@@ -8,10 +8,13 @@ export const VEHICLE_BASE_IDS: readonly VehicleBaseId[] = [
   'stockman-single',
   'stockman-dual',
   'longreach',
+  'outclaw',
+  'dustback-rs',
 ] as const;
 
 export type VehiclePartSlot =
   | 'suspensionId'
+  | 'axleId'
   | 'tireId'
   | 'wheelId'
   | 'frontBarId'
@@ -32,6 +35,7 @@ export interface VehiclePartOption {
 export interface VehiclePartCatalog {
   baseId: VehicleBaseId;
   suspension: readonly VehiclePartOption[];
+  axles: readonly VehiclePartOption[];
   tires: readonly VehiclePartOption[];
   wheels: readonly VehiclePartOption[];
   frontBars: readonly VehiclePartOption[];
@@ -56,6 +60,15 @@ interface BaseTune {
   damageResistance: number;
   stability: number;
   steeringResponse: number;
+  stockWheelRadius?: number;
+  stockWheelWidth?: number;
+  lowRangeRatio?: number;
+  lowRangeMaxSpeed?: number;
+  suspensionRestLength?: number;
+  groundClearance?: number;
+  drivetrain?: 'selectable-4wd' | 'fixed-rwd';
+  collisionRoofY?: number;
+  finalDriveMult?: number;
   rearNames: readonly [string, string];
   rearMasses: readonly [number, number];
 }
@@ -151,6 +164,53 @@ const BASE_TUNING: Record<VehicleBaseId, BaseTune> = {
     rearNames: ['Expedition carrier', 'Cargo box + ladder'],
     rearMasses: [74, 126],
   },
+  outclaw: {
+    name: 'Outclaw Tube Crawler',
+    character: 'Wide-axle, high-articulation rock crawler',
+    half: { x: 0.76, y: 0.34, z: 1.82 },
+    wheelbase: 2.68,
+    track: 2.14,
+    massKg: 1320,
+    powerMult: 1.48,
+    frontSpring: 72_000,
+    rearSpring: 68_000,
+    articulation: 0.68,
+    intakeHeight: 0.47,
+    damageResistance: 0.88,
+    stability: 0.86,
+    steeringResponse: 1.02,
+    stockWheelRadius: 0.43,
+    stockWheelWidth: 0.36,
+    lowRangeRatio: 3.35,
+    lowRangeMaxSpeed: 7.2,
+    rearNames: ['Rear recovery hoop', 'Crawler spare carrier'],
+    rearMasses: [24, 58],
+  },
+  'dustback-rs': {
+    name: 'Dustback RS',
+    character: 'Lightweight rear-drive gravel rally hatch',
+    half: { x: 0.78, y: 0.28, z: 1.75 },
+    wheelbase: 2.42,
+    track: 1.52,
+    massKg: 980,
+    powerMult: 2.05,
+    frontSpring: 62_000,
+    rearSpring: 56_000,
+    articulation: 0.24,
+    intakeHeight: 0.18,
+    damageResistance: 0.52,
+    stability: 0.84,
+    steeringResponse: 1.34,
+    stockWheelRadius: 0.295,
+    stockWheelWidth: 0.185,
+    suspensionRestLength: 0.31,
+    groundClearance: 0.12,
+    drivetrain: 'fixed-rwd',
+    collisionRoofY: 0.96,
+    finalDriveMult: 0.78,
+    rearNames: ['Ducktail spoiler', 'Spare wheel + tool pack'],
+    rearMasses: [8, 32],
+  },
 };
 
 function part(
@@ -173,6 +233,48 @@ function part(
 
 function makeCatalog(baseId: VehicleBaseId): VehiclePartCatalog {
   const tune = BASE_TUNING[baseId];
+  if (baseId === 'dustback-rs') {
+    return {
+      baseId,
+      suspension: [
+        part(baseId, 'suspensionId', 'factory', 'Factory road suspension', 'Compliant road setup with the standard low ride height.'),
+        part(baseId, 'suspensionId', 'gravel-rally', 'Gravel rally suspension', 'More travel and compliance for broken gravel stages.', 12),
+        part(baseId, 'suspensionId', 'tarmac-sprint', 'Tarmac sprint suspension', 'Lower, firmer springs for sharp sealed-road response.', 8),
+      ],
+      axles: [
+        part(baseId, 'axleId', 'factory', 'Factory track', 'Original narrow track and quick period steering.'),
+        part(baseId, 'axleId', 'widened-rally', 'Widened rally axle', 'A broader stance for high-speed gravel stability.', 22),
+        part(baseId, 'axleId', 'reinforced-wide', 'Reinforced wide axle', 'Maximum rally track with stronger housings.', 46),
+      ],
+      tires: [
+        part(baseId, 'tireId', 'factory', 'Period road tyres', 'Progressive road compound with modest loose-surface bite.'),
+        part(baseId, 'tireId', 'gravel-rally', 'Gravel rally tyres', 'Loose-surface tread with the strongest gravel grip.', 18),
+        part(baseId, 'tireId', 'tarmac-rally', 'Tarmac rally tyres', 'Firm sealed-stage compound with reduced mud and gravel grip.', 14),
+      ],
+      wheels: [
+        part(baseId, 'wheelId', 'factory', 'Factory steel wheels', 'Narrow original steel wheel package.'),
+        part(baseId, 'wheelId', 'reinforced-rally-steel', 'Reinforced rally steel', 'Strong period steel wheels for rough stages.', 16),
+        part(baseId, 'wheelId', 'period-alloy', 'Period alloy wheels', 'Lightweight eighties-style competition alloys.', -6),
+      ],
+      frontBars: [
+        part(baseId, 'frontBarId', 'factory', 'Factory bumper', 'Close-fitting black factory bumper.'),
+        part(baseId, 'frontBarId', 'sump-guard', 'Sump guard', 'Underbody protection without a heavy bullbar.', 14),
+        part(baseId, 'frontBarId', 'lamp-pod', 'Auxiliary lamp pod', 'Four forward rally lamps for night stages.', 9),
+      ],
+      winches: [part(baseId, 'winchId', 'none', 'No winch', 'Recovery winches are not supported by this car.')],
+      snorkels: [part(baseId, 'snorkelId', 'none', 'Factory intake', 'No raised intake is available for this car.')],
+      roofs: [
+        part(baseId, 'roofId', 'none', 'Bare roof', 'Clean factory roofline.'),
+        part(baseId, 'roofId', 'rally-vent', 'Roof vent', 'Period competition cabin vent.', 3),
+        part(baseId, 'roofId', 'rally-antenna', 'Rally antenna', 'Long flexible rally communications antenna.', 2),
+      ],
+      rearBodies: [
+        part(baseId, 'rearBodyId', 'factory', 'Factory hatch', 'Unmodified three-door rear hatch.'),
+        part(baseId, 'rearBodyId', 'option-a', tune.rearNames[0], 'Compact period ducktail spoiler.', tune.rearMasses[0]),
+        part(baseId, 'rearBodyId', 'option-b', tune.rearNames[1], 'Internal stage spare and compact tool pack.', tune.rearMasses[1]),
+      ],
+    };
+  }
   return {
     baseId,
     suspension: [
@@ -180,11 +282,20 @@ function makeCatalog(baseId: VehicleBaseId): VehiclePartCatalog {
       part(baseId, 'suspensionId', 'touring-50', '50 mm touring lift', 'More clearance with a modest stability trade-off.', 18),
       part(baseId, 'suspensionId', 'flex-100', '100 mm flex lift', 'Maximum droop and articulation; noticeably more body roll.', 32),
     ],
+    axles: [
+      part(baseId, 'axleId', 'factory', 'Factory-width axles', 'Original track width and road manners.'),
+      part(baseId, 'axleId', 'wide-160', '160 mm wider axles', '80 mm wider per side for a broader, more stable stance.', 48),
+      part(baseId, 'axleId', 'portal-240', '240 mm portal axles', 'Maximum track width plus 80 mm of portal ground clearance.', 92),
+    ],
     tires: [
       part(baseId, 'tireId', 'factory', 'Factory tyres', 'Quick steering and low rolling resistance.'),
       part(baseId, 'tireId', 'at-33', '33-inch all-terrain', 'Predictable mixed-surface touring tyre.', 28),
+      part(baseId, 'tireId', 'at-33-wide', '33-inch wide all-terrain', 'A wider footprint for extra flotation and mixed-surface grip.', 38),
       part(baseId, 'tireId', 'mt-33', '33-inch mud-terrain', 'More mud bite with extra road noise and drag.', 36),
-      part(baseId, 'tireId', 'mt-35', '35-inch mud-terrain', 'Maximum clearance and mud grip; slower steering.', 52),
+      part(baseId, 'tireId', 'mt-35', '35-inch mud-terrain', 'More clearance and mud grip; slower steering.', 52),
+      part(baseId, 'tireId', 'mt-35-wide', '35-inch wide mud-terrain', 'A broad 35-inch footprint for deep mud and soft terrain.', 64),
+      part(baseId, 'tireId', 'mt-37', '37-inch mud-terrain', 'Serious obstacle clearance and mud grip with heavier steering.', 78),
+      part(baseId, 'tireId', 'xt-40-wide', '40-inch wide extreme-terrain', 'The largest tyre package; built for portals and extreme trails.', 108),
     ],
     wheels: [
       part(baseId, 'wheelId', 'factory', 'Factory wheels', 'Original lightweight wheel package.'),
@@ -198,7 +309,7 @@ function makeCatalog(baseId: VehicleBaseId): VehiclePartCatalog {
     ],
     winches: [
       part(baseId, 'winchId', 'none', 'No winch', 'No winch fitted.'),
-      part(baseId, 'winchId', 'fitted', 'Fitted recovery winch', 'Visual winch installation; cable recovery is coming later.', 38),
+      part(baseId, 'winchId', 'fitted', 'Fitted recovery winch', 'Physics-driven recovery from strong scenery and other vehicles.', 38),
     ],
     snorkels: [
       part(baseId, 'snorkelId', 'none', 'Factory intake', 'Standard wading intake point.'),
@@ -223,6 +334,8 @@ export const VEHICLE_PART_CATALOGS: Record<VehicleBaseId, VehiclePartCatalog> = 
   'stockman-single': makeCatalog('stockman-single'),
   'stockman-dual': makeCatalog('stockman-dual'),
   longreach: makeCatalog('longreach'),
+  outclaw: makeCatalog('outclaw'),
+  'dustback-rs': makeCatalog('dustback-rs'),
 };
 
 function factoryId(baseId: VehicleBaseId, slot: VehiclePartSlot): string {
@@ -236,6 +349,7 @@ export function createStockBuild(base: VehicleBaseId = 'ridgeback'): VehicleBuil
     paintColor: '#c84c32',
     paintFinish: 'gloss',
     suspensionId: factoryId(base, 'suspensionId'),
+    axleId: factoryId(base, 'axleId'),
     tireId: factoryId(base, 'tireId'),
     wheelId: factoryId(base, 'wheelId'),
     frontBarId: factoryId(base, 'frontBarId'),
@@ -243,8 +357,8 @@ export function createStockBuild(base: VehicleBaseId = 'ridgeback'): VehicleBuil
     snorkelId: `${base}.snorkel.none`,
     roofId: `${base}.roof.none`,
     rearBodyId: factoryId(base, 'rearBodyId'),
-    frontLocker: false,
-    rearLocker: false,
+    frontLocker: base === 'outclaw',
+    rearLocker: base === 'outclaw',
   };
 }
 
@@ -252,6 +366,7 @@ export const DEFAULT_VEHICLE_BUILD: VehicleBuild = createStockBuild();
 
 const SLOT_OPTIONS: Record<VehiclePartSlot, keyof VehiclePartCatalog> = {
   suspensionId: 'suspension',
+  axleId: 'axles',
   tireId: 'tires',
   wheelId: 'wheels',
   frontBarId: 'frontBars',
@@ -308,13 +423,21 @@ export function normalizeVehicleBuildDetailed(value: unknown): BuildNormalizatio
     if (selected) build[slot] = selected.id;
     else if (raw[slot] !== undefined) issues.push(`Unknown ${slot}: ${String(raw[slot])}`);
   }
-  if (build.tireId.endsWith('.mt-35') && !build.suspensionId.endsWith('.flex-100')) {
-    issues.push('35-inch tyres require the 100 mm flex lift');
+  if (requiresFlexLift(build.tireId) && !build.suspensionId.endsWith('.flex-100')) {
+    issues.push(`${tireSizeLabel(build.tireId)} tyres require the 100 mm flex lift`);
+    build.tireId = stock.tireId;
+  }
+  if (build.tireId.endsWith('.xt-40-wide') && !build.axleId.endsWith('.portal-240')) {
+    issues.push('40-inch tyres require the 240 mm portal axles');
     build.tireId = stock.tireId;
   }
   if (build.winchId.endsWith('.fitted') && !build.frontBarId.endsWith('.steel-winch')) {
     issues.push('A winch requires the steel winch bullbar');
     build.winchId = `${baseId}.winch.none`;
+  }
+  if (baseId === 'dustback-rs' && build.frontLocker) {
+    issues.push('The Dustback RS has no front differential locker');
+    build.frontLocker = false;
   }
   return { build, issues };
 }
@@ -338,8 +461,11 @@ export function partCompatibility(
 ): { enabled: boolean; reason?: string } {
   const baseId = current.baseId;
   if (!optionFor(baseId, slot, optionId)) return { enabled: false, reason: 'Not available for this vehicle.' };
-  if (slot === 'tireId' && optionId.endsWith('.mt-35') && !current.suspensionId.endsWith('.flex-100')) {
+  if (slot === 'tireId' && requiresFlexLift(optionId) && !current.suspensionId.endsWith('.flex-100')) {
     return { enabled: false, reason: 'Requires the 100 mm flex lift.' };
+  }
+  if (slot === 'tireId' && optionId.endsWith('.xt-40-wide') && !current.axleId.endsWith('.portal-240')) {
+    return { enabled: false, reason: 'Requires the 240 mm portal axles.' };
   }
   if (slot === 'winchId' && optionId.endsWith('.fitted') && !current.frontBarId.endsWith('.steel-winch')) {
     return { enabled: false, reason: 'Requires the steel winch bullbar.' };
@@ -386,6 +512,11 @@ export interface ResolvedVehicleSpec {
   grip: GripMultipliers;
   lowRangeRatio: number;
   lowRangeMaxSpeed: number;
+  drivetrain: 'selectable-4wd' | 'fixed-rwd';
+  /** Continuous wheel-speed coupling for a fitted rear limited-slip diff. */
+  rearDiffCoupling: number;
+  collisionRoofY: number;
+  finalDriveMult: number;
 }
 
 function selectedMass(build: VehicleBuild): number {
@@ -398,30 +529,70 @@ function selectedMass(build: VehicleBuild): number {
   return total;
 }
 
+function requiresFlexLift(tireId: string): boolean {
+  return /\.(?:mt-35|mt-35-wide|mt-37|xt-40-wide)$/.test(tireId);
+}
+
+function tireSizeLabel(tireId: string): string {
+  if (tireId.endsWith('.xt-40-wide')) return '40-inch';
+  if (tireId.endsWith('.mt-37')) return '37-inch';
+  return '35-inch';
+}
+
 /** Pure build -> render/physics specification. Never reads mutable runtime tuning. */
 export function resolveVehicleSpec(value: VehicleBuild | unknown): ResolvedVehicleSpec {
   const build = normalizeVehicleBuild(value);
   const base = BASE_TUNING[build.baseId];
-  const lift = build.suspensionId.endsWith('.flex-100') ? 0.10
+  const rally = build.baseId === 'dustback-rs';
+  const rallyGravelSuspension = build.suspensionId.endsWith('.gravel-rally');
+  const rallyTarmacSuspension = build.suspensionId.endsWith('.tarmac-sprint');
+  const lift = rallyGravelSuspension ? 0.035 : rallyTarmacSuspension ? -0.018
+    : build.suspensionId.endsWith('.flex-100') ? 0.10
     : build.suspensionId.endsWith('.touring-50') ? 0.05 : 0;
   const flex = build.suspensionId.endsWith('.flex-100');
   const touring = build.suspensionId.endsWith('.touring-50');
-  const tire35 = build.tireId.endsWith('.mt-35');
-  const tire33 = build.tireId.endsWith('.at-33') || build.tireId.endsWith('.mt-33');
-  const mud = build.tireId.endsWith('.mt-33') || tire35;
-  const allTerrain = build.tireId.endsWith('.at-33');
-  const wheelRadius = tire35 ? 0.4445 : tire33 ? 0.4191 : 0.39;
-  const tireMassPenalty = tire35 ? 0.16 : tire33 ? 0.08 : 0;
-  const roofMass = build.roofId.endsWith('.platform-awning') ? 57 : build.roofId.endsWith('.basket') ? 34 : 0;
+  const tire40 = build.tireId.endsWith('.xt-40-wide');
+  const tire37 = build.tireId.endsWith('.mt-37');
+  const tire35Wide = build.tireId.endsWith('.mt-35-wide');
+  const tire35 = build.tireId.endsWith('.mt-35') || tire35Wide;
+  const tire33Wide = build.tireId.endsWith('.at-33-wide');
+  const tire33 = build.tireId.endsWith('.at-33') || tire33Wide || build.tireId.endsWith('.mt-33');
+  const mud = build.tireId.endsWith('.mt-33') || tire35 || tire37 || tire40;
+  const allTerrain = build.tireId.endsWith('.at-33') || tire33Wide;
+  const wideTire = tire33Wide || tire35Wide || tire40;
+  const rallyGravelTire = build.tireId.endsWith('.gravel-rally');
+  const rallyTarmacTire = build.tireId.endsWith('.tarmac-rally');
+  const wheelRadius = rallyGravelTire ? 0.305 : rallyTarmacTire ? 0.30
+    : tire40 ? 0.508 : tire37 ? 0.4699 : tire35 ? 0.4445 : tire33 ? 0.4191 : base.stockWheelRadius ?? 0.39;
+  const wheelWidth = rallyGravelTire ? 0.195 : rallyTarmacTire ? 0.205
+    : tire40 ? 0.42 : tire37 ? 0.39 : tire35Wide ? 0.38 : tire35 ? 0.34
+    : tire33Wide ? 0.35 : tire33 ? 0.31 : base.stockWheelWidth ?? 0.28;
+  const tireMassPenalty = tire40 ? 0.28 : tire37 ? 0.22 : tire35 ? (tire35Wide ? 0.19 : 0.16)
+    : tire33 ? (tire33Wide ? 0.11 : 0.08) : 0;
+  const portalAxles = build.axleId.endsWith('.portal-240');
+  const wideAxles = build.axleId.endsWith('.wide-160');
+  const axleTrackGain = build.axleId.endsWith('.reinforced-wide') ? 0.14
+    : build.axleId.endsWith('.widened-rally') ? 0.08
+    : portalAxles ? 0.24 : wideAxles ? 0.16 : 0;
+  const portalClearance = portalAxles ? 0.08 : 0;
+  const roofMass = build.roofId.endsWith('.platform-awning') ? 57 : build.roofId.endsWith('.basket') ? 34
+    : build.roofId.endsWith('.rally-vent') ? 3 : build.roofId.endsWith('.rally-antenna') ? 2 : 0;
   const frontMass = build.frontBarId.endsWith('.steel-winch') ? 82 : build.frontBarId.endsWith('.alloy-hoop') ? 34 : 0;
   const extraMass = selectedMass(build);
   const suspensionRollPenalty = flex ? 0.16 : touring ? 0.07 : 0;
-  const grip: GripMultipliers = {
-    road: mud ? (tire35 ? 0.86 : 0.89) : allTerrain ? 0.95 : 1,
+  const grip: GripMultipliers = rally ? {
+    road: rallyTarmacTire ? 1.28 : rallyGravelTire ? 0.98 : 1.14,
+    dirt: rallyGravelTire ? 1.25 : rallyTarmacTire ? 0.91 : 1.06,
+    gravel: rallyGravelTire ? 1.36 : rallyTarmacTire ? 0.88 : 1.08,
+    mud: rallyGravelTire ? 0.82 : rallyTarmacTire ? 0.58 : 0.70,
+    deepMud: rallyGravelTire ? 0.66 : rallyTarmacTire ? 0.44 : 0.54,
+    wet: rallyTarmacTire ? 1.04 : rallyGravelTire ? 0.92 : 0.98,
+  } : {
+    road: mud ? (tire40 ? 0.78 : tire37 ? 0.82 : tire35 ? 0.86 : 0.89) : allTerrain ? (wideTire ? 0.93 : 0.95) : 1,
     dirt: mud ? 1.08 : allTerrain ? 1.06 : 1,
     gravel: mud ? 1.04 : allTerrain ? 1.09 : 1,
-    mud: mud ? (tire35 ? 1.35 : 1.24) : allTerrain ? 1.12 : 1,
-    deepMud: mud ? (tire35 ? 1.46 : 1.30) : allTerrain ? 1.12 : 1,
+    mud: mud ? (tire40 ? 1.58 : tire37 ? 1.46 : tire35 ? (wideTire ? 1.43 : 1.35) : 1.24) : allTerrain ? (wideTire ? 1.18 : 1.12) : 1,
+    deepMud: mud ? (tire40 ? 1.74 : tire37 ? 1.59 : tire35 ? (wideTire ? 1.56 : 1.46) : 1.30) : allTerrain ? (wideTire ? 1.20 : 1.12) : 1,
     wet: mud ? 0.93 : allTerrain ? 1.06 : 1,
   };
   const snorkel = build.snorkelId.endsWith('.fitted');
@@ -431,16 +602,17 @@ export function resolveVehicleSpec(value: VehicleBuild | unknown): ResolvedVehic
     character: base.character,
     chassisHalfExtents: { ...base.half },
     wheelbase: base.wheelbase,
-    track: base.track + (build.wheelId.endsWith('.beadlock-alloy') ? 0.06 : 0),
+    track: base.track + axleTrackGain + (build.wheelId.endsWith('.beadlock-alloy') ? 0.06 : 0),
     wheelRadius,
-    wheelWidth: tire35 ? 0.34 : tire33 ? 0.31 : 0.28,
+    wheelWidth,
     massKg: base.massKg + extraMass,
     powerMult: base.powerMult,
-    frontSpring: base.frontSpring * (flex ? 0.9 : touring ? 0.96 : 1),
-    rearSpring: base.rearSpring * (flex ? 0.86 : touring ? 0.94 : 1),
-    suspensionRestLength: 0.50 + lift,
-    droop: 0.27 + (flex ? 0.15 : touring ? 0.06 : 0),
-    articulation: base.articulation * (flex ? 1.32 : touring ? 1.12 : 1),
+    frontSpring: base.frontSpring * (rallyGravelSuspension ? 0.88 : rallyTarmacSuspension ? 1.22 : flex ? 0.9 : touring ? 0.96 : 1),
+    rearSpring: base.rearSpring * (rallyGravelSuspension ? 0.84 : rallyTarmacSuspension ? 1.18 : flex ? 0.86 : touring ? 0.94 : 1),
+    suspensionRestLength: (base.suspensionRestLength ?? 0.50) + lift + portalClearance,
+    droop: rally ? 0.13 + (rallyGravelSuspension ? 0.06 : rallyTarmacSuspension ? -0.025 : 0)
+      : 0.27 + (flex ? 0.15 : touring ? 0.06 : 0),
+    articulation: base.articulation * (rallyGravelSuspension ? 1.18 : rallyTarmacSuspension ? 0.78 : flex ? 1.32 : touring ? 1.12 : 1),
     intakeHeight: base.intakeHeight + (snorkel ? 0.86 : 0),
     damageResistance: base.damageResistance,
     bullbarEngineProtection: build.frontBarId.endsWith('.steel-winch') ? 0.56
@@ -451,15 +623,21 @@ export function resolveVehicleSpec(value: VehicleBuild | unknown): ResolvedVehic
       z: (frontMass * 1.35 - Math.max(0, extraMass - frontMass - roofMass) * 0.75) / (base.massKg + extraMass),
     },
     inertiaMult: 1 + tireMassPenalty + extraMass / Math.max(1800, base.massKg) * 0.35,
-    rollingResistanceMult: 1 + (mud ? 0.13 : allTerrain ? 0.06 : 0) + tireMassPenalty,
-    steeringResponse: base.steeringResponse * (tire35 ? 0.78 : tire33 ? 0.9 : 1),
+    rollingResistanceMult: rally ? (rallyGravelTire ? 1.09 : rallyTarmacTire ? 0.96 : 1)
+      : 1 + (mud ? 0.13 : allTerrain ? 0.06 : 0) + tireMassPenalty,
+    steeringResponse: base.steeringResponse * (tire40 ? 0.62 : tire37 ? 0.70 : tire35 ? 0.78 : tire33 ? 0.9 : 1),
     maxSteerMult: build.frontLocker ? 0.9 : 1,
-    stability: Math.max(0.35, base.stability - suspensionRollPenalty - roofMass / 500),
-    groundClearance: 0.23 + lift + (wheelRadius - 0.39),
+    stability: Math.min(1, Math.max(0.35, base.stability - suspensionRollPenalty - roofMass / 500 + axleTrackGain * 0.45)),
+    groundClearance: (base.groundClearance ?? 0.23) + lift
+      + (wheelRadius - (base.stockWheelRadius ?? 0.39)) + portalClearance,
     wadingDepth: base.half.y + base.intakeHeight + (snorkel ? 0.86 : 0),
     grip,
-    lowRangeRatio: 2.65,
-    lowRangeMaxSpeed: 9.5,
+    lowRangeRatio: base.lowRangeRatio ?? 2.65,
+    lowRangeMaxSpeed: base.lowRangeMaxSpeed ?? 9.5,
+    drivetrain: base.drivetrain ?? 'selectable-4wd',
+    rearDiffCoupling: rally && build.rearLocker ? 0.36 : 0,
+    collisionRoofY: base.collisionRoofY ?? 1.2,
+    finalDriveMult: base.finalDriveMult ?? 1,
   };
 }
 

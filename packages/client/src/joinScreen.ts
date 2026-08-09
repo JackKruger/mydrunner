@@ -83,6 +83,20 @@ const CAR_OPTIONS: CarOption[] = [
     glyph: '[===]',
     swatchBg: '#b6a579',
   },
+  {
+    kind: 'outclaw',
+    name: 'Outclaw Tube Crawler',
+    desc: 'Wide live axles, huge articulation and a stripped-back tube chassis.',
+    glyph: 'o-#-o',
+    swatchBg: '#d64228',
+  },
+  {
+    kind: 'dustback-rs',
+    name: 'Dustback RS',
+    desc: 'Light rear-drive rally hatch: razor sharp on gravel, fragile in rocks and deep mud.',
+    glyph: 'o[==]o',
+    swatchBg: '#e6e1d4',
+  },
 ];
 
 export function showJoinScreen(initial: Partial<JoinChoice>): Promise<JoinChoice> {
@@ -106,7 +120,7 @@ export function showJoinScreen(initial: Partial<JoinChoice>): Promise<JoinChoice
           <label for="join-name">Driver call sign</label>
           <input id="join-name" type="text" maxlength="32" autocomplete="nickname" spellcheck="false" placeholder="Enter driver name" />
         </div>
-        <p class="join-driver-note">Online trail session<br />Five rigs available</p>
+        <p class="join-driver-note">Online trail session<br />Seven rigs available</p>
       </div>
       <fieldset id="join-rig-fieldset">
         <legend>Choose your rig</legend>

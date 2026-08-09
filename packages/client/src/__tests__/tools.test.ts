@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { Physics } from '@mydrunner/shared';
 import {
-  OBJECT_YAW_STEP, applyKindDefaults, defaultToolState, placeableKinds, stepYaw,
+  OBJECT_YAW_STEP, applyKindDefaults, defaultToolState, objectBaseY, placeableKinds, stepYaw,
 } from '../editor/tools.js';
 import { OBJECT_MESHES } from '../obstacles/registry.js';
 import { createMeshCtx } from '../obstacles/materials.js';
@@ -131,5 +131,19 @@ describe('defaultToolState', () => {
     // Placement used to write Math.random() at click time, so the ghost
     // could never have matched what landed.
     expect(defaultToolState().objectYaw).toBe(0);
+  });
+
+  it('starts ground-snapped and resolves every placement mode', () => {
+    const state = defaultToolState();
+    expect(state.objectPlacementMode).toBe('ground');
+    expect(objectBaseY(state, 12)).toBe(12);
+
+    state.objectPlacementMode = 'offset';
+    state.objectYOffset = 2.375;
+    expect(objectBaseY(state, 12)).toBeCloseTo(14.375, 9);
+
+    state.objectPlacementMode = 'absolute';
+    state.objectWorldY = -3.125;
+    expect(objectBaseY(state, 99)).toBeCloseTo(-3.125, 9);
   });
 });

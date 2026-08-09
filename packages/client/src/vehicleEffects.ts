@@ -1,5 +1,5 @@
-// Ground-response visuals for every vehicle on screen: mud thrown by a
-// spinning wheel, and the visual sink of an axle into soft ground.
+// Ground-response visuals for every vehicle on screen: surface-aware plumes
+// and tyre marks, plus the visual sink of an axle into soft ground.
 //
 // Extracted from Scene, which was 670 lines and owned the particle pool,
 // the emit heuristics and the sink lookup on top of interpolation, camera
@@ -19,6 +19,7 @@ import {
   type WorldSnapshot,
 } from '@mydrunner/shared';
 import { ParticleSystem } from './particles.js';
+import { TyreTrackSystem } from './tyreTracks.js';
 
 /** The drawn pose of one vehicle. THREE.Group satisfies this structurally,
  *  which is the point — this module never learns what a VehicleVisual is. */
@@ -35,9 +36,59 @@ const SPRAY_COLOR = 0xd8e8ee;
 const FOAM_COLOR = 0xf0f6f8;
 const SMOKE_COLOR = 0x55585b;
 
+interface GroundEffectStyle {
+  color: number;
+  maxCount: number;
+  spread: number;
+  rise: number;
+  riseVar: number;
+  lifeMs: number;
+  lifeVarMs: number;
+  scale: number;
+  gravity: number;
+  endScale: number;
+  opacity: number;
+}
+
+/** Visual response for every driveable surface. Keeping this exhaustive means
+ *  adding a surface cannot silently bring back invisible wheelspin. */
+const GROUND_EFFECTS: Record<Physics.Surface, GroundEffectStyle> = {
+  [Physics.Surface.Road]: {
+    color: 0xb5b6b3, maxCount: 3, spread: 0.7, rise: 0.15, riseVar: 0.45,
+    lifeMs: 520, lifeVarMs: 280, scale: 0.9, gravity: 0.35, endScale: 2.4, opacity: 0.48,
+  },
+  [Physics.Surface.Dirt]: {
+    color: 0x9b7045, maxCount: 4, spread: 1.5, rise: 0.35, riseVar: 0.8,
+    lifeMs: 600, lifeVarMs: 350, scale: 1.05, gravity: -0.8, endScale: 2.1, opacity: 0.68,
+  },
+  [Physics.Surface.Mud]: {
+    color: MUD_COLOR, maxCount: 3, spread: 3, rise: 2, riseVar: 3,
+    lifeMs: 600, lifeVarMs: 400, scale: 1, gravity: -9.81, endScale: 0.6, opacity: 1,
+  },
+  [Physics.Surface.DeepMud]: {
+    color: DEEP_MUD_COLOR, maxCount: 4, spread: 2.7, rise: 1.7, riseVar: 2.8,
+    lifeMs: 680, lifeVarMs: 420, scale: 1.15, gravity: -9.81, endScale: 0.6, opacity: 1,
+  },
+  [Physics.Surface.Grass]: {
+    color: 0x7a7047, maxCount: 3, spread: 1.3, rise: 0.3, riseVar: 0.7,
+    lifeMs: 540, lifeVarMs: 300, scale: 0.9, gravity: -1.3, endScale: 1.8, opacity: 0.62,
+  },
+  [Physics.Surface.Gravel]: {
+    color: 0x918779, maxCount: 4, spread: 1.8, rise: 0.45, riseVar: 1,
+    lifeMs: 560, lifeVarMs: 320, scale: 0.9, gravity: -1.8, endScale: 1.7, opacity: 0.7,
+  },
+  [Physics.Surface.Concrete]: {
+    color: 0xc1c2bf, maxCount: 3, spread: 0.65, rise: 0.15, riseVar: 0.4,
+    lifeMs: 500, lifeVarMs: 260, scale: 0.85, gravity: 0.4, endScale: 2.3, opacity: 0.44,
+  },
+};
+
 /** A wheel must out-run the chassis by this much (m/s) before it is
  *  considered to be spinning rather than rolling. */
 const SLIP_THRESHOLD = 1.5;
+
+/** At this much excess tread speed the plume has reached full density. */
+const FULL_PLUME_EXCESS = 13;
 
 /** Preview-mode emit cadence, matching the online snapshot rate so the
  *  two look the same. */
@@ -53,16 +104,20 @@ const SPRAY_MAX_DEPTH = 0.9;
 export class VehicleEffects {
   readonly group = new THREE.Group();
   private particles = new ParticleSystem();
+  private tracks = new TyreTrackSystem();
   private terrain: Physics.TerrainData | null = null;
   private lastSnapMs = -1;
   private lastLocalMs = -1;
+  private snapshotPlayers = new Set<PlayerId>();
 
   constructor() {
     this.group.add(this.particles.group);
+    this.group.add(this.tracks.group);
   }
 
   setTerrain(t: Physics.TerrainData | null): void {
     this.terrain = t;
+    this.tracks.setTerrain(t);
   }
 
   /** Emit for one snapshot's worth of players.
@@ -75,11 +130,14 @@ export class VehicleEffects {
   spawnFromSnapshot(snap: WorldSnapshot, recvAtMs: number, poseOf: PoseLookup): void {
     if (!this.terrain || recvAtMs === this.lastSnapMs) return;
     this.lastSnapMs = recvAtMs;
+    this.snapshotPlayers.clear();
     for (const p of snap.players) {
+      this.snapshotPlayers.add(p.id);
       const pose = poseOf(p.id);
       if (!pose) continue;
-      this.spawnFor(p.build, p.vehicle, pose);
+      this.spawnFor(p.id, p.build, p.vehicle, pose);
     }
+    this.tracks.retainPlayers(this.snapshotPlayers);
   }
 
   /** Emit for the locally owned truck when there is no snapshot stream at
@@ -96,11 +154,17 @@ export class VehicleEffects {
     if (!this.terrain) return;
     if (nowMs - this.lastLocalMs < LOCAL_EMIT_INTERVAL_MS) return;
     this.lastLocalMs = nowMs;
-    this.spawnFor(build, vehicle, pose);
+    this.spawnFor('offline-preview', build, vehicle, pose);
   }
 
-  private spawnFor(build: VehicleBuild, vehicle: VehicleState, pose: EffectPose): void {
-    this.spawnMud(build, vehicle, pose);
+  private spawnFor(
+    id: PlayerId,
+    build: VehicleBuild,
+    vehicle: VehicleState,
+    pose: EffectPose,
+  ): void {
+    this.tracks.sampleVehicle(id, build, vehicle, pose);
+    this.spawnWheelspin(build, vehicle, pose);
     this.spawnWater(build, vehicle, pose);
     this.spawnDamageSmoke(build, vehicle, pose);
   }
@@ -142,7 +206,14 @@ export class VehicleEffects {
 
     for (let i = 0; i < 4; i++) {
       const wp = wheelPositions[i]!;
-      const local = { x: wp.x, y: wp.y - geom.wheelRadius * 0.6, z: wp.z };
+      const axle = i < 2 ? geom.front : geom.rear;
+      const suspensionLength = vehicle.wheels[i]?.suspensionLength
+        ?? axle.suspensionRestLength;
+      const local = {
+        x: wp.x,
+        y: wp.y - suspensionLength - geom.wheelRadius,
+        z: wp.z,
+      };
       const v = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
       const wx = t.x + v.x;
       const wz = t.z + v.z;
@@ -203,13 +274,17 @@ export class VehicleEffects {
     }
   }
 
-  private spawnMud(build: VehicleBuild, vehicle: VehicleState, pose: EffectPose): void {
+  private spawnWheelspin(build: VehicleBuild, vehicle: VehicleState, pose: EffectPose): void {
     const terrain = this.terrain!;
     const geom = Physics.geomFor(build);
     const wheelPositions = Physics.restWheelPositions(build);
     const groundSpeed = Math.hypot(vehicle.linVel.x, vehicle.linVel.z);
     const t = pose.position;
     const q = pose.quaternion;
+    const forward = Physics.rotateVecByQuat(
+      { x: 0, y: 0, z: 1 },
+      { x: q.x, y: q.y, z: q.z, w: q.w },
+    );
     for (let i = 0; i < 4; i++) {
       const wheelSnap = vehicle.wheels[i];
       if (!wheelSnap || !wheelSnap.contact) continue;
@@ -218,23 +293,50 @@ export class VehicleEffects {
       // mod 2pi for transport and aliases at speed.
       const wheelLin = Math.abs(wheelSnap.angVel) * geom.wheelRadius;
       if (wheelLin <= groundSpeed + SLIP_THRESHOLD) continue;
-      // World-space wheel contact point: rotate the local wheel position
-      // (lowered slightly so particles emit near the ground) by the
-      // chassis quaternion, then add the chassis world position.
+      // restWheelPositions gives the suspension mount, not the hub. Move
+      // down by the transmitted spring length and a full tyre radius to
+      // reach the ground-facing edge; using only a fraction of the radius
+      // put the old plume visibly above the wheel centre.
       const wp = wheelPositions[i]!;
-      const local = { x: wp.x, y: wp.y - geom.wheelRadius * 0.6, z: wp.z };
+      const local = {
+        x: wp.x,
+        y: wp.y - wheelSnap.suspensionLength - geom.wheelRadius,
+        z: wp.z,
+      };
       const v = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
       const wx = t.x + v.x;
       const wy = t.y + v.y;
       const wz = t.z + v.z;
 
       const surf = Physics.sampleSurface(terrain, wx, wz);
-      if (surf !== Physics.Surface.Mud && surf !== Physics.Surface.DeepMud) continue;
-      const color = surf === Physics.Surface.DeepMud ? DEEP_MUD_COLOR : MUD_COLOR;
-      // Spawn intensity scales with how much faster the wheel is than the ground.
       const excess = wheelLin - groundSpeed;
-      const count = Math.min(3, Math.max(1, Math.floor(excess / 4)));
-      for (let n = 0; n < count; n++) this.particles.emit(wx, wy, wz, color);
+      const intensity = Math.min(1, (excess - SLIP_THRESHOLD) / (FULL_PLUME_EXCESS - SLIP_THRESHOLD));
+      const style = GROUND_EFFECTS[surf];
+      const count = Math.max(1, Math.ceil(intensity * style.maxCount));
+
+      // Dry dust and tyre smoke should not appear through a water surface.
+      // Mud remains visible because a spinning tyre throws the wet bed itself.
+      const depth = Physics.sampleWaterDepth(terrain, wx, wz);
+      if (depth > 0.03 && surf !== Physics.Surface.Mud && surf !== Physics.Surface.DeepMud) continue;
+
+      // Local +Z is the vehicle's forward direction. Wheelspin ejects material
+      // behind the driven tread; reverse wheelspin naturally flips the plume.
+      const throwSpeed = (0.55 + intensity * 1.7) * -Math.sign(wheelSnap.angVel);
+      for (let n = 0; n < count; n++) {
+        this.particles.emit(wx, wy, wz, style.color, {
+          spread: style.spread,
+          rise: style.rise + intensity * 0.5,
+          riseVar: style.riseVar,
+          biasX: forward.x * throwSpeed,
+          biasZ: forward.z * throwSpeed,
+          lifeMs: style.lifeMs,
+          lifeVarMs: style.lifeVarMs,
+          scale: style.scale * (0.75 + intensity * 0.5),
+          gravity: style.gravity,
+          endScale: style.endScale,
+          opacity: style.opacity,
+        });
+      }
     }
   }
 
@@ -262,10 +364,12 @@ export class VehicleEffects {
 
   update(frameDtMs: number): void {
     this.particles.update(frameDtMs);
+    this.tracks.update(frameDtMs);
   }
 
   dispose(): void {
     this.particles.dispose();
+    this.tracks.dispose();
     this.group.clear();
   }
 }

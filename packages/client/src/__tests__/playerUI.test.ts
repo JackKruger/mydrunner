@@ -89,6 +89,71 @@ describe('PlayerUI telemetry', () => {
   });
 });
 
+describe('H-pattern transmission selector', () => {
+  it('selects a manual gear and can return to automatic', () => {
+    const selections: Array<number | null> = [];
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const ui = new PlayerUI(root, {
+      development: false,
+      version: 'test',
+      onGearSelection: (gear) => selections.push(gear),
+    });
+    ui.updateTelemetry({ gear: 2 });
+
+    (root.querySelector('[data-gear="3"]') as HTMLButtonElement).click();
+    expect(selections).toEqual([3]);
+    expect((root.querySelector('#hud-shifter') as HTMLElement).dataset.mode).toBe('manual');
+    expect(root.querySelector('#gear-mode-hint')?.textContent).toBe('3 SELECTED');
+    expect(root.querySelector('#gear-knob')?.textContent).toBe('3');
+
+    (root.querySelector('#transmission-mode') as HTMLButtonElement).click();
+    expect(selections).toEqual([3, null]);
+    expect(root.querySelector('#transmission-mode')?.textContent).toBe('AUTO');
+    expect(root.querySelector('#gear-knob')?.textContent).toBe('2');
+  });
+
+  it('operates a separate 2H, 4H, and 4L transfer-case stick', () => {
+    const selections: string[] = [];
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const ui = new PlayerUI(root, {
+      development: false,
+      version: 'test',
+      onTransferCaseSelection: (mode) => selections.push(mode),
+    });
+
+    (root.querySelector('[data-transfer="2h"]') as HTMLButtonElement).click();
+    expect(selections).toEqual(['2h']);
+    expect(root.querySelector('#transfer-knob')?.textContent).toBe('2H');
+    expect(root.querySelector('#transfer-mode-hint')?.textContent).toBe('2WD HIGH');
+
+    ui.updateTelemetry({ transferCase: '4l' });
+    expect(root.querySelector('#transfer-knob')?.textContent).toBe('4L');
+    expect(root.querySelector('#hud-drivetrain')?.textContent).toContain('4L');
+  });
+
+  it('replaces transfer-case interaction with a fixed-RWD indicator', () => {
+    const selections: string[] = [];
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const ui = new PlayerUI(root, {
+      development: false,
+      version: 'test',
+      onTransferCaseSelection: (mode) => selections.push(mode),
+    });
+    ui.updateTelemetry({ fixedRwd: true, transferCase: '2h' });
+    const gate = root.querySelector('#transfer-gate') as HTMLElement;
+    expect(gate.dataset.fixed).toBe('true');
+    expect(gate.getAttribute('aria-disabled')).toBe('true');
+    expect(root.querySelector('#transfer-mode-hint')?.textContent).toBe('RWD · FIXED HIGH');
+    expect(root.querySelector('#hud-drivetrain')?.textContent).toBe('RWD · FIXED HIGH');
+    expect([...root.querySelectorAll<HTMLButtonElement>('[data-transfer]')].every((button) => button.disabled)).toBe(true);
+    (root.querySelector('[data-transfer="4l"]') as HTMLButtonElement).click();
+    expect(selections).toEqual([]);
+  });
+});
+
 describe('PlayerUI connection states', () => {
   it('keeps telemetry mounted through reconnect and fatal transitions', () => {
     const { root, ui } = makeUI();

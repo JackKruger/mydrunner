@@ -32,6 +32,7 @@ const CATEGORY_SLOTS: ReadonlyArray<{
   catalog: keyof typeof VEHICLE_PART_CATALOGS.ridgeback;
 }> = [
   { label: 'Suspension', slot: 'suspensionId', catalog: 'suspension' },
+  { label: 'Axles', slot: 'axleId', catalog: 'axles' },
   { label: 'Tyres', slot: 'tireId', catalog: 'tires' },
   { label: 'Wheels', slot: 'wheelId', catalog: 'wheels' },
   { label: 'Front bar', slot: 'frontBarId', catalog: 'frontBars' },
@@ -60,6 +61,23 @@ export class WorkshopUI {
   private animationToken = 0;
 
   get isOpen(): boolean { return this.root !== null; }
+
+  /** Deterministic dev/E2E review hook. The production UI still changes a
+   * build through its controls; this avoids dozens of synchronous WebGL
+   * rebuilds when generating the visual placement matrix. */
+  setReviewBuild(build: VehicleBuild): void {
+    if (!this.root) throw new Error('Workshop must be open before setting a review build.');
+    this.selected = normalizeVehicleBuild(build);
+    this.root.querySelector('.workshop-title')!.textContent = resolveVehicleSpec(this.selected).displayName;
+    this.rebuildPreview();
+  }
+
+  /** Exact orbit companion to setReviewBuild, used only by deterministic
+   * browser screenshots. */
+  setReviewOrbit(yaw: number, pitch: number): void {
+    this.orbitYaw = yaw;
+    this.orbitPitch = Math.max(-0.1, Math.min(0.65, pitch));
+  }
 
   open(build: VehicleBuild, callbacks: WorkshopCallbacks): void {
     this.close(false);
@@ -161,6 +179,20 @@ export class WorkshopUI {
 
   private renderControls(): void {
     if (!this.root || !this.content) return;
+    const catalog = VEHICLE_PART_CATALOGS[this.selected.baseId];
+    for (const item of CATEGORY_SLOTS) {
+      const button = this.root.querySelector<HTMLButtonElement>(`[data-category="${item.label}"]`);
+      if (!button) continue;
+      button.hidden = catalog[item.catalog].length <= 1;
+      button.textContent = this.selected.baseId === 'dustback-rs'
+        ? item.slot === 'frontBarId' ? 'Front equipment'
+          : item.slot === 'roofId' ? 'Roof equipment'
+          : item.slot === 'rearBodyId' ? 'Rear equipment'
+          : item.label
+        : item.label;
+    }
+    const drivetrainButton = this.root.querySelector<HTMLButtonElement>('[data-category="Lockers"]')!;
+    drivetrainButton.textContent = this.selected.baseId === 'dustback-rs' ? 'Drivetrain' : 'Lockers';
     this.root.querySelectorAll('[data-category]').forEach((el) => el.classList.toggle('active', (el as HTMLElement).dataset.category === this.activeCategory));
     this.root.querySelector('.workshop-title')!.textContent = resolveVehicleSpec(this.selected).displayName;
     this.content.replaceChildren();
@@ -200,6 +232,13 @@ export class WorkshopUI {
   }
 
   private renderLockers(): void {
+    if (this.selected.baseId === 'dustback-rs') {
+      this.addToggle('Rear limited-slip differential', 'Moderately couples rear wheel speeds continuously; no runtime locker switch.', this.selected.rearLocker, (checked) => {
+        this.selected = normalizeVehicleBuild({ ...this.selected, rearLocker: checked, frontLocker: false });
+        this.renderControls();
+      });
+      return;
+    }
     this.addToggle('Rear locker', 'Improves traction when one rear wheel lifts; increases firm-surface understeer.', this.selected.rearLocker, (checked) => {
       this.selected.rearLocker = checked; this.renderControls();
     });
@@ -273,9 +312,13 @@ export class WorkshopUI {
     const before = resolveVehicleSpec(this.applied); const after = resolveVehicleSpec(this.selected);
     const rows = [
       ['Clearance', `${before.groundClearance.toFixed(2)} m`, `${after.groundClearance.toFixed(2)} m`],
+      ['Track width', `${before.track.toFixed(2)} m`, `${after.track.toFixed(2)} m`],
+      ['Tyre size', `${Math.round(before.wheelRadius * 2 / 0.0254)} in`, `${Math.round(after.wheelRadius * 2 / 0.0254)} in`],
+      ['Tyre width', `${Math.round(before.wheelWidth * 1000)} mm`, `${Math.round(after.wheelWidth * 1000)} mm`],
       ['Mass', `${Math.round(before.massKg)} kg`, `${Math.round(after.massKg)} kg`],
       ['Wading', `${before.wadingDepth.toFixed(2)} m`, `${after.wadingDepth.toFixed(2)} m`],
       ['Mud grip', before.grip.mud.toFixed(2), after.grip.mud.toFixed(2)],
+      ['Gravel grip', before.grip.gravel.toFixed(2), after.grip.gravel.toFixed(2)],
       ['Road grip', before.grip.road.toFixed(2), after.grip.road.toFixed(2)],
       ['Stability', `${Math.round(before.stability * 100)}`, `${Math.round(after.stability * 100)}`],
     ];

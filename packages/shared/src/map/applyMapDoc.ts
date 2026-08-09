@@ -133,17 +133,15 @@ export function applyMapDoc(doc: MapDoc, opts: ApplyOptions = {}): MapWorld {
   };
 }
 
-/** Seat an authored object on the composed ground.
- *
- *  Resolved here rather than stored, so sculpting under a rock lifts it
- *  instead of burying it. Uses the same bilinear sample generateObstacles
- *  uses, so authored and generated objects sit identically. */
+/** Resolve an authored object's base. Absolute placements keep their world
+ *  Y; ground and offset placements use the same bilinear sample as generated
+ *  obstacles so they sit identically. */
 function resolveObject(p: PlacedObject, terrain: TerrainData): Obstacle {
   return {
     id: p.id,
     kind: p.kind,
     x: p.x,
-    y: sampleHeightBilinear(terrain, p.x, p.z) + (p.yOffset ?? 0),
+    y: p.y ?? sampleHeightBilinear(terrain, p.x, p.z) + (p.yOffset ?? 0),
     z: p.z,
     size: p.size,
     height: p.height,

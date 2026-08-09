@@ -25,13 +25,13 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: true,
-    // Two pages: the game and the level editor. Listed explicitly because
-    // Vite's default single-entry build would drop editor.html from the
-    // deploy, and the editor is only reachable at /editor.html.
+    // Explicit multi-page build: Vite otherwise keeps only index.html and
+    // drops the two authoring tools from production deploys.
     rollupOptions: {
       input: {
         index: resolve(__dirname, 'index.html'),
         editor: resolve(__dirname, 'editor.html'),
+        assetEditor: resolve(__dirname, 'asset-editor.html'),
       },
     },
   },

@@ -102,6 +102,22 @@ describe('gearbox', () => {
     const out = stepEngine(s, 30, 30, 0, dt);
     expect(out.wheelForce).toBeCloseTo(0, 1);
   });
+
+  it('holds a manually selected gear instead of automatic shifting', () => {
+    const s = createEngineState();
+    for (let i = 0; i < 10; i++) stepEngine(s, 50, 50, 1, dt, 2);
+    expect(stepEngine(s, 2, 2, 1, dt, 2).gear).toBe(2);
+  });
+
+  it('supports manual neutral and reverse with the gas pedal', () => {
+    const neutral = createEngineState();
+    expect(stepEngine(neutral, 0, 0, 1, dt, 0)).toMatchObject({ gear: 0, wheelForce: 0 });
+
+    const reverse = createEngineState();
+    const out = stepEngine(reverse, 0, 0, 1, dt, -1);
+    expect(out.gear).toBe(-1);
+    expect(out.wheelForce).toBeLessThan(0);
+  });
 });
 
 // Engine braking used to take its sign from the gear ratio while both of

@@ -162,6 +162,70 @@ describe('objects', () => {
     s.rebuildObjects();
     expect(s.world.obstacles.find((o) => o.id === placed.id)!.y).toBeGreaterThan(before);
   });
+
+  it('keeps absolute objects fixed when terrain moves beneath them', () => {
+    const s = EditSession.open(doc());
+    const placed = s.addObject({
+      kind: 'plankBridge', x: 0, y: 12.375, z: 0,
+      size: 2, height: 3, length: 8, yaw: 0,
+    });
+    s.beginStroke();
+    s.sculpt(0, 0, SCULPT);
+    s.endStroke();
+    s.rebuildObjects();
+    expect(s.world.obstacles.find((o) => o.id === placed.id)!.y).toBe(12.375);
+
+    const saved = s.toDoc(doc());
+    expect(saved.objects.added[0]!.y).toBe(12.375);
+    expect(saved.objects.added[0]!.yOffset).toBeUndefined();
+    const reopened = EditSession.open(Maps.decodeMapDoc(JSON.parse(Maps.encodeMapDoc(saved))));
+    expect(reopened.world.obstacles.find((o) => o.id === placed.id)!.y).toBe(12.375);
+  });
+
+  it('keeps offset objects the same distance above moved terrain', () => {
+    const s = EditSession.open(doc());
+    const placed = s.addObject({
+      kind: 'rock', x: 0, yOffset: 2.25, z: 0, size: 1, height: 1, yaw: 0,
+    });
+    const before = s.world.obstacles.find((o) => o.id === placed.id)!.y;
+    s.beginStroke();
+    s.sculpt(0, 0, SCULPT);
+    s.endStroke();
+    s.rebuildObjects();
+    const after = s.world.obstacles.find((o) => o.id === placed.id)!.y;
+    expect(after).toBeGreaterThan(before);
+    expect(after).toBeCloseTo(
+      Physics.sampleHeightBilinear(s.world.terrain, 0, 0) + 2.25, 5,
+    );
+  });
+
+  it('deletes objects and spawns inside a radius as one undoable action', () => {
+    const clean = doc();
+    clean.objects.includeProcedural = false;
+    const s = EditSession.open(clean);
+    const nearA = s.addObject({ kind: 'rock', x: 0, z: 0, size: 1, height: 1, yaw: 0 });
+    const nearB = s.addObject({ kind: 'tree', x: 4, z: 3, size: 1, height: 4, yaw: 0 });
+    const far = s.addObject({ kind: 'rock', x: 20, z: 20, size: 1, height: 1, yaw: 0 });
+    s.addSpawn({ x: -2, z: 1, yaw: 0 });
+    s.addSpawn({ x: 3, z: -3, yaw: 1 });
+    s.addSpawn({ x: -20, z: -20, yaw: 2 });
+
+    expect(s.deleteInRadius(0, 0, 6)).toEqual({ objects: 2, spawns: 2 });
+    expect(s.world.obstacles.map((o) => o.id)).toEqual([far.id]);
+    expect(s.spawnPoints).toEqual([{ x: -20, z: -20, yaw: 2 }]);
+
+    expect(s.undo()).toBe(true);
+    expect(s.world.obstacles.map((o) => o.id)).toEqual([nearA.id, nearB.id, far.id]);
+    expect(s.spawnPoints).toHaveLength(3);
+  });
+
+  it('does not add an undo entry when a radius contains nothing', () => {
+    const clean = doc();
+    clean.objects.includeProcedural = false;
+    const s = EditSession.open(clean);
+    expect(s.deleteInRadius(0, 0, 5)).toEqual({ objects: 0, spawns: 0 });
+    expect(s.canUndo).toBe(false);
+  });
 });
 
 describe('spawns', () => {

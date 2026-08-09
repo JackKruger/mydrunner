@@ -11,9 +11,16 @@ import type {
   VehicleBuild,
   VehicleState,
   VehicleStateUpdate,
+  WinchLinkSnapshot,
+  WinchRuntimeUpdate,
+  WinchTarget,
   WheelState,
   WorldSnapshot,
 } from '../types.js';
+
+export type WinchAttachTarget =
+  | { kind: 'obstacle'; obstacleId: string }
+  | { kind: 'vehicle'; playerId: PlayerId; point: 'front' | 'rear' };
 
 // Client -> Server
 export type ClientMessage =
@@ -27,7 +34,9 @@ export type ClientMessage =
   | { t: 'chat'; text: string }
   | { t: 'workshop-enter'; bayId: string }
   | { t: 'workshop-exit'; leaseId: string }
-  | { t: 'build-update'; leaseId: string; build: VehicleBuild; normalizationIssues?: string[] };
+  | { t: 'build-update'; leaseId: string; build: VehicleBuild; normalizationIssues?: string[] }
+  | { t: 'winch-command'; seq: number; action: 'attach'; target: WinchAttachTarget }
+  | { t: 'winch-command'; seq: number; action: 'detach' | 'break' };
 
 /** Which world to build. Both sides compile the map registry in, so the
  *  wire carries an identity rather than the map: a baked document is
@@ -80,6 +89,8 @@ export type ServerMessage =
       build?: VehicleBuild;
       buildRevision?: number;
     }
+  | { t: 'winch-ack'; seq: number; ok: boolean; link?: WinchLinkSnapshot; reason?: string }
+  | { t: 'winch-event'; linkId: string; reason: 'broken' | 'target-lost' | 'invalid' }
   | { t: 'bye'; reason: string };
 
 // Wire format: MessagePack binary plus snapshot quantization. The naive
@@ -140,7 +151,7 @@ function packVehicle(v: VehicleState): number[] {
     Math.round(v.rpm) | 0,
     v.gear | 0,
     q(v.throttle, THROTTLE_SCALE),
-    v.drivetrain.range === 'low' ? 1 : 0,
+    v.drivetrain.transferCase === '4l' ? 1 : v.drivetrain.transferCase === '2h' ? 2 : 0,
     v.drivetrain.frontLocked ? 1 : 0,
     v.drivetrain.rearLocked ? 1 : 0,
     q(v.damage.body, DAMAGE_SCALE),
@@ -189,7 +200,7 @@ function unpackVehicle(arr: unknown[]): VehicleState {
   const rpm = arr[i++] as number;
   const gear = arr[i++] as number;
   const throttle = (arr[i++] as number) / THROTTLE_SCALE;
-  const rangeWire = arr[i++] as number;
+  const transferCaseWire = arr[i++] as number;
   const frontLockedWire = arr[i++] as number;
   const rearLockedWire = arr[i++] as number;
   const bodyWire = arr[i++] as number;
@@ -197,7 +208,7 @@ function unpackVehicle(arr: unknown[]): VehicleState {
   const steeringWire = arr[i++] as number;
   const causeWire = arr[i++] as number;
   if (
-    ![0, 1].includes(rangeWire) || ![0, 1].includes(frontLockedWire) || ![0, 1].includes(rearLockedWire)
+    ![0, 1, 2].includes(transferCaseWire) || ![0, 1].includes(frontLockedWire) || ![0, 1].includes(rearLockedWire)
     || bodyWire < 0 || bodyWire > DAMAGE_SCALE
     || engineWire < 0 || engineWire > DAMAGE_SCALE
     || steeringWire < 0 || steeringWire > DAMAGE_SCALE
@@ -228,7 +239,7 @@ function unpackVehicle(arr: unknown[]): VehicleState {
     gear,
     throttle,
     drivetrain: {
-      range: rangeWire === 1 ? 'low' : 'high',
+      transferCase: transferCaseWire === 1 ? '4l' : transferCaseWire === 2 ? '2h' : '4h',
       frontLocked: frontLockedWire === 1,
       rearLocked: rearLockedWire === 1,
     },
@@ -243,7 +254,7 @@ function unpackVehicle(arr: unknown[]): VehicleState {
   };
 }
 
-const BUILD_TUPLE_LENGTH = 12;
+const BUILD_TUPLE_LENGTH = 13;
 
 function selectedIndex(build: VehicleBuild, key: keyof VehicleBuild, list: readonly { id: string }[]): number {
   const value = build[key];
@@ -258,6 +269,7 @@ function packBuild(build: VehicleBuild): number[] {
     Number.parseInt(result.paintColor.slice(1), 16),
     result.paintFinish === 'satin' ? 1 : result.paintFinish === 'matte' ? 2 : 0,
     selectedIndex(result, 'suspensionId', catalog.suspension),
+    selectedIndex(result, 'axleId', catalog.axles),
     selectedIndex(result, 'tireId', catalog.tires),
     selectedIndex(result, 'wheelId', catalog.wheels),
     selectedIndex(result, 'frontBarId', catalog.frontBars),
@@ -276,13 +288,13 @@ function unpackBuild(value: unknown): VehicleBuild {
   const baseId = VEHICLE_BASE_IDS[value[0] as number];
   const paint = value[1] as number;
   const finish = value[2] as number;
-  const lockers = value[11] as number;
+  const lockers = value[12] as number;
   if (!baseId || paint < 0 || paint > 0xffffff || finish < 0 || finish > 2 || lockers < 0 || lockers > 3) {
     throw new Error('build: out of range');
   }
   const catalog = VEHICLE_PART_CATALOGS[baseId];
   const lists = [
-    catalog.suspension, catalog.tires, catalog.wheels, catalog.frontBars,
+    catalog.suspension, catalog.axles, catalog.tires, catalog.wheels, catalog.frontBars,
     catalog.winches, catalog.snorkels, catalog.roofs, catalog.rearBodies,
   ];
   const selected = lists.map((list, index) => list[value[index + 3] as number]?.id);
@@ -292,13 +304,14 @@ function unpackBuild(value: unknown): VehicleBuild {
     paintColor: `#${paint.toString(16).padStart(6, '0')}`,
     paintFinish: finish === 1 ? 'satin' : finish === 2 ? 'matte' : 'gloss',
     suspensionId: selected[0],
-    tireId: selected[1],
-    wheelId: selected[2],
-    frontBarId: selected[3],
-    winchId: selected[4],
-    snorkelId: selected[5],
-    roofId: selected[6],
-    rearBodyId: selected[7],
+    axleId: selected[1],
+    tireId: selected[2],
+    wheelId: selected[3],
+    frontBarId: selected[4],
+    winchId: selected[5],
+    snorkelId: selected[6],
+    roofId: selected[7],
+    rearBodyId: selected[8],
     frontLocker: (lockers & 1) !== 0,
     rearLocker: (lockers & 2) !== 0,
   };
@@ -340,10 +353,76 @@ function unpackPlayer(arr: unknown[]): PlayerSnapshot {
   return { id, name, build, buildRevision, workshopMode, vehicle: unpackVehicle(arr.slice(6)), stateSeq };
 }
 
-/** Per-player tuple layout version. Bump whenever packPlayer's field
- *  order or count changes; unpackPlayer reads by position, so a stale
- *  decoder would silently misread every field as its neighbour. */
-export const SNAPSHOT_SCHEMA = 3;
+/** Per-player tuple layout version. Bump whenever packPlayer's fields or
+ *  any nested positional tuple (including VehicleBuild) changes; a stale
+ *  decoder would otherwise silently misread values by position. */
+export const SNAPSHOT_SCHEMA = 5;
+
+const CABLE_SCALE = 1000;
+const TENSION_SCALE = 0.1;
+
+function packWinchTarget(target: WinchTarget): unknown[] {
+  return target.kind === 'vehicle'
+    ? [1, target.playerId, target.point === 'rear' ? 1 : 0]
+    : [0, target.obstacleId, q(target.anchor.x, POS_SCALE), q(target.anchor.y, POS_SCALE), q(target.anchor.z, POS_SCALE)];
+}
+
+function unpackWinchTarget(value: unknown): WinchTarget {
+  if (!Array.isArray(value)) throw new Error('winch target: malformed');
+  if (value[0] === 1 && value.length === 3 && typeof value[1] === 'string' && (value[2] === 0 || value[2] === 1)) {
+    return { kind: 'vehicle', playerId: value[1], point: value[2] === 1 ? 'rear' : 'front' };
+  }
+  if (value[0] === 0 && value.length === 5 && typeof value[1] === 'string'
+    && value.slice(2).every(isFiniteNum)) {
+    return {
+      kind: 'obstacle', obstacleId: value[1],
+      anchor: {
+        x: (value[2] as number) / POS_SCALE,
+        y: (value[3] as number) / POS_SCALE,
+        z: (value[4] as number) / POS_SCALE,
+      },
+    };
+  }
+  throw new Error('winch target: malformed');
+}
+
+function packWinch(link: WinchLinkSnapshot): unknown[] {
+  const status = link.status === 'stalled' ? 1 : link.status === 'overload' ? 2 : 0;
+  return [link.id, link.ownerId, packWinchTarget(link.target), q(link.cableLength, CABLE_SCALE), link.motor, q(link.tension, TENSION_SCALE), status];
+}
+
+function unpackWinch(value: unknown): WinchLinkSnapshot {
+  if (!Array.isArray(value) || value.length !== 7 || typeof value[0] !== 'string'
+    || typeof value[1] !== 'string' || !Number.isSafeInteger(value[3])
+    || ![-1, 0, 1].includes(value[4] as number) || !Number.isSafeInteger(value[5])
+    || ![0, 1, 2].includes(value[6] as number)) {
+    throw new Error('winch link: malformed');
+  }
+  return {
+    id: value[0], ownerId: value[1], target: unpackWinchTarget(value[2]),
+    cableLength: (value[3] as number) / CABLE_SCALE,
+    motor: value[4] as -1 | 0 | 1,
+    tension: (value[5] as number) / TENSION_SCALE,
+    status: value[6] === 1 ? 'stalled' : value[6] === 2 ? 'overload' : 'attached',
+  };
+}
+
+function packWinchRuntime(runtime: WinchRuntimeUpdate | undefined): unknown[] | null {
+  return runtime
+    ? [runtime.linkId, q(runtime.cableLength, CABLE_SCALE), runtime.motor, q(runtime.tension, TENSION_SCALE)]
+    : null;
+}
+
+function unpackWinchRuntime(value: unknown): WinchRuntimeUpdate | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.length !== 4 || typeof value[0] !== 'string'
+    || !Number.isSafeInteger(value[1]) || ![-1, 0, 1].includes(value[2] as number)
+    || !Number.isSafeInteger(value[3])) throw new Error('winch runtime: malformed');
+  return {
+    linkId: value[0], cableLength: (value[1] as number) / CABLE_SCALE,
+    motor: value[2] as -1 | 0 | 1, tension: (value[3] as number) / TENSION_SCALE,
+  };
+}
 
 function packSnapshot(snap: WorldSnapshot): unknown {
   return {
@@ -352,14 +431,16 @@ function packSnapshot(snap: WorldSnapshot): unknown {
     T: snap.tick | 0,
     M: snap.serverTimeMs | 0,
     P: snap.players.map(packPlayer),
+    W: (snap.winches ?? []).map(packWinch),
   };
 }
 
-function unpackSnapshot(obj: { T: number; M: number; P: unknown[][] }): WorldSnapshot {
+function unpackSnapshot(obj: { T: number; M: number; P: unknown[][]; W?: unknown[] }): WorldSnapshot {
   return {
     tick: obj.T,
     serverTimeMs: obj.M,
     players: obj.P.map(unpackPlayer),
+    winches: (obj.W ?? []).map(unpackWinch),
   };
 }
 
@@ -374,6 +455,7 @@ export function encode(msg: ClientMessage | ServerMessage): Uint8Array {
       s: SNAPSHOT_SCHEMA,
       Q: update.seq,
       V: packVehicle(update.vehicle),
+      R: packWinchRuntime(update.winch),
     });
   }
   return msgpackEncode(msg);
@@ -479,7 +561,10 @@ export function decodeClient(raw: Wire): ClientMessage {
       if (!Number.isSafeInteger(m.Q) || !Array.isArray(m.V)) {
         throw new Error('state: malformed payload');
       }
-      return { t: 'state', update: { seq: m.Q as number, vehicle: unpackVehicle(m.V) } };
+      return {
+        t: 'state',
+        update: { seq: m.Q as number, vehicle: unpackVehicle(m.V), winch: unpackWinchRuntime(m.R) },
+      };
     }
     case 'ping': {
       if (!isFiniteNum(m.clientTimeMs)) throw new Error('ping: clientTimeMs must be a number');
@@ -507,6 +592,26 @@ export function decodeClient(raw: Wire): ClientMessage {
         normalizationIssues: result.issues,
       };
     }
+    case 'winch-command': {
+      if (!Number.isSafeInteger(m.seq) || (m.action !== 'attach' && m.action !== 'detach' && m.action !== 'break')) {
+        throw new Error('winch-command: malformed');
+      }
+      if (m.action === 'attach') {
+        const target = m.target as Record<string, unknown> | null;
+        if (!target || typeof target !== 'object') throw new Error('winch-command: target required');
+        if (target.kind === 'obstacle' && typeof target.obstacleId === 'string'
+          && target.obstacleId.length > 0 && target.obstacleId.length <= 128) {
+          return { t: 'winch-command', seq: m.seq as number, action: 'attach', target: { kind: 'obstacle', obstacleId: target.obstacleId } };
+        }
+        if (target.kind === 'vehicle' && typeof target.playerId === 'string'
+          && target.playerId.length > 0 && target.playerId.length <= 128
+          && (target.point === 'front' || target.point === 'rear')) {
+          return { t: 'winch-command', seq: m.seq as number, action: 'attach', target: { kind: 'vehicle', playerId: target.playerId, point: target.point } };
+        }
+        throw new Error('winch-command: invalid target');
+      }
+      return { t: 'winch-command', seq: m.seq as number, action: m.action };
+    }
     default:
       throw new Error('client message: unknown type');
   }
@@ -522,7 +627,7 @@ export function decodeServer(raw: Wire): ServerMessage {
     if (decoded.s !== SNAPSHOT_SCHEMA) {
       throw new Error(`snapshot: unsupported schema ${String(decoded.s)}`);
     }
-    return { t: 'snapshot', snap: unpackSnapshot(decoded as unknown as { T: number; M: number; P: unknown[][] }) };
+    return { t: 'snapshot', snap: unpackSnapshot(decoded as unknown as { T: number; M: number; P: unknown[][]; W?: unknown[] }) };
   }
   return decoded as unknown as ServerMessage;
 }

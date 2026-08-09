@@ -1,18 +1,43 @@
 // Camera modes for the local player. Owns its own THREE.PerspectiveCamera
-// plus the smoothing state for chase/hood/free. The Scene composes one
+// plus the smoothing state for chase/far/suspension/hood/free. The Scene composes one
 // ChaseCamera and calls follow() each render frame with the local
 // truck's interpolated pose.
 //
 // Modes:
 //   chase  - third-person follow with under-damped yaw spring (corner
 //            swing) and pitch-aware lookAt (up the hill / down the hill).
+//   far    - the same third-person follow from farther back and higher up.
+//   suspension - low rear view aimed beneath the chassis at the rear axle.
 //   hood   - hood-mounted first-person, looks straight ahead.
 //   free   - high "sky cam" trailing the local player.
 
 import * as THREE from 'three';
 import { CAMERA } from '@mydrunner/shared';
 
-export type CameraMode = 'chase' | 'hood' | 'free';
+export type CameraMode = 'chase' | 'far' | 'suspension' | 'hood' | 'free';
+
+const CAMERA_MODES: readonly CameraMode[] = ['chase', 'far', 'suspension', 'hood', 'free'];
+
+interface ChaseView {
+  distance: number;
+  height: number;
+  lookAhead: number;
+  lookHeight: number;
+  terrainClearance: number;
+}
+
+const CHASE_VIEWS = {
+  chase: { distance: 8, height: 3, lookAhead: 7, lookHeight: 0.5, terrainClearance: 1.5 },
+  far: { distance: 14, height: 5, lookAhead: 7, lookHeight: 0.5, terrainClearance: 1.5 },
+  suspension: { distance: 5.5, height: -0.6, lookAhead: 0, lookHeight: -0.55, terrainClearance: 0.7 },
+} as const satisfies Record<'chase' | 'far' | 'suspension', ChaseView>;
+
+// The soft clearance keeps terrain out of the near plane. Only the much
+// smaller hard clearance is enforced immediately; the rest is damped so a
+// low orbit follows bumpy ground without copying every height change.
+const TERRAIN_HARD_CLEARANCE = 0.35;
+const TERRAIN_LIFT_RISE_RATE = 10;
+const TERRAIN_LIFT_FALL_RATE = 5;
 
 /** What the chase camera needs to know about the terrain to keep itself
  *  out of the ground. The Scene injects an adapter over its terrain mesh. */
@@ -39,6 +64,9 @@ export class ChaseCamera {
   /** Set while a drag is active so spring-back doesn't fight the drag. */
   private dragging = false;
   private lastUpdateMs = 0;
+  private lastApplyMs = 0;
+  private appliedMode: CameraMode | null = null;
+  private terrainLift: number | null = null;
   private terrain: TerrainSampler | null = null;
 
   constructor(aspect: number) {
@@ -56,7 +84,8 @@ export class ChaseCamera {
   }
 
   cycleMode(): void {
-    this.mode = this.mode === 'chase' ? 'hood' : this.mode === 'hood' ? 'free' : 'chase';
+    const next = (CAMERA_MODES.indexOf(this.mode) + 1) % CAMERA_MODES.length;
+    this.mode = CAMERA_MODES[next]!;
   }
 
   /** Begin a user drag - while active, drag offsets accumulate without
@@ -121,6 +150,13 @@ export class ChaseCamera {
   /** Apply the chosen mode to the underlying THREE camera. Call once per
    *  render frame before THREE.WebGLRenderer.render. */
   apply(): void {
+    const nowMs = performance.now();
+    const dt = this.lastApplyMs ? Math.min(0.05, (nowMs - this.lastApplyMs) / 1000) : 1 / 60;
+    this.lastApplyMs = nowMs;
+    if (this.appliedMode !== this.mode) {
+      this.terrainLift = null;
+      this.appliedMode = this.mode;
+    }
     // Spring-back user offsets toward zero unless a drag is in flight.
     // Exponential decay - simple and robust against frame-time variance.
     if (!this.dragging) {
@@ -129,23 +165,25 @@ export class ChaseCamera {
       if (Math.abs(this.userYaw) < 0.001) this.userYaw = 0;
       if (Math.abs(this.userPitch) < 0.001) this.userPitch = 0;
     }
-    if (this.mode === 'chase') this.applyChase();
+    if (this.mode === 'chase' || this.mode === 'far' || this.mode === 'suspension') {
+      this.applyChase(CHASE_VIEWS[this.mode], dt);
+    }
     else if (this.mode === 'hood') this.applyHood();
     else this.applyFree();
   }
 
-  private applyChase(): void {
+  private applyChase(view: ChaseView, dt: number): void {
     // Behind-and-above offset, yawed with the chassis + the user's
     // drag-yaw. User pitch tilts the camera vertically by raising or
     // lowering its Y above the target.
     const effYaw = this.yaw + this.userYaw;
     const sinY = Math.sin(effYaw);
     const cosY = Math.cos(effYaw);
-    const distance = 8;
+    const { distance, height } = view;
     const heightLift = distance * Math.sin(-this.userPitch);
     _desired.set(
       this.target.x - sinY * distance * Math.cos(this.userPitch),
-      this.target.y + 3 + heightLift,
+      this.target.y + height + heightLift,
       this.target.z - cosY * distance * Math.cos(this.userPitch),
     );
     // Lateral swing: when yaw is sweeping (cornering), push sideways
@@ -158,8 +196,21 @@ export class ChaseCamera {
     );
     _desired.x += cosY * swingMag;
     _desired.z += -sinY * swingMag;
-    const minY = (this.terrain ? this.terrain.heightAt(_desired.x, _desired.z) : 0) + 1.5;
-    if (_desired.y < minY) _desired.y = minY;
+    const orbitY = _desired.y;
+    const groundY = this.terrain ? this.terrain.heightAt(_desired.x, _desired.z) : 0;
+    const wantedLift = Math.max(0, groundY + view.terrainClearance - orbitY);
+    if (this.terrainLift === null) {
+      this.terrainLift = wantedLift;
+    } else {
+      const rate = wantedLift > this.terrainLift ? TERRAIN_LIFT_RISE_RATE : TERRAIN_LIFT_FALL_RATE;
+      this.terrainLift += (wantedLift - this.terrainLift) * (1 - Math.exp(-rate * dt));
+    }
+    // Preserve collision safety even when a sharp rise is faster than the
+    // smoothed clearance can follow. Most of the comfort buffer still moves
+    // gradually; only the last 35 cm can ever be corrected immediately.
+    const hardLift = Math.max(0, groundY + TERRAIN_HARD_CLEARANCE - orbitY);
+    this.terrainLift = Math.max(this.terrainLift, hardLift);
+    _desired.y = orbitY + this.terrainLift;
     this.camera.position.copy(_desired);
     // Project the lookAt point ahead of the car along its yawed heading
     // and lift/drop its height by tan(pitch) * lookAhead - the view
@@ -169,7 +220,7 @@ export class ChaseCamera {
     // around a point 7m down the road. Without this collapse the
     // drag rotation feels like the axis is in front of the truck.
     const userMag = Math.min(1, Math.hypot(this.userYaw, this.userPitch) * 2);
-    const lookAhead = 7 * (1 - userMag);
+    const lookAhead = view.lookAhead * (1 - userMag);
     const clampedPitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, this.pitch));
     // Vertical look offset: gives the directional cue of looking up the
     // hill / down the hill. Clamped to keep the car in frame on steep
@@ -182,7 +233,7 @@ export class ChaseCamera {
     const pitchVOff = Math.max(-2, Math.min(2, rawPitchOff));
     _lookTarget.set(
       this.target.x + Math.sin(this.yaw) * lookAhead,
-      this.target.y + 0.5 + pitchVOff,
+      this.target.y + view.lookHeight + pitchVOff,
       this.target.z + Math.cos(this.yaw) * lookAhead,
     );
     this.camera.lookAt(_lookTarget);

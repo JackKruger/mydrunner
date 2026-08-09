@@ -1,3 +1,5 @@
+import type { ManualGear, TransferCaseMode } from '@mydrunner/shared';
+
 export type PlayerConnectionMode =
   | 'connecting'
   | 'connected'
@@ -27,13 +29,15 @@ export interface PlayerTelemetry {
   tick?: number;
   fps?: number;
   previewDiagnostic?: string;
-  range?: 'high' | 'low';
+  transferCase?: TransferCaseMode;
   frontLocked?: boolean;
   rearLocked?: boolean;
+  fixedRwd?: boolean;
   bodyCondition?: number;
   engineCondition?: number;
   steeringCondition?: number;
   drivetrainNotice?: string;
+  winchStatus?: string;
 }
 
 export interface PlayerHudState extends PlayerTelemetry {
@@ -44,6 +48,8 @@ export interface PlayerHudState extends PlayerTelemetry {
 interface PlayerUIOptions {
   development: boolean;
   version: string;
+  onGearSelection?: (gear: ManualGear | null) => void;
+  onTransferCaseSelection?: (mode: TransferCaseMode) => void;
 }
 
 const RPM_DISPLAY_MAX = 6000;
@@ -88,9 +94,24 @@ export class PlayerUI {
   private readonly previewDiagnosticText: HTMLElement;
   private readonly drivetrainText: HTMLElement;
   private readonly conditionText: HTMLElement;
+  private readonly winchText: HTMLElement;
+  private readonly shifter: HTMLElement;
+  private readonly gearGate: HTMLElement;
+  private readonly gearKnob: HTMLElement;
+  private readonly transmissionModeButton: HTMLButtonElement;
+  private readonly transferGate: HTMLElement;
+  private readonly transferKnob: HTMLElement;
+  private manualGear: ManualGear | null = null;
+  private displayedGear: ManualGear = 0;
+  private activePointer: number | null = null;
+  private activeTransferPointer: number | null = null;
+  private readonly onGearSelection: (gear: ManualGear | null) => void;
+  private readonly onTransferCaseSelection: (mode: TransferCaseMode) => void;
 
   constructor(root: HTMLElement, options: PlayerUIOptions) {
     this.root = root;
+    this.onGearSelection = options.onGearSelection ?? (() => {});
+    this.onTransferCaseSelection = options.onTransferCaseSelection ?? (() => {});
     this.state = {
       connection: { mode: 'connecting' },
       speedMps: 0,
@@ -102,9 +123,11 @@ export class PlayerUI {
       tick: 0,
       fps: 0,
       previewDiagnostic: '',
-      range: 'high', frontLocked: false, rearLocked: false,
+      transferCase: '4h', frontLocked: false, rearLocked: false,
+      fixedRwd: false,
       bodyCondition: 1, engineCondition: 1, steeringCondition: 1,
       drivetrainNotice: '',
+      winchStatus: '',
       version: options.version,
     };
 
@@ -154,6 +177,38 @@ export class PlayerUI {
         <div id="hud-handbrake" class="hud-handbrake" role="status" aria-live="polite"></div>
         <div id="hud-drivetrain" class="hud-drivetrain" role="status">HIGH · LOCKERS OPEN</div>
         <div id="hud-condition" class="hud-condition" role="status"></div>
+        <div id="hud-winch" class="hud-winch" role="status" aria-live="polite"></div>
+      </section>
+
+      <section id="hud-shifter" class="hud-shifter instrument-panel" aria-label="Transmission selector" data-mode="auto">
+        <header class="hud-shifter-header">
+          <span class="hud-field-label">TRANSMISSION</span>
+          <button id="transmission-mode" type="button" aria-pressed="false">AUTO</button>
+        </header>
+        <div id="gear-gate" class="gear-gate" aria-label="H-pattern gear selector" role="group">
+          <span class="gear-gate-line gear-gate-line-horizontal" aria-hidden="true"></span>
+          <span class="gear-gate-line gear-gate-line-left" aria-hidden="true"></span>
+          <span class="gear-gate-line gear-gate-line-centre" aria-hidden="true"></span>
+          <span class="gear-gate-line gear-gate-line-right" aria-hidden="true"></span>
+          <button class="gear-slot gear-slot-1" type="button" data-gear="1" aria-label="First gear">1</button>
+          <button class="gear-slot gear-slot-2" type="button" data-gear="2" aria-label="Second gear">2</button>
+          <button class="gear-slot gear-slot-3" type="button" data-gear="3" aria-label="Third gear">3</button>
+          <button class="gear-slot gear-slot-4" type="button" data-gear="4" aria-label="Fourth gear">4</button>
+          <button class="gear-slot gear-slot-5" type="button" data-gear="5" aria-label="Fifth gear">5</button>
+          <button class="gear-slot gear-slot-r" type="button" data-gear="-1" aria-label="Reverse gear">R</button>
+          <span class="gear-neutral-label" aria-hidden="true">N</span>
+          <span id="gear-knob" class="gear-knob" aria-hidden="true"></span>
+        </div>
+        <div id="transfer-gate" class="transfer-gate" aria-label="Transfer-case selector" role="group">
+          <span class="transfer-label">TRANSFER</span>
+          <span class="transfer-gate-line" aria-hidden="true"></span>
+          <button class="transfer-slot transfer-slot-2h" type="button" data-transfer="2h" aria-label="Two wheel drive high">2H</button>
+          <button class="transfer-slot transfer-slot-4h" type="button" data-transfer="4h" aria-label="Four wheel drive high">4H</button>
+          <button class="transfer-slot transfer-slot-4l" type="button" data-transfer="4l" aria-label="Four wheel drive low">4L</button>
+          <span id="transfer-knob" class="transfer-knob" aria-hidden="true">4H</span>
+        </div>
+        <div id="gear-mode-hint" class="gear-mode-hint">AUTO SHIFT</div>
+        <div id="transfer-mode-hint" class="transfer-mode-hint">4WD HIGH</div>
       </section>
 
       <section id="hud-diagnostics" class="hud-diagnostics instrument-panel" aria-label="Development diagnostics"${options.development ? '' : ' hidden'}>
@@ -180,7 +235,16 @@ export class PlayerUI {
     this.previewDiagnosticText = root.querySelector('#hud-preview-diagnostic')!;
     this.drivetrainText = root.querySelector('#hud-drivetrain')!;
     this.conditionText = root.querySelector('#hud-condition')!;
+    this.winchText = root.querySelector('#hud-winch')!;
+    this.shifter = root.querySelector('#hud-shifter')!;
+    this.gearGate = root.querySelector('#gear-gate')!;
+    this.gearKnob = root.querySelector('#gear-knob')!;
+    this.transmissionModeButton = root.querySelector('#transmission-mode')!;
+    this.transferGate = root.querySelector('#transfer-gate')!;
+    this.transferKnob = root.querySelector('#transfer-knob')!;
 
+    this.bindShifter();
+    this.bindTransferCase();
     this.renderConnection();
     this.renderTelemetry();
   }
@@ -232,6 +296,8 @@ export class PlayerUI {
     this.rpmMeter.setAttribute('aria-valuenow', rpm.toFixed(0));
     this.rpmMeter.style.setProperty('--rpm-ratio', String(rpmRatio));
     this.gearText.textContent = formatGear(this.state.gear);
+    this.displayedGear = normaliseGear(this.state.gear);
+    if (this.manualGear === null) this.positionGearKnob(this.displayedGear);
     this.surfaceText.textContent = this.state.surface || '—';
 
     const engineStatus = this.state.engineStatus || '';
@@ -243,8 +309,15 @@ export class PlayerUI {
     this.handbrakeText.textContent = this.state.handbrake ? 'HANDBRAKE' : '';
     this.handbrakeText.setAttribute('aria-hidden', String(!this.state.handbrake));
 
+    const fixedRwd = this.state.fixedRwd === true;
+    const transferCase = fixedRwd ? '2h' : this.state.transferCase ?? '4h';
+    this.transferGate.dataset.fixed = String(fixedRwd);
+    this.transferGate.setAttribute('aria-disabled', String(fixedRwd));
+    this.transferGate.setAttribute('aria-label', fixedRwd ? 'Rear-wheel drive, fixed high range' : 'Transfer-case selector');
+    for (const slot of this.transferGate.querySelectorAll<HTMLButtonElement>('[data-transfer]')) slot.disabled = fixedRwd;
+    this.positionTransferKnob(transferCase);
     const locks = [this.state.rearLocked ? 'R LOCK' : '', this.state.frontLocked ? 'F LOCK' : ''].filter(Boolean).join(' · ');
-    this.drivetrainText.textContent = `${this.state.range === 'low' ? 'LOW RANGE' : 'HIGH RANGE'} · ${locks || 'LOCKERS OPEN'}`;
+    this.drivetrainText.textContent = fixedRwd ? 'RWD · FIXED HIGH' : `${transferCase.toUpperCase()} · ${locks || 'LOCKERS OPEN'}`;
     if (this.state.drivetrainNotice) this.drivetrainText.textContent = this.state.drivetrainNotice;
     const body = Math.round((this.state.bodyCondition ?? 1) * 100);
     const engine = Math.round((this.state.engineCondition ?? 1) * 100);
@@ -252,9 +325,200 @@ export class PlayerUI {
     const damaged = body < 98 || engine < 98 || steering < 98;
     this.conditionText.textContent = damaged ? `BODY ${body} · ENGINE ${engine} · STEERING ${steering}` : '';
     this.conditionText.classList.toggle('active', damaged);
+    this.winchText.textContent = this.state.winchStatus ?? '';
+    this.winchText.classList.toggle('active', Boolean(this.state.winchStatus));
 
     this.tickText.textContent = `tick=${this.state.tick ?? 0}`;
     this.fpsText.textContent = `${this.state.fps ?? 0} FPS`;
     this.previewDiagnosticText.textContent = this.state.previewDiagnostic ?? '';
   }
+
+  private bindShifter(): void {
+    this.transmissionModeButton.addEventListener('click', () => {
+      if (this.manualGear === null) this.selectManualGear(this.displayedGear);
+      else this.selectAutomatic();
+    });
+
+    for (const slot of this.gearGate.querySelectorAll<HTMLElement>('[data-gear]')) {
+      slot.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.selectManualGear(Number(slot.dataset.gear) as ManualGear);
+      });
+    }
+
+    this.gearGate.addEventListener('pointerdown', (event) => {
+      const e = event as PointerEvent;
+      event.preventDefault();
+      this.activePointer = e.pointerId;
+      this.gearGate.setPointerCapture?.(e.pointerId);
+      this.updateGearDrag(e.clientX, e.clientY);
+    });
+    this.gearGate.addEventListener('pointermove', (event) => {
+      const e = event as PointerEvent;
+      if (e.pointerId !== this.activePointer) return;
+      this.updateGearDrag(e.clientX, e.clientY);
+    });
+    const finish = (event: Event): void => {
+      const e = event as PointerEvent;
+      if (e.pointerId !== this.activePointer) return;
+      this.activePointer = null;
+      this.shifter.classList.remove('dragging');
+      this.positionGearKnob(this.manualGear ?? this.displayedGear);
+    };
+    this.gearGate.addEventListener('pointerup', finish);
+    this.gearGate.addEventListener('pointercancel', finish);
+  }
+
+  private bindTransferCase(): void {
+    for (const slot of this.transferGate.querySelectorAll<HTMLElement>('[data-transfer]')) {
+      slot.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.requestTransferCase(slot.dataset.transfer as TransferCaseMode);
+      });
+    }
+
+    this.transferGate.addEventListener('pointerdown', (event) => {
+      if (this.state.fixedRwd) return;
+      const e = event as PointerEvent;
+      event.preventDefault();
+      this.activeTransferPointer = e.pointerId;
+      this.transferGate.setPointerCapture?.(e.pointerId);
+      this.updateTransferDrag(e.clientY);
+    });
+    this.transferGate.addEventListener('pointermove', (event) => {
+      const e = event as PointerEvent;
+      if (e.pointerId !== this.activeTransferPointer) return;
+      this.updateTransferDrag(e.clientY);
+    });
+    const finish = (event: Event): void => {
+      const e = event as PointerEvent;
+      if (e.pointerId !== this.activeTransferPointer) return;
+      this.activeTransferPointer = null;
+      this.shifter.classList.remove('transfer-dragging');
+    };
+    this.transferGate.addEventListener('pointerup', finish);
+    this.transferGate.addEventListener('pointercancel', finish);
+  }
+
+  private updateTransferDrag(clientY: number): void {
+    const rect = this.transferGate.getBoundingClientRect();
+    if (rect.height <= 0) return;
+    const y = clamp01((clientY - rect.top) / rect.height);
+    const mode: TransferCaseMode = y < 0.34 ? '2h' : y < 0.67 ? '4h' : '4l';
+    this.shifter.classList.add('transfer-dragging');
+    this.requestTransferCase(mode);
+  }
+
+  private requestTransferCase(mode: TransferCaseMode): void {
+    if (this.state.fixedRwd) return;
+    this.positionTransferKnob(mode);
+    this.onTransferCaseSelection(mode);
+  }
+
+  private positionTransferKnob(mode: TransferCaseMode): void {
+    const positions: Record<TransferCaseMode, number> = { '2h': 0.2, '4h': 0.5, '4l': 0.8 };
+    this.transferKnob.style.top = `${positions[mode] * 100}%`;
+    this.transferKnob.textContent = mode.toUpperCase();
+    this.shifter.querySelector('#transfer-mode-hint')!.textContent = transferCaseLabel(mode);
+    if (this.state.fixedRwd) {
+      this.transferKnob.textContent = 'RWD';
+      this.shifter.querySelector('#transfer-mode-hint')!.textContent = 'RWD · FIXED HIGH';
+    }
+    for (const slot of this.transferGate.querySelectorAll<HTMLElement>('[data-transfer]')) {
+      const selected = slot.dataset.transfer === mode;
+      slot.classList.toggle('selected', selected);
+      slot.setAttribute('aria-pressed', String(selected));
+    }
+  }
+
+  private updateGearDrag(clientX: number, clientY: number): void {
+    const rect = this.gearGate.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const x = clamp01((clientX - rect.left) / rect.width);
+    const y = clamp01((clientY - rect.top) / rect.height);
+    const columns = [0.2, 0.5, 0.8] as const;
+    const column = columns.reduce((best, value) =>
+      Math.abs(value - x) < Math.abs(best - x) ? value : best, columns[0]);
+
+    // Project onto the legal H gate: the centre crossbar or one of its
+    // three vertical legs, so the lever feels mechanically constrained.
+    let knobX: number;
+    let knobY: number;
+    if (Math.abs(y - 0.5) <= Math.abs(x - column)) {
+      knobX = Math.max(0.2, Math.min(0.8, x));
+      knobY = 0.5;
+    } else {
+      knobX = column;
+      knobY = Math.max(0.18, Math.min(0.82, y));
+    }
+    this.shifter.classList.add('dragging');
+    this.positionGearKnobAt(knobX, knobY);
+
+    let gear: ManualGear = 0;
+    if (knobY < 0.36) gear = knobX < 0.35 ? 1 : knobX < 0.65 ? 3 : 5;
+    else if (knobY > 0.64) gear = knobX < 0.35 ? 2 : knobX < 0.65 ? 4 : -1;
+    this.selectManualGear(gear, false);
+  }
+
+  private selectAutomatic(): void {
+    this.manualGear = null;
+    this.shifter.dataset.mode = 'auto';
+    this.transmissionModeButton.textContent = 'AUTO';
+    this.transmissionModeButton.setAttribute('aria-pressed', 'false');
+    this.shifter.querySelector('#gear-mode-hint')!.textContent = 'AUTO SHIFT';
+    this.updateSelectedSlots();
+    this.positionGearKnob(this.displayedGear);
+    this.onGearSelection(null);
+  }
+
+  private selectManualGear(gear: ManualGear, snap = true): void {
+    const changed = this.manualGear !== gear;
+    this.manualGear = gear;
+    this.shifter.dataset.mode = 'manual';
+    this.transmissionModeButton.textContent = 'MANUAL';
+    this.transmissionModeButton.setAttribute('aria-pressed', 'true');
+    this.shifter.querySelector('#gear-mode-hint')!.textContent = `${formatGear(gear)} SELECTED`;
+    this.gearKnob.textContent = formatGear(gear);
+    this.updateSelectedSlots();
+    if (snap) this.positionGearKnob(gear);
+    if (changed) this.onGearSelection(gear);
+  }
+
+  private updateSelectedSlots(): void {
+    for (const slot of this.gearGate.querySelectorAll<HTMLElement>('[data-gear]')) {
+      const selected = this.manualGear !== null && Number(slot.dataset.gear) === this.manualGear;
+      slot.classList.toggle('selected', selected);
+      slot.setAttribute('aria-pressed', String(selected));
+    }
+  }
+
+  private positionGearKnob(gear: ManualGear): void {
+    const positions: Record<ManualGear, readonly [number, number]> = {
+      [-1]: [0.8, 0.82], 0: [0.5, 0.5], 1: [0.2, 0.18], 2: [0.2, 0.82],
+      3: [0.5, 0.18], 4: [0.5, 0.82], 5: [0.8, 0.18],
+    };
+    this.gearKnob.textContent = formatGear(gear);
+    this.positionGearKnobAt(...positions[gear]);
+  }
+
+  private positionGearKnobAt(x: number, y: number): void {
+    this.gearKnob.style.left = `${x * 100}%`;
+    this.gearKnob.style.top = `${y * 100}%`;
+  }
+}
+
+function normaliseGear(gear: number): ManualGear {
+  if (gear === -1) return -1;
+  if (gear >= 1 && gear <= 5) return Math.round(gear) as ManualGear;
+  return 0;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function transferCaseLabel(mode: TransferCaseMode): string {
+  if (mode === '2h') return '2WD HIGH';
+  if (mode === '4l') return '4WD LOW';
+  return '4WD HIGH';
 }

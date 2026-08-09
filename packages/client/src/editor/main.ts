@@ -24,7 +24,7 @@ import { ObjectGhost } from './ghost.js';
 import { BrushCursor, SpawnMarkers } from './gizmos.js';
 import { Picker } from './pick.js';
 import {
-  applyKindDefaults, defaultToolState, isContinuous, isSculpt, stepYaw,
+  applyKindDefaults, defaultToolState, isContinuous, isSculpt, objectBaseY, stepYaw,
   TOOL_KEYS, type ToolId,
 } from './tools.js';
 import { EditorUi } from './ui.js';
@@ -63,6 +63,7 @@ const ui = new EditorUi(panelHost, tools, {
     ui.syncObject();
     setTool('object');
   },
+  onObjectPlacementChange: () => { gizmosDirty = true; },
   onAutoFlow: () => {
     const rect = session.autoFlow(tools.waterSpeed);
     if (!rect) {
@@ -79,7 +80,9 @@ const ui = new EditorUi(panelHost, tools, {
   onNameChange: (v) => { openedDoc = { ...openedDoc, name: v }; },
 });
 
-loadDoc(Maps.proceduralDoc(), 'procedural base loaded');
+const defaultDoc = Maps.getMap(Maps.DEFAULT_MAP_ID);
+if (!defaultDoc) throw new Error(`default map "${Maps.DEFAULT_MAP_ID}" is not in the registry`);
+loadDoc(defaultDoc, 'default map loaded');
 
 // --- Document lifecycle ----------------------------------------------
 
@@ -312,7 +315,7 @@ function updateGizmos(): void {
         height: tools.objectHeight,
         ...(info.dims.length !== undefined ? { length: tools.objectLength } : {}),
       },
-      hoverHit.x, hoverHit.y, hoverHit.z, tools.objectYaw,
+      hoverHit.x, objectBaseY(tools, hoverHit.y), hoverHit.z, tools.objectYaw,
     );
   } else {
     ghost.hide();
@@ -404,6 +407,8 @@ function placedFromTools(x: number, z: number): Omit<Maps.PlacedObject, 'id'> {
     size: tools.objectSize,
     height: tools.objectHeight,
     yaw: tools.objectYaw,
+    ...(tools.objectPlacementMode === 'offset' ? { yOffset: tools.objectYOffset } : {}),
+    ...(tools.objectPlacementMode === 'absolute' ? { y: tools.objectWorldY } : {}),
     ...(info.dims.length !== undefined ? { length: tools.objectLength } : {}),
   };
 }
@@ -424,6 +429,20 @@ function applyClick(hit: { x: number; z: number }, e: PointerEvent): void {
       break;
     }
     case 'delete': {
+      if (tools.deleteMode === 'radius') {
+        const deleted = session.deleteInRadius(hit.x, hit.z, tools.radius);
+        if (deleted.objects > 0) view.refreshObstacles(session.world.obstacles);
+        if (deleted.spawns > 0) refreshSpawnMarkers();
+        const parts: string[] = [];
+        if (deleted.objects > 0) {
+          parts.push(`${deleted.objects} object${deleted.objects === 1 ? '' : 's'}`);
+        }
+        if (deleted.spawns > 0) {
+          parts.push(`${deleted.spawns} spawn${deleted.spawns === 1 ? '' : 's'}`);
+        }
+        ui.status(parts.length > 0 ? `deleted ${parts.join(' and ')}` : 'nothing to delete there');
+        break;
+      }
       const group = view.obstacleGroup;
       const id = group
         ? picker.obstacle(canvas, camera.camera, group, e.clientX, e.clientY)

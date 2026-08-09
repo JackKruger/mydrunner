@@ -15,6 +15,7 @@
 // simulator.
 
 import { ENGINE, WATER } from '../constants.js';
+import type { ManualGear } from '../types.js';
 
 export interface EngineState {
   rpm: number;
@@ -114,6 +115,8 @@ export function stepEngine(
   vehicleAngVel: number,
   throttle: number,
   dt: number,
+  manualGear: ManualGear | null = null,
+  finalDrive: number = ENGINE.finalDrive,
 ): { wheelForce: number; rpm: number; gear: number } {
   // A flooded engine makes no torque and winds down to a stop. This has
   // to short-circuit before the RPM block below, which floors targetRpm
@@ -131,6 +134,9 @@ export function stepEngine(
   // Derive engine RPM from driveshaft. In neutral, RPM follows throttle
   // toward an idle/blip behaviour; when in gear, it's locked to the
   // wheels through the gear and final drive.
+  // A manual selection owns the gearbox completely. Applying it before the
+  // RPM calculation makes the tachometer react on the same tick as the lever.
+  if (manualGear !== null) state.gearIndex = gearIndexFor(manualGear);
   const gIdx = state.gearIndex;
   const ratio = ENGINE.gears[gIdx] ?? 0;
   let targetRpm: number;
@@ -144,7 +150,7 @@ export function stepEngine(
     // the wheels lag. Without modeling this, launches lug at idle and
     // the car crawls forever before the wheels catch up.
     const wheelRpm = (Math.abs(wheelAngVel) * 60) / (2 * Math.PI);
-    const lockedRpm = wheelRpm * Math.abs(ratio) * ENGINE.finalDrive;
+    const lockedRpm = wheelRpm * Math.abs(ratio) * finalDrive;
     // Blend: at zero wheel speed use throttle target; full lock around
     // 8 rad/s wheel speed (~3 m/s).
     const blend = Math.min(1, Math.abs(wheelAngVel) / 8);
@@ -176,7 +182,10 @@ export function stepEngine(
   let nextGear = gIdx;
   const wantsReverse = throttle < -0.05;
   const wantsForward = throttle > 0.05;
-  if (wantsForward && gIdx <= ENGINE.neutralGear) {
+  if (manualGear !== null) {
+    nextGear = gearIndexFor(manualGear);
+    state.shiftCooldown = 0;
+  } else if (wantsForward && gIdx <= ENGINE.neutralGear) {
     nextGear = ENGINE.firstGear;
   } else if (wantsReverse && gIdx >= ENGINE.firstGear) {
     nextGear = ENGINE.reverseGear;
@@ -191,7 +200,7 @@ export function stepEngine(
     // again (the 1-2-1-2 hunting the player reported). Chassis speed is
     // unaffected by slip and gives a stable, speed-accurate shift point.
     const vehicleRpmAbs = (vehicleAngVel * 60) / (2 * Math.PI);
-    const vehicleLockedRpm = vehicleRpmAbs * Math.abs(ratio) * ENGINE.finalDrive;
+    const vehicleLockedRpm = vehicleRpmAbs * Math.abs(ratio) * finalDrive;
     if (state.shiftCooldown > 0) {
       state.shiftCooldown--;
     } else if (vehicleLockedRpm > ENGINE.shiftUpRpm && gIdx < ENGINE.gears.length - 1) {
@@ -216,7 +225,7 @@ export function stepEngine(
   const engineT = torqueAtRpm(rpm) * Math.abs(throttle);
   // Negative throttle in reverse gear translates to positive torque
   // through the negative ratio - both signs cancel.
-  const torqueAtWheels = engineT * activeRatio * ENGINE.finalDrive;
+  const torqueAtWheels = engineT * activeRatio * finalDrive;
 
   // Engine braking off-throttle. Two components:
   //   - rpm-based: compression braking through the locked drivetrain.
@@ -257,4 +266,10 @@ function signedGear(gIdx: number): number {
   if (gIdx === ENGINE.reverseGear) return -1;
   if (gIdx === ENGINE.neutralGear) return 0;
   return gIdx - ENGINE.neutralGear; // 1..5
+}
+
+function gearIndexFor(gear: ManualGear): number {
+  if (gear === -1) return ENGINE.reverseGear;
+  if (gear === 0) return ENGINE.neutralGear;
+  return ENGINE.neutralGear + gear;
 }
