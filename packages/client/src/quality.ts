@@ -204,6 +204,10 @@ export function glslPrelude(q: QualitySettings): string {
     `#define CLOUD_OCTAVES ${q.cloudOctaves}`,
     `#define WATER_OCTAVES ${q.waterOctaves}`,
   ];
+  // Derived from the numbers rather than the tier name, so the table stays
+  // the single source of truth: push the band past the far plane and the fade
+  // machinery compiles out entirely.
+  if (q.terrainDetailFar < 1e6) lines.push('#define TERRAIN_DETAIL_FADE 1');
   if (q.terrainSecondaryBlend) lines.push('#define TERRAIN_BLEND2 1');
   if (q.cloudFineLayer) lines.push('#define CLOUD_FINE 1');
   if (q.waterRippleNormal) lines.push('#define WATER_RIPPLE_NORMAL 1');

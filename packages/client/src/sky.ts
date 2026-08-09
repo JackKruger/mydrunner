@@ -47,9 +47,10 @@ float vnoise(vec2 p) {
 }
 float fbm5(vec2 p) {
   // 5 octaves for puffier, more detailed clouds than the terrain shader.
+  // CLOUD_OCTAVES comes from the quality prelude.
   float v = 0.0;
   float a = 0.5;
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < CLOUD_OCTAVES; i++) {
     v += a * vnoise(p);
     p *= 2.03;
     a *= 0.48;
@@ -77,9 +78,17 @@ void main() {
     uv += vec2(uTime * 0.012, uTime * 0.005);
 
     // Two scales of FBM: large puffy masses + fine wispy detail.
+#ifdef CLOUD_FINE
     float nLarge = fbm5(uv * 1.2);
     float nFine  = fbm5(uv * 3.5 + 17.0);
     float n = nLarge * 0.72 + nFine * 0.28;
+#else
+    // The fine layer doubles the sky's noise cost on its own and only adds
+    // wisps at the edges of masses the large layer already places. Scale the
+    // large layer by the same 0.72 + 0.28 the blend used, so cloud coverage
+    // lands on the same side of uCloudCover and the sky keeps its shape.
+    float n = fbm5(uv * 1.2);
+#endif
 
     float coverage = smoothstep(uCloudCover, uCloudCover + uCloudSoftness, n);
 
