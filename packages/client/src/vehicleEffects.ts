@@ -19,6 +19,7 @@ import {
   type WorldSnapshot,
 } from '@mydrunner/shared';
 import { ParticleSystem } from './particles.js';
+import { activeQuality, type QualitySettings } from './quality.js';
 import { TyreTrackSystem } from './tyreTracks.js';
 
 /** The drawn pose of one vehicle. THREE.Group satisfies this structurally,
@@ -103,14 +104,19 @@ const SPRAY_MAX_DEPTH = 0.9;
 
 export class VehicleEffects {
   readonly group = new THREE.Group();
-  private particles = new ParticleSystem();
-  private tracks = new TyreTrackSystem();
+  private particles: ParticleSystem;
+  private tracks: TyreTrackSystem;
   private terrain: Physics.TerrainData | null = null;
   private lastSnapMs = -1;
   private lastLocalMs = -1;
   private snapshotPlayers = new Set<PlayerId>();
 
-  constructor() {
+  constructor(quality: QualitySettings = activeQuality()) {
+    this.particles = new ParticleSystem(quality);
+    // Tracks are one draw call either way, but the ring buffer is drawn in
+    // full every frame (frustumCulled is off, since it spans the map), so its
+    // size is a triangle budget rather than just memory.
+    this.tracks = new TyreTrackSystem(quality.trackSegments);
     this.group.add(this.particles.group);
     this.group.add(this.tracks.group);
   }

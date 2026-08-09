@@ -79,6 +79,9 @@ export interface QualitySettings {
   particleInstancing: boolean;
   /** Cosmetic tyre-track ring buffer size. */
   trackSegments: number;
+  /** Full-resolution coil springs on the undercarriage: ~640 triangles each,
+   *  four per truck, mostly hidden behind a wheel. */
+  detailedSuspension: boolean;
   /** Menu panorama redraw rate. It renders the whole world behind the start
    *  menu, which on a phone is a thermal warm-up before the player has
    *  pressed anything. */
@@ -109,6 +112,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     maxParticles: 160,
     particleInstancing: false,
     trackSegments: 8192,
+    detailedSuspension: true,
     menuPanoramaHz: 60,
   },
   low: {
@@ -130,6 +134,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     maxParticles: 64,
     particleInstancing: true,
     trackSegments: 2048,
+    detailedSuspension: false,
     menuPanoramaHz: 20,
   },
 };

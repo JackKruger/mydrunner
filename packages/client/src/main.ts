@@ -52,6 +52,7 @@ import { LocalSimulation } from './localSimulation.js';
 import { readPreview } from './previewHandoff.js';
 import { WorkshopUI } from './workshop.js';
 import { WinchController } from './winchController.js';
+import { activeQuality } from './quality.js';
 
 function getServerUrl(): string {
   const explicit = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -490,10 +491,21 @@ async function start(): Promise<void> {
         scene.setWorld(stagedMenuWorld);
         const startedAtMs = performance.now();
         const animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        // Capped at the low tier. This renders the whole world behind the
+        // start menu, which on a phone means thermal throttling sets in
+        // before the player has pressed anything. It is a slow camera pan
+        // along a spline, so it survives a lower rate with nothing visible
+        // lost. Skipped entirely while the tab is hidden — rAF usually
+        // stops there anyway, but not on every browser.
+        const panoramaIntervalMs = 1000 / activeQuality().menuPanoramaHz;
+        let lastPanoramaMs = 0;
         const drawMenuPanorama = (nowMs: number): void => {
           if (!menuPanoramaRunning) return;
-          scene.renderMenuPanorama(nowMs, startedAtMs, animate);
           menuPanoramaFrame = requestAnimationFrame(drawMenuPanorama);
+          if (document.visibilityState === 'hidden') return;
+          if (nowMs - lastPanoramaMs < panoramaIntervalMs) return;
+          lastPanoramaMs = nowMs;
+          scene.renderMenuPanorama(nowMs, startedAtMs, animate);
         };
         menuPanoramaFrame = requestAnimationFrame(drawMenuPanorama);
       }

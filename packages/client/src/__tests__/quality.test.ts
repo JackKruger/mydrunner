@@ -112,7 +112,7 @@ describe('the quality table', () => {
 
     const features: (keyof QualitySettings)[] = [
       'antialias', 'shadows', 'terrainSecondaryBlend', 'cloudFineLayer',
-      'waterRippleNormal', 'waterFilaments',
+      'waterRippleNormal', 'waterFilaments', 'detailedSuspension',
     ];
     for (const field of features) {
       if (QUALITY.low[field]) expect(QUALITY.high[field], field).toBe(true);
