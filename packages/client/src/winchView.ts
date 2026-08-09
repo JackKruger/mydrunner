@@ -12,6 +12,9 @@ export class WinchView {
   readonly group = new THREE.Group();
   readonly marker: THREE.Mesh;
   private readonly cables = new Map<string, CableVisual>();
+  // Reused across frames: update() runs every frame and almost always with an
+  // empty link list, so a fresh Set per call was pure garbage.
+  private readonly present = new Set<string>();
 
   constructor() {
     this.group.name = 'winches';
@@ -36,7 +39,8 @@ export class WinchView {
     links: readonly WinchLinkSnapshot[],
     endpoint: (link: WinchLinkSnapshot, end: 'source' | 'target') => THREE.Vector3 | null,
   ): void {
-    const present = new Set<string>();
+    const present = this.present;
+    present.clear();
     for (const link of links) {
       const start = endpoint(link, 'source');
       const end = endpoint(link, 'target');

@@ -103,6 +103,21 @@ const frameDiag = {
   simulationMsSum: 0,
   simulationMsMax: 0,
 };
+/** Draw-call and triangle counts for the frame just rendered.
+ *
+ *  These are the numbers the batching work is judged by — "fewer draw calls"
+ *  is otherwise an assertion rather than a measurement. `renderer.info` is a
+ *  live snapshot of the last render, not a window average, so this reads the
+ *  most recent frame rather than a mean; the counts are static enough between
+ *  frames for that to be the useful figure.
+ *
+ *  Dev-only, like `window.__scene`: production bundles do not carry it. */
+function drawStatsSuffix(): string {
+  if (!import.meta.env.DEV) return '';
+  const info = scene.renderer.info.render;
+  return ` | draws=${info.calls} tris=${info.triangles}`;
+}
+
 function netDiagOnSnapshot(recvAtMs: number): void {
   if (netDiag.windowStart === 0) netDiag.windowStart = recvAtMs;
   if (netDiag.prevRecvMs > 0) {
@@ -129,7 +144,8 @@ function netDiagOnSnapshot(recvAtMs: number): void {
         `| fps=${fps.toFixed(0)} ` +
         `frame mean=${meanFrameMs.toFixed(1)}ms max=${frameDiag.totalMsMax.toFixed(1)}ms ` +
         `sim mean=${meanSimulationMs.toFixed(2)}ms max=${frameDiag.simulationMsMax.toFixed(2)}ms ` +
-        `render mean=${meanRenderMs.toFixed(2)}ms max=${frameDiag.renderMsMax.toFixed(2)}ms`,
+        `render mean=${meanRenderMs.toFixed(2)}ms max=${frameDiag.renderMsMax.toFixed(2)}ms` +
+        drawStatsSuffix(),
     );
     frameDiag.frames = 0;
     frameDiag.totalMsSum = 0;

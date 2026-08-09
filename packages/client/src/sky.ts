@@ -142,6 +142,19 @@ export class Sky {
     const geo = new THREE.SphereGeometry(450, 24, 12);
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.frustumCulled = false;
+    // Draw the dome AFTER the opaque world, not before it.
+    //
+    // Three sorts the opaque list by groupOrder, then renderOrder, then
+    // *material.id*, and only then by depth. Sky's material is constructed
+    // before every other world material, so with everything at the default
+    // renderOrder 0 the dome sorted first and painted a 40-noise-tap shader
+    // across the whole screen, which the terrain then overdrew. It already
+    // has depthWrite off and depthTest on, so ordering it last instead lets
+    // the depth buffer reject every hidden sky fragment. No visual change.
+    //
+    // 1 clears the default-0 world. WinchView's marker sits at 10 and is
+    // depthTest:false, so it still draws over everything either way.
+    this.mesh.renderOrder = 1;
     this.startMs = performance.now();
   }
 
