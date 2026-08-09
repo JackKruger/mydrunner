@@ -16,6 +16,7 @@
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 import { flowTextureOf, makeWaterMaterial, packFlow } from './waterShader.js';
+import { activeQuality, type QualitySettings } from './quality.js';
 
 export class WaterMesh {
   readonly mesh: THREE.Mesh;
@@ -27,7 +28,7 @@ export class WaterMesh {
   private material: THREE.ShaderMaterial;
   private startMs = performance.now();
 
-  constructor(terrain: Physics.TerrainData) {
+  constructor(terrain: Physics.TerrainData, quality: QualitySettings = activeQuality()) {
     this.terrain = terrain;
     const { size, resolution } = terrain;
     const n = resolution;
@@ -44,7 +45,7 @@ export class WaterMesh {
     this.writeCells({ r0: 0, c0: 0, rows: n, cols: n });
     geo.computeBoundingSphere();
 
-    this.material = makeWaterMaterial(terrain);
+    this.material = makeWaterMaterial(terrain, quality);
     this.mesh = new THREE.Mesh(geo, this.material);
     // Water neither receives nor casts shadows: it is a transparent
     // surface with depthWrite off, so a shadow on it would be cast onto

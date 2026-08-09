@@ -21,6 +21,7 @@ import { Obstacles } from './obstacles/index.js';
 import { LandmarkMeshes } from './landmarks.js';
 import { Sky } from './sky.js';
 import { disposeObject3D } from './three/dispose.js';
+import { activeQuality, type QualitySettings } from './quality.js';
 
 /** Sun direction, fog colour and fog range are duplicated in
  *  terrainShader.ts's uniforms. Retune one, retune the other. */
@@ -47,16 +48,32 @@ export class WorldView {
   private terrainPlaceholder: THREE.Mesh | null = null;
   private obstacles: Obstacles | null = null;
   private landmarks: LandmarkMeshes | null = null;
+  private readonly quality: QualitySettings;
 
-  constructor(canvasParent: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+  /** `quality` defaults to the resolved tier so the game gets it for free.
+   *  The editor passes QUALITY.high explicitly — it exists to show the world
+   *  as the game ships it, so it must not render a reduced version of it. */
+  constructor(canvasParent: HTMLElement, quality: QualitySettings = activeQuality()) {
+    this.quality = quality;
+    // MSAA off at low tier. On a tile-based mobile GPU the resolve is a
+    // bandwidth cost on every frame, and at pixelRatioCap 1.0 the crispness
+    // it was buying has already been given up.
+    this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias });
     // Cap pixel ratio. Uncapped on a 2x or 3x display the GPU pays 4-9x
     // the fragment cost - the difference between 60 FPS and 20 FPS on
     // mid-tier mobile + integrated GPUs. 1.5 is a good compromise: still
-    // crisper than CSS pixels, well under the cliff.
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    // crisper than CSS pixels, well under the cliff. The low tier drops to
+    // 1.0, which is a 2.25x cut to every fragment shader in the frame and
+    // the single largest lever in the whole quality table.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatioCap));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true;
+    // Off at low tier. The depth pass re-renders every casting mesh inside a
+    // fixed 200 m box every frame no matter where the player is — the biggest
+    // single draw-call cost in the scene. Note the terrain does NOT receive
+    // shadows either way: its raw ShaderMaterial has no shadowmap chunks, so
+    // terrain.ts's receiveShadow is inert. What is lost is scenery and
+    // vehicle self-shadowing, which is a visible change, not a free one.
+    this.renderer.shadowMap.enabled = quality.shadows;
     // PCFSoft is the default and is several samples per fragment on the
     // shadow-casting pass. PCF (basic) halves that with barely visible
     // quality loss at our shadow map resolution.
@@ -66,12 +83,14 @@ export class WorldView {
     // Procedural sky dome replaces the flat background colour. Fog still
     // matches the horizon tint so distant terrain melts into the sky.
     this.scene.fog = new THREE.Fog(FOG_COLOR, FOG_NEAR, FOG_FAR);
-    this.sky = new Sky();
+    this.sky = new Sky(quality);
     this.scene.add(this.sky.mesh);
 
     const sun = new THREE.DirectionalLight(0xfff4dd, 1.4);
     sun.position.set(SUN_POS.x, SUN_POS.y, SUN_POS.z);
-    sun.castShadow = true;
+    // Both flags matter: leaving the light configured to cast while the
+    // shadow map is disabled still costs the shadow-camera bookkeeping.
+    sun.castShadow = quality.shadows;
     // 1024² instead of 2048². Shadows still readable on a 200 m × 200 m
     // shadow camera frustum (~20 cm per shadow texel) and the GPU pays
     // a quarter of the depth-pass fragment cost.
@@ -125,7 +144,7 @@ export class WorldView {
       this.scene.remove(this.terrainMeshRef.mesh);
       this.terrainMeshRef.dispose();
     }
-    this.terrainMeshRef = new TerrainMesh(v.terrain);
+    this.terrainMeshRef = new TerrainMesh(v.terrain, this.quality);
     this.scene.add(this.terrainMeshRef.mesh);
 
     this.refreshWater(v.terrain);
@@ -147,7 +166,7 @@ export class WorldView {
       this.waterMeshRef = null;
     }
     if (!wanted) return;
-    this.waterMeshRef = new WaterMesh(terrain);
+    this.waterMeshRef = new WaterMesh(terrain, this.quality);
     this.scene.add(this.waterMeshRef.mesh);
   }
 

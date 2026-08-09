@@ -4,6 +4,7 @@
 // pair used by the terrain shader.
 
 import * as THREE from 'three';
+import { activeQuality, buildSkyFragment, type QualitySettings } from './quality.js';
 
 const VERT = /* glsl */ `
 varying vec3 vDir;
@@ -120,7 +121,7 @@ export class Sky {
   private mat: THREE.ShaderMaterial;
   private startMs: number;
 
-  constructor() {
+  constructor(quality: QualitySettings = activeQuality()) {
     this.mat = new THREE.ShaderMaterial({
       uniforms: {
         uHorizon: { value: new THREE.Color(0xd6e2ec) },
@@ -134,7 +135,7 @@ export class Sky {
         uHorizonWarm: { value: new THREE.Color(0xf0c88a) },
       },
       vertexShader: VERT,
-      fragmentShader: FRAG,
+      fragmentShader: buildSkyFragment(quality, FRAG),
       side: THREE.BackSide,
       depthWrite: false,
     });

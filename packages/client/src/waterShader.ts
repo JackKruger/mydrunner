@@ -21,6 +21,7 @@
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
+import { activeQuality, buildWaterFragment, type QualitySettings } from './quality.js';
 
 const VERT = /* glsl */ `
 attribute float aWet;
@@ -195,7 +196,10 @@ const DEEP_AT = 1.4;
 /** Depth below which the foam band draws, m. */
 const FOAM_DEPTH = 0.22;
 
-export function makeWaterMaterial(terrain: Physics.TerrainData): THREE.ShaderMaterial {
+export function makeWaterMaterial(
+  terrain: Physics.TerrainData,
+  quality: QualitySettings = activeQuality(),
+): THREE.ShaderMaterial {
   const n = terrain.resolution;
   const flowData = new Uint8Array(n * n * 4);
   packFlow(terrain, flowData, { r0: 0, c0: 0, rows: n, cols: n });
@@ -224,7 +228,7 @@ export function makeWaterMaterial(terrain: Physics.TerrainData): THREE.ShaderMat
       uFoamDepth: { value: FOAM_DEPTH },
     },
     vertexShader: VERT,
-    fragmentShader: FRAG,
+    fragmentShader: buildWaterFragment(quality, FRAG),
     transparent: true,
     // Water must not occlude what is under it in the depth buffer, or the
     // bed it is meant to be see-through to stops drawing.

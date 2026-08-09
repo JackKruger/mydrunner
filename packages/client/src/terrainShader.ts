@@ -18,6 +18,7 @@
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
+import { activeQuality, buildTerrainFragment, type QualitySettings } from './quality.js';
 
 const VERT = /* glsl */ `
 varying vec3 vWorldPos;
@@ -183,7 +184,10 @@ void main() {
 }
 `;
 
-export function makeTerrainMaterial(terrain: Physics.TerrainData): THREE.ShaderMaterial {
+export function makeTerrainMaterial(
+  terrain: Physics.TerrainData,
+  quality: QualitySettings = activeQuality(),
+): THREE.ShaderMaterial {
   const sunDir = new THREE.Vector3(50, 80, 30).normalize();
 
   // Pack the surface map into an 8-bit single-channel texture. Three.js
@@ -212,7 +216,7 @@ export function makeTerrainMaterial(terrain: Physics.TerrainData): THREE.ShaderM
       uTerrainSize: { value: terrain.size },
     },
     vertexShader: VERT,
-    fragmentShader: FRAG,
+    fragmentShader: buildTerrainFragment(quality, FRAG),
   });
 }
 
