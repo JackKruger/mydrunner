@@ -212,6 +212,10 @@ let drivetrainNotice = '';
 let drivetrainNoticeUntil = 0;
 let lastFrameTimeMs = performance.now();
 let mapWorld: Maps.MapWorld | null = null;
+/** The menu uses the shipped map before networking starts. If the welcome
+ *  selects that same document, reuse the composition instead of generating
+ *  the terrain and hundreds of obstacle placements a second time. */
+let stagedMenuWorld: Maps.MapWorld | null = null;
 let localSimulation: LocalSimulation | null = null;
 let currentBuild: VehicleBuild = createStockBuild();
 let currentBuildRevision = 1;
@@ -268,8 +272,10 @@ function enterWorld(
   // mesh, obstacles, landmarks, the surface-name HUD lookup, and the
   // local sim. It used to be regenerated five times from the same seed
   // at every (re)connect.
-  mapWorld = Maps.applyMapDoc(doc);
-  scene.setWorld(mapWorld);
+  const reuseMenuWorld = stagedMenuWorld?.doc === doc;
+  mapWorld = reuseMenuWorld ? stagedMenuWorld! : Maps.applyMapDoc(doc);
+  stagedMenuWorld = null;
+  if (!reuseMenuWorld) scene.setWorld(mapWorld);
   // Build the local sim. Same map + spawn as the server when there is one,
   // so the local Rapier world integrates against an identical heightmap and
   // obstacle set and starts at the same pose.
@@ -446,7 +452,7 @@ async function start(): Promise<void> {
       carKind: carParam ? normalizeVehicleBaseId(carParam) : (saved?.build.baseId ?? 'ridgeback'),
     };
   } else {
-    const launch = await showStartScreen({
+    const launchPromise = showStartScreen({
       saves: loadGameSaves(saved),
       // Authoring links are normally a development-build feature, but a
       // deployed build can opt in explicitly with /?dev.
@@ -456,6 +462,34 @@ async function start(): Promise<void> {
         engineAudio.setMuted(!options.engineAudio);
       },
     });
+    // Build the real shipped world only after showStartScreen has synchronously
+    // mounted its UI. That preserves the instant first paint on cold/mobile
+    // loads while giving the menu a live terrain, water, foliage and sky view.
+    let menuPanoramaFrame = 0;
+    let menuPanoramaRunning = true;
+    try {
+      const menuDoc = Maps.getMap(Maps.DEFAULT_MAP_ID);
+      if (menuDoc) {
+        stagedMenuWorld = Maps.applyMapDoc(menuDoc);
+        scene.setWorld(stagedMenuWorld);
+        const startedAtMs = performance.now();
+        const animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const drawMenuPanorama = (nowMs: number): void => {
+          if (!menuPanoramaRunning) return;
+          scene.renderMenuPanorama(nowMs, startedAtMs, animate);
+          menuPanoramaFrame = requestAnimationFrame(drawMenuPanorama);
+        };
+        menuPanoramaFrame = requestAnimationFrame(drawMenuPanorama);
+      }
+    } catch (error) {
+      // The CSS treatment remains a complete fallback if a future authored
+      // map cannot be composed. Startup should still let the player connect
+      // and surface the normal map-handshake error there.
+      console.warn('[mydrunner-client] menu panorama unavailable', error);
+      stagedMenuWorld = null;
+    }
+
+    const launch = await launchPromise;
     if (launch.type === 'play') {
       activeSaveId = launch.save.id;
       const played = touchGameSave(launch.save.id) ?? launch.save;
@@ -467,6 +501,8 @@ async function start(): Promise<void> {
       const created = createGameSave(choice);
       activeSaveId = created.id;
     }
+    menuPanoramaRunning = false;
+    if (menuPanoramaFrame) cancelAnimationFrame(menuPanoramaFrame);
     saveJoin(choice);
   }
 

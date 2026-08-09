@@ -274,6 +274,14 @@ export const AXLE = {
 export const TIRE_LATERAL = {
   stiffness: 14_000,
   longRatio: 0.95,
+  // A rolling tyre has static lateral grip even when its contact patch is
+  // not yet moving. The dynamic stiffness term alone produces zero force at
+  // zero speed, so gravity on a cross-slope creates a small permanent creep.
+  // Use a constraint-like correction at walking-pace chassis speeds, then
+  // blend it away before normal cornering so the approved slip-angle handling
+  // remains unchanged.
+  staticHoldSpeed: 0.10,
+  staticReleaseSpeed: 0.50,
   // Slip angle (rad) at which lateral grip peaks. ~8 deg. Below this the
   // tyre is in its linear cornering region (full stiffness); past it the
   // grip decays. Real tyres peak ~6-10 deg.

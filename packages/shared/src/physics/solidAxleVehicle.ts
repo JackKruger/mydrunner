@@ -170,6 +170,7 @@ export class SolidAxleVehicle implements VehicleLike {
   // allocate. Contents are valid only for the duration of the call site
   // that wrote them; never store references to these.
   private readonly _scratchForce: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly _scratchStaticLateralHold: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly externalPointLoads: ExternalPointLoad[] = [];
 
   constructor(
@@ -898,12 +899,12 @@ export class SolidAxleVehicle implements VehicleLike {
     // their patch velocity to zero and cancel gravity along the slope. The
     // previous wheel-inertia-only force allowed a constant downhill creep:
     // gravity first had to create slip before the tyre produced any reaction.
+    let supportedNormalLoadTotal = 0;
     let brakedNormalLoadTotal = 0;
     for (let wIdx = 0; wIdx < 4; wIdx++) {
       const isFront = wIdx < 2;
       const isBraked = this.input.brake > 0
         || (!isFront && this.input.handbrake > 0);
-      if (!isBraked) continue;
 
       const w = this.wheels[wIdx]!;
       const basis = wheelBases[wIdx]!;
@@ -911,16 +912,23 @@ export class SolidAxleVehicle implements VehicleLike {
       const ledgeFrame = ledge
         ? contactFrame(ledge.normal, basis.axle, basis.forward)
         : null;
+      let contactLoad = 0;
       if (ledge && ledgeFrame) {
-        brakedNormalLoadTotal += Math.max(
+        contactLoad = Math.max(
           LEDGE_CONTACT.minHookNormalLoad,
           ledgeLoads[wIdx]!,
         );
       } else if (w.contact) {
-        brakedNormalLoadTotal += Math.max(WHEEL.minNormalLoad, w.lastForce ?? 0);
+        contactLoad = Math.max(WHEEL.minNormalLoad, w.lastForce ?? 0);
       }
+      supportedNormalLoadTotal += contactLoad;
+      if (isBraked) brakedNormalLoadTotal += contactLoad;
     }
     const vehicleMass = VEHICLE.mass * this.geom.massMult;
+    const staticLateralHold = this._scratchStaticLateralHold;
+    staticLateralHold.x = 0;
+    staticLateralHold.y = 0;
+    staticLateralHold.z = 0;
 
     for (let wIdx = 0; wIdx < 4; wIdx++) {
       const w = this.wheels[wIdx]!;
@@ -1036,7 +1044,33 @@ export class SolidAxleVehicle implements VehicleLike {
       // the "throttle oversteer in mud" feel.
       const alpha = slipAngle(latV, longV);
       const latGripMult = lateralGripFromSlipAngle(alpha);
-      const rawLatForce = -TUNING.tireLatStiffness * latV * latGripMult;
+      const dynamicLatForce = -TUNING.tireLatStiffness * latV * latGripMult;
+
+      // Dynamic lateral stiffness cannot hold a true rest state: its force is
+      // zero at latV=0, so gravity first creates sideways velocity and the
+      // tyre settles into a small non-zero creep. At chassis speeds below the
+      // release threshold, blend toward the chassis-level force needed to
+      // cancel lateral translation and gravity projected along the tyre's
+      // lateral tangent. Using chassis velocity here avoids trying to cancel
+      // every wheel-end's roll velocity in one tick, which over-constrains the
+      // suspension. The friction circle below remains the final authority: a
+      // steep slope, mud, water-unloaded tyre, or simultaneous drive force can
+      // still exceed available grip and slide naturally.
+      const staticBlend = 1 - smoothstep(
+        TIRE_LATERAL.staticHoldSpeed,
+        TIRE_LATERAL.staticReleaseSpeed,
+        groundSpeed,
+      );
+      const supportedMass = supportedNormalLoadTotal > 1e-6
+        ? vehicleMass * normalLoad / supportedNormalLoadTotal
+        : 0;
+      const chassisLatV = lv.x * tireLat.x + lv.y * tireLat.y + lv.z * tireLat.z;
+      const gravityLatAccel = GRAVITY_Y * tireLat.y;
+      const staticTargetLatForce = -supportedMass
+        * (chassisLatV / dt + gravityLatAccel);
+      const rawStaticLatForce = (staticTargetLatForce - dynamicLatForce)
+        * staticBlend;
+      const rawLatForce = dynamicLatForce + rawStaticLatForce;
 
       let finalLongForce = 0;
       let finalLatForce = 0;
@@ -1056,6 +1090,23 @@ export class SolidAxleVehicle implements VehicleLike {
           finalLatForce = rawLatForce;
         }
       }
+
+      // The rest-constraint portion is assembled from per-tyre grip budgets.
+      // Applying it at every ground patch would add the same roll moment on
+      // every tick and keep a parked chassis
+      // rotating into the slope. Preserve the friction-circle scaling, remove
+      // only that holding share from the patch force, and apply its resultant
+      // centrally after all wheels have been solved. Dynamic lateral force
+      // remains at each patch, so normal steering/yaw/roll behavior is
+      // unchanged once the vehicle is moving.
+      const lateralScale = Math.abs(rawLatForce) > 1e-8
+        ? finalLatForce / rawLatForce
+        : 0;
+      const staticLatForce = rawStaticLatForce * lateralScale;
+      const contactLatForce = finalLatForce - staticLatForce;
+      staticLateralHold.x += tireLat.x * staticLatForce;
+      staticLateralHold.y += tireLat.y * staticLatForce;
+      staticLateralHold.z += tireLat.z * staticLatForce;
 
       if (ledge?.climbDirection && ledgeFrame) {
         const targetClimbSpeed = Math.min(
@@ -1087,13 +1138,20 @@ export class SolidAxleVehicle implements VehicleLike {
 
       // Apply combined tire force to chassis at contact point.
       const f = this._scratchForce;
-      f.x = tireLong.x * finalLongForce + tireLat.x * finalLatForce;
-      f.y = tireLong.y * finalLongForce + tireLat.y * finalLatForce;
-      f.z = tireLong.z * finalLongForce + tireLat.z * finalLatForce;
+      f.x = tireLong.x * finalLongForce + tireLat.x * contactLatForce;
+      f.y = tireLong.y * finalLongForce + tireLat.y * contactLatForce;
+      f.z = tireLong.z * finalLongForce + tireLat.z * contactLatForce;
       const forcePoint = ledge && ledgeFrame
         ? scaledMomentPoint(t, cp, LEDGE_CONTACT.chassisMomentArmScale)
         : cp;
       this.body.addForceAtPoint(f, forcePoint, true);
+    }
+    if (
+      Math.abs(staticLateralHold.x) > 1e-8
+      || Math.abs(staticLateralHold.y) > 1e-8
+      || Math.abs(staticLateralHold.z) > 1e-8
+    ) {
+      this.body.addForce(staticLateralHold, true);
     }
   }
 
@@ -1582,6 +1640,12 @@ function addVec(a: Vec3, b: Vec3): Vec3 {
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  if (edge1 <= edge0) return value < edge0 ? 0 : 1;
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
 }
 
 function nextTransferCase(mode: TransferCaseMode): TransferCaseMode {

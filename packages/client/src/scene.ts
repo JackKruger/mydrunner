@@ -82,6 +82,33 @@ export class Scene {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
   private cam: ChaseCamera;
+  /** A separate camera for the main menu's live map panorama. Keeping it
+   *  independent means the chase camera still starts from a clean state when
+   *  the player enters the world. */
+  private readonly menuCamera: THREE.PerspectiveCamera;
+  private readonly menuCameraPath = new THREE.CatmullRomCurve3([
+    // Trail entrance, mountain south face, summit, north valley, river.
+    // These are deliberately broad establishing views rather than a fly-by
+    // close to the ground, so spline interpolation cannot clip the terrain.
+    new THREE.Vector3(10, 34, -92),
+    new THREE.Vector3(116, 62, -30),
+    new THREE.Vector3(142, 84, 92),
+    new THREE.Vector3(52, 94, 152),
+    new THREE.Vector3(-92, 48, 132),
+    new THREE.Vector3(-132, 28, -42),
+    new THREE.Vector3(-72, 20, -112),
+  ], true, 'catmullrom', 0.22);
+  private readonly menuLookPath = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(58, 14, -10),
+    new THREE.Vector3(74, 38, 100),
+    new THREE.Vector3(68, 48, 112),
+    new THREE.Vector3(8, 12, 62),
+    new THREE.Vector3(-38, 4, 22),
+    new THREE.Vector3(-45, 1, -58),
+    new THREE.Vector3(-32, 1, -76),
+  ], true, 'catmullrom', 0.22);
+  private readonly _menuCameraPos = new THREE.Vector3();
+  private readonly _menuCameraLook = new THREE.Vector3();
   private buffer: SnapshotEntry[] = [];
   private vehicles = new Map<PlayerId, VehicleVisual>();
   private localId: PlayerId | null = null;
@@ -125,6 +152,7 @@ export class Scene {
 
     this.cam = new ChaseCamera(window.innerWidth / window.innerHeight);
     this.camera = this.cam.camera;
+    this.menuCamera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 700);
 
     this.effects = new VehicleEffects();
     this.scene.add(this.effects.group);
@@ -132,6 +160,8 @@ export class Scene {
 
     window.addEventListener('resize', () => {
       this.cam.setAspect(window.innerWidth / window.innerHeight);
+      this.menuCamera.aspect = window.innerWidth / window.innerHeight;
+      this.menuCamera.updateProjectionMatrix();
       this.view.setSize(window.innerWidth, window.innerHeight);
     });
   }
@@ -170,6 +200,18 @@ export class Scene {
 
   setLocalWinchLinks(links: readonly WinchLinkSnapshot[]): void {
     this.localWinches = [...links];
+  }
+
+  /** Draw the real map behind the main menu along a slow, closed panorama.
+   *  `animate=false` holds the opening composition for reduced-motion users. */
+  renderMenuPanorama(nowMs: number, startedAtMs: number, animate = true): void {
+    const PANORAMA_LOOP_MS = 96_000;
+    const t = animate ? ((Math.max(0, nowMs - startedAtMs) % PANORAMA_LOOP_MS) / PANORAMA_LOOP_MS) : 0;
+    this.menuCameraPath.getPointAt(t, this._menuCameraPos);
+    this.menuLookPath.getPointAt(t, this._menuCameraLook);
+    this.menuCamera.position.copy(this._menuCameraPos);
+    this.menuCamera.lookAt(this._menuCameraLook);
+    this.view.render(this.menuCamera);
   }
 
   setWinchTarget(point: { x: number; y: number; z: number } | null, valid = false): void {

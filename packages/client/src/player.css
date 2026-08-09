@@ -856,15 +856,29 @@ body.hide-driving-help #help {
 
 /* ── Start screen ───────────────────────────────────────────────── */
 
+/* The menu intentionally reveals the world canvas. Suppress every gameplay
+ * overlay while it is open so the panorama stays cinematic rather than
+ * showing the waiting HUD, minimap and driving controls through the grade. */
+body.start-screen-open #hud,
+body.start-screen-open #help,
+body.start-screen-open #minimap-wrap,
+body.start-screen-open #chat-log,
+body.start-screen-open #chat-input-wrap,
+body.start-screen-open #touch-controls,
+body.start-screen-open #workshop-prompt,
+body.start-screen-open #winch-reticle,
+body.start-screen-open #debug-panel {
+  display: none !important;
+}
+
 #start-overlay {
   position: fixed;
   inset: 0;
   z-index: 110;
   overflow: auto;
   background:
-    radial-gradient(circle at 76% 32%, rgba(191, 113, 23, 0.2), transparent 20%),
-    linear-gradient(105deg, rgba(5, 7, 6, 0.98) 0 42%, rgba(10, 13, 10, 0.76) 64%, rgba(5, 7, 6, 0.92)),
-    repeating-linear-gradient(164deg, #171c16 0 2px, #0c100c 2px 5px);
+    linear-gradient(90deg, rgba(5, 7, 6, 0.97) 0, rgba(5, 7, 6, 0.92) 37%, rgba(7, 9, 7, 0.56) 57%, rgba(5, 7, 6, 0.16) 100%),
+    linear-gradient(0deg, rgba(3, 4, 3, 0.68), transparent 28%, transparent 72%, rgba(3, 4, 3, 0.4));
   isolation: isolate;
 }
 
@@ -873,11 +887,9 @@ body.hide-driving-help #help {
   inset: 0;
   z-index: -2;
   background:
-    linear-gradient(168deg, transparent 0 53%, rgba(117, 70, 22, 0.24) 53.2% 53.8%, transparent 54%),
-    linear-gradient(12deg, transparent 0 64%, rgba(209, 134, 40, 0.1) 64.2% 64.6%, transparent 65%),
-    radial-gradient(ellipse at 78% 72%, transparent 0 16%, rgba(0, 0, 0, 0.58) 16.4% 21%, transparent 21.5%);
+    radial-gradient(circle at 76% 32%, rgba(214, 135, 42, 0.12), transparent 32%),
+    radial-gradient(ellipse at 78% 55%, transparent 28%, rgba(0, 0, 0, 0.34) 100%);
   content: "";
-  transform: scale(1.12);
 }
 
 #start-overlay::after {
@@ -898,6 +910,29 @@ body.hide-driving-help #help {
   opacity: 0.17;
   pointer-events: none;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.35'/%3E%3C/svg%3E");
+}
+
+.start-panorama-label {
+  position: fixed;
+  right: max(22px, env(safe-area-inset-right));
+  bottom: max(20px, env(safe-area-inset-bottom));
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(242, 240, 231, 0.7);
+  font: 700 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.12em;
+  text-shadow: 0 1px 4px #000;
+  text-transform: uppercase;
+}
+
+.start-panorama-label i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-amber-bright);
+  box-shadow: 0 0 9px rgba(255, 196, 87, 0.8);
 }
 
 #start-card {
@@ -1684,6 +1719,16 @@ body.touch #help {
 }
 
 @media (max-width: 760px) {
+  #start-overlay {
+    background:
+      linear-gradient(90deg, rgba(5, 7, 6, 0.94), rgba(5, 7, 6, 0.72)),
+      linear-gradient(0deg, rgba(3, 4, 3, 0.74), transparent 45%);
+  }
+
+  .start-panorama-label {
+    display: none;
+  }
+
   #start-card {
     width: min(600px, 100%);
     padding-right: 30px;

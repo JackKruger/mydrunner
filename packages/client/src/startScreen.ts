@@ -199,6 +199,7 @@ export function showStartScreen(config: StartScreenConfig): Promise<StartChoice>
     overlay.setAttribute('aria-labelledby', 'start-title');
     overlay.innerHTML = `
       <div class="start-grain" aria-hidden="true"></div>
+      <div class="start-panorama-label" aria-hidden="true"><i></i> Live view · Procedural Valley</div>
       <main id="start-card">
         <header class="start-brand">
           <div class="start-kicker">Australian backcountry</div>
@@ -212,10 +213,12 @@ export function showStartScreen(config: StartScreenConfig): Promise<StartChoice>
         </footer>
       </main>
     `;
+    document.body.classList.add('start-screen-open');
     document.body.appendChild(overlay);
     const panel = overlay.querySelector('#start-panel') as HTMLElement;
 
     const finish = (choice: StartChoice): void => {
+      document.body.classList.remove('start-screen-open');
       overlay.remove();
       resolve(choice);
     };
