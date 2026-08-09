@@ -46,7 +46,7 @@ test('start screen, join briefing, connected instruments, and radio retain their
   await expect(page.locator('.hud-speed-unit')).toHaveText('km/h');
   await expect(page.locator('#hud-gear-value')).toHaveText(/[NR1-9]/);
   await expect(page.locator('#hud-surface')).not.toHaveText('—');
-  await expect(page.locator('#minimap')).toBeVisible();
+  await expect(page.getByRole('button', { name: /MENU ESC/ })).toBeVisible();
   await expect.poll(() => page.evaluate(() => ({
     name: localStorage.getItem('mydrunner.name'),
     car: localStorage.getItem('mydrunner.carKind'),
@@ -102,13 +102,10 @@ test('desktop and touch layouts keep instruments and controls separated', async 
   await page.goto('/?auto=1&name=layout-check');
   await waitConnected(page);
 
-  const session = page.locator('.hud-session');
-  const minimap = page.locator('#minimap-wrap');
+  const menuButton = page.locator('#game-menu-button');
   const cluster = page.locator('.hud-cluster');
   const shifter = page.locator('#hud-shifter');
-  const help = page.locator('#help');
-  expect(await boxesOverlap(session, minimap)).toBe(false);
-  expect(await boxesOverlap(cluster, help)).toBe(false);
+  await expect(page.locator('.hud-session')).toBeHidden();
   expect(await boxesOverlap(cluster, shifter)).toBe(false);
 
   await page.getByRole('button', { name: 'Third gear' }).click();
@@ -137,10 +134,21 @@ test('desktop and touch layouts keep instruments and controls separated', async 
   expect(await boxesOverlap(page.locator('#chat-input-wrap'), cluster)).toBe(false);
   await page.keyboard.press('Escape');
 
+  await menuButton.click();
+  await expect(page.getByRole('dialog', { name: 'Game menu' })).toBeVisible();
+  await expect(page.locator('#full-map')).toBeVisible();
+  await page.getByRole('button', { name: 'PLAYERS' }).click();
+  await expect(page.locator('#game-menu-players')).toContainText('layout-check');
+  await page.getByRole('button', { name: 'OBJECTIVES' }).click();
+  await expect(page.getByText('NO ACTIVE OBJECTIVES')).toBeVisible();
+  await page.getByRole('button', { name: 'SETTINGS' }).click();
+  await expect(page.getByText('MINIMAL HUD')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Game menu' })).toBeHidden();
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => document.body.classList.add('touch'));
-  expect(await boxesOverlap(session, minimap)).toBe(false);
-  expect(await boxesOverlap(cluster, minimap)).toBe(false);
+  expect(await boxesOverlap(cluster, menuButton)).toBe(false);
   expect(await boxesOverlap(cluster, page.locator('#steer-pad'))).toBe(false);
   expect(await boxesOverlap(cluster, page.locator('#pedal-stack'))).toBe(false);
   expect(await boxesOverlap(cluster, shifter)).toBe(false);
@@ -160,10 +168,9 @@ test('desktop and touch layouts keep instruments and controls separated', async 
   await expect(handbrake).toHaveAttribute('aria-pressed', 'false');
 
   await page.setViewportSize({ width: 844, height: 390 });
-  expect(await boxesOverlap(session, minimap)).toBe(false);
   expect(await boxesOverlap(cluster, page.locator('#steer-pad'))).toBe(false);
   expect(await boxesOverlap(cluster, page.locator('#pedal-stack'))).toBe(false);
-  expect(await boxesOverlap(page.locator('#aux-row'), minimap)).toBe(false);
+  expect(await boxesOverlap(page.locator('#aux-row'), menuButton)).toBe(false);
   expect(await boxesOverlap(cluster, shifter)).toBe(false);
   expect(await boxesOverlap(shifter, page.locator('#pedal-stack'))).toBe(false);
 

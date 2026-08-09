@@ -707,6 +707,7 @@ export class Scene {
       entry.z = v.group.position.z;
       entry.yaw = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y));
       entry.isLocal = id === this.localId;
+      entry.label = v.nameplateText || (entry.isLocal ? 'Driver' : id);
       mi += 1;
     }
     this._minimapBuf.length = mi;

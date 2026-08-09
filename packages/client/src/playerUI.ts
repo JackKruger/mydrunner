@@ -133,7 +133,7 @@ export class PlayerUI {
 
     root.setAttribute('aria-label', 'Rally driving instruments');
     root.innerHTML = `
-      <section class="hud-session instrument-panel" aria-label="Session status">
+      <section class="hud-session instrument-panel" aria-label="Session status" hidden>
         <div class="hud-panel-kicker">SESSION</div>
         <div id="hud-connection" class="hud-connection" role="status" aria-live="polite" aria-atomic="true">
           <span class="hud-status-lamp" aria-hidden="true"></span>

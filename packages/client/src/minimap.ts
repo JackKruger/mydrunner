@@ -13,6 +13,7 @@ export interface MinimapPlayer {
   /** World yaw (rad) - only used for the local player's heading wedge. */
   yaw: number;
   isLocal: boolean;
+  label?: string;
 }
 
 export class Minimap {
@@ -20,27 +21,85 @@ export class Minimap {
   private ctx: CanvasRenderingContext2D;
   private base: HTMLCanvasElement | null = null;
   private worldSize = 1;
+  private readonly fullCanvas: HTMLCanvasElement;
+  private readonly playerList: HTMLElement;
+  private readonly overlay: HTMLElement;
+  private open = false;
 
   constructor() {
     const wrap = document.createElement('aside');
     wrap.id = 'minimap-wrap';
     wrap.className = 'instrument-panel';
-    wrap.setAttribute('aria-label', 'Stage minimap');
+    wrap.setAttribute('aria-label', 'Game menu shortcut');
     wrap.innerHTML = `
-      <div class="minimap-header">
-        <span class="minimap-title">Stage map</span>
-        <span class="minimap-compass" aria-hidden="true">N ↑</span>
-      </div>
+      <button id="game-menu-button" type="button" aria-haspopup="dialog">MENU <kbd>ESC</kbd></button>
     `;
     this.canvas = document.createElement('canvas');
     this.canvas.id = 'minimap';
     this.canvas.width = SIZE_PX;
     this.canvas.height = SIZE_PX;
     this.canvas.setAttribute('aria-label', 'Terrain and player positions');
+    this.canvas.hidden = true;
     wrap.appendChild(this.canvas);
     document.body.appendChild(wrap);
     this.ctx = this.canvas.getContext('2d')!;
+    this.overlay = document.createElement('div');
+    this.overlay.id = 'game-menu';
+    this.overlay.hidden = true;
+    this.overlay.innerHTML = `
+      <div class="game-menu-shell" role="dialog" aria-modal="true" aria-label="Game menu">
+        <header><div><span class="hud-field-label">MYDRUNNER</span><h1>FIELD MENU</h1></div><button class="game-menu-close" type="button" aria-label="Close game menu">CLOSE <kbd>ESC</kbd></button></header>
+        <nav aria-label="Game menu sections">
+          <button type="button" data-menu-tab="map" aria-selected="true">MAP</button>
+          <button type="button" data-menu-tab="players" aria-selected="false">PLAYERS</button>
+          <button type="button" data-menu-tab="objectives" aria-selected="false">OBJECTIVES</button>
+          <button type="button" data-menu-tab="settings" aria-selected="false">SETTINGS</button>
+        </nav>
+        <main>
+          <section data-menu-panel="map"><div class="full-map-heading"><div><span class="hud-field-label">AREA OVERVIEW</span><h2>FULL STAGE MAP</h2></div><span class="full-map-north">N ↑</span></div><canvas id="full-map" width="640" height="640" aria-label="Full terrain map and player positions"></canvas></section>
+          <section data-menu-panel="players" hidden><span class="hud-field-label">SESSION ROSTER</span><h2>PLAYERS</h2><div id="game-menu-players" class="game-menu-players"></div></section>
+          <section data-menu-panel="objectives" hidden><span class="hud-field-label">MISSION LOG</span><h2>OBJECTIVES</h2><div class="objectives-empty"><strong>NO ACTIVE OBJECTIVES</strong><p>Contracts and trail objectives will appear here in a future gameplay update.</p></div></section>
+          <section data-menu-panel="settings" hidden><span class="hud-field-label">LOCAL OPTIONS</span><h2>SETTINGS</h2><label class="menu-setting"><span><strong>MINIMAL HUD</strong><small>Hide driving instruments for a clean view.</small></span><input type="checkbox" data-setting="minimal-hud"></label><label class="menu-setting"><span><strong>MUTE ENGINE AUDIO</strong><small>Toggle vehicle audio on this device.</small></span><input type="checkbox" data-setting="mute"></label></section>
+        </main>
+        <footer>Driving continues while this menu is open.</footer>
+      </div>`;
+    document.body.appendChild(this.overlay);
+    this.fullCanvas = this.overlay.querySelector('#full-map')!;
+    this.playerList = this.overlay.querySelector('#game-menu-players')!;
+    wrap.querySelector('button')!.addEventListener('click', () => this.toggle());
+    this.overlay.querySelector('.game-menu-close')!.addEventListener('click', () => this.toggle(false));
+    for (const tab of this.overlay.querySelectorAll<HTMLButtonElement>('[data-menu-tab]')) {
+      tab.addEventListener('click', () => this.selectTab(tab.dataset.menuTab!));
+    }
+    const minimal = this.overlay.querySelector<HTMLInputElement>('[data-setting="minimal-hud"]')!;
+    minimal.checked = localStorage.getItem('mydrunner.minimalHud') === 'true';
+    document.body.classList.toggle('minimal-hud', minimal.checked);
+    minimal.addEventListener('change', () => {
+      document.body.classList.toggle('minimal-hud', minimal.checked);
+      localStorage.setItem('mydrunner.minimalHud', String(minimal.checked));
+    });
+    this.overlay.querySelector<HTMLInputElement>('[data-setting="mute"]')!.addEventListener('change', () => {
+      window.dispatchEvent(new CustomEvent('game-menu-mute'));
+    });
+    window.addEventListener('keydown', (event) => {
+      if (event.code !== 'Escape' || document.body.classList.contains('start-screen-open')) return;
+      if (!this.open && document.querySelector('#chat-input-wrap.open')) return;
+      event.preventDefault();
+      this.toggle();
+    });
     this.drawStandby();
+  }
+
+  private toggle(force = !this.open): void {
+    this.open = force;
+    this.overlay.hidden = !force;
+    document.body.classList.toggle('game-menu-open', force);
+    if (force) this.overlay.querySelector<HTMLButtonElement>('[data-menu-tab][aria-selected="true"]')?.focus();
+  }
+
+  private selectTab(id: string): void {
+    for (const tab of this.overlay.querySelectorAll<HTMLButtonElement>('[data-menu-tab]')) tab.setAttribute('aria-selected', String(tab.dataset.menuTab === id));
+    for (const panel of this.overlay.querySelectorAll<HTMLElement>('[data-menu-panel]')) panel.hidden = panel.dataset.menuPanel !== id;
   }
 
   private drawStandby(): void {
@@ -150,5 +209,16 @@ export class Minimap {
         ctx.stroke();
       }
     }
+    if (!this.open) return;
+    const full = this.fullCanvas.getContext('2d')!;
+    full.imageSmoothingEnabled = true;
+    full.drawImage(this.canvas, 0, 0, this.fullCanvas.width, this.fullCanvas.height);
+    this.playerList.replaceChildren(...players.map((player) => {
+      const row = document.createElement('div');
+      row.className = 'game-menu-player';
+      row.innerHTML = `<span class="player-marker ${player.isLocal ? 'local' : ''}"></span><strong></strong><small>${player.isLocal ? 'YOU' : 'ONLINE'}</small>`;
+      row.querySelector('strong')!.textContent = player.label || (player.isLocal ? 'Driver' : 'Trail driver');
+      return row;
+    }));
   }
 }
