@@ -535,18 +535,11 @@ export class Scene {
         this._qa.slerp(this._qb, t);
         vis.group.quaternion.copy(this._qa);
 
-        // Interpolate axle DOFs from the snapshot pair. Falls back to
-        // rest if the server omitted axles (legacy raycast vehicle).
-        const axA = pa.vehicle.axles ?? null;
-        const axB = pb.vehicle.axles ?? axA;
-        this._axleBuf[0]!.rideY = 0; this._axleBuf[0]!.rollAngle = 0;
-        this._axleBuf[1]!.rideY = 0; this._axleBuf[1]!.rollAngle = 0;
-        if (axA && axB) {
-          for (let i = 0; i < 2; i++) {
-            const a0 = axA[i]!, a1 = axB[i]!;
-            this._axleBuf[i]!.rideY = a0.rideY + (a1.rideY - a0.rideY) * t;
-            this._axleBuf[i]!.rollAngle = a0.rollAngle + (a1.rollAngle - a0.rollAngle) * t;
-          }
+        // Interpolate axle DOFs from the snapshot pair.
+        for (let i = 0; i < 2; i++) {
+          const a0 = pa.vehicle.axles[i]!, a1 = pb.vehicle.axles[i]!;
+          this._axleBuf[i]!.rideY = a0.rideY + (a1.rideY - a0.rideY) * t;
+          this._axleBuf[i]!.rollAngle = a0.rollAngle + (a1.rollAngle - a0.rollAngle) * t;
         }
         this.poseAxles(vis, this._axleBuf);
 

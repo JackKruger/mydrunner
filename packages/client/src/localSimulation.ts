@@ -63,12 +63,10 @@ function copyVehicleState(from: VehicleState, to: LocalSimulationState): void {
     dst.suspensionLength = src.suspensionLength;
   }
   const axles = from.axles;
-  if (axles) {
-    to.axles[0].rideY = axles[0].rideY;
-    to.axles[0].rollAngle = axles[0].rollAngle;
-    to.axles[1].rideY = axles[1].rideY;
-    to.axles[1].rollAngle = axles[1].rollAngle;
-  }
+  to.axles[0].rideY = axles[0].rideY;
+  to.axles[0].rollAngle = axles[0].rollAngle;
+  to.axles[1].rideY = axles[1].rideY;
+  to.axles[1].rollAngle = axles[1].rollAngle;
 }
 
 function copyState(from: LocalSimulationState, to: LocalSimulationState): void {

@@ -1,9 +1,10 @@
 import { encode as msgpackEncode, decode as msgpackDecode } from '@msgpack/msgpack';
 import {
   VEHICLE_BASE_IDS,
-  VEHICLE_PART_CATALOGS,
+  VEHICLE_PART_SLOTS,
   createStockBuild,
   normalizeVehicleBuildDetailed,
+  partListsFor,
 } from '../vehicleBuild.js';
 import type {
   PlayerId,
@@ -169,12 +170,8 @@ function packVehicle(v: VehicleState): number[] {
       q(w.angVel, WHEEL_ANGVEL_SCALE),
     );
   }
-  if (v.axles) {
-    for (const a of v.axles) {
-      out.push(q(a.rideY, RIDEY_SCALE), q(a.rollAngle, ROLL_SCALE));
-    }
-  } else {
-    out.push(0, 0, 0, 0);
+  for (const a of v.axles) {
+    out.push(q(a.rideY, RIDEY_SCALE), q(a.rollAngle, ROLL_SCALE));
   }
   return out;
 }
@@ -254,31 +251,29 @@ function unpackVehicle(arr: unknown[]): VehicleState {
   };
 }
 
-const BUILD_TUPLE_LENGTH = 13;
-
-function selectedIndex(build: VehicleBuild, key: keyof VehicleBuild, list: readonly { id: string }[]): number {
-  const value = build[key];
-  return list.findIndex((part) => part.id === value);
-}
+// [baseId, paintColor, paintFinish, ...one index per part slot, lockers].
+// Both ends walk VEHICLE_PART_SLOTS rather than restating the nine slot
+// names in order: the two lists were hand-written and hand-ordered, and a
+// slot inserted into one but not the other shifts every later index by one.
+// Nothing would throw - every field would decode as its neighbour and each
+// remote truck would silently wear somebody else's parts.
+const BUILD_HEADER_LENGTH = 3;
+const BUILD_TUPLE_LENGTH = BUILD_HEADER_LENGTH + VEHICLE_PART_SLOTS.length + 1;
 
 function packBuild(build: VehicleBuild): number[] {
   const result = normalizeVehicleBuildDetailed(build).build;
-  const catalog = VEHICLE_PART_CATALOGS[result.baseId];
-  return [
+  const lists = partListsFor(result.baseId);
+  const out: number[] = [
     VEHICLE_BASE_IDS.indexOf(result.baseId),
     Number.parseInt(result.paintColor.slice(1), 16),
     result.paintFinish === 'satin' ? 1 : result.paintFinish === 'matte' ? 2 : 0,
-    selectedIndex(result, 'suspensionId', catalog.suspension),
-    selectedIndex(result, 'axleId', catalog.axles),
-    selectedIndex(result, 'tireId', catalog.tires),
-    selectedIndex(result, 'wheelId', catalog.wheels),
-    selectedIndex(result, 'frontBarId', catalog.frontBars),
-    selectedIndex(result, 'winchId', catalog.winches),
-    selectedIndex(result, 'snorkelId', catalog.snorkels),
-    selectedIndex(result, 'roofId', catalog.roofs),
-    selectedIndex(result, 'rearBodyId', catalog.rearBodies),
-    (result.frontLocker ? 1 : 0) | (result.rearLocker ? 2 : 0),
   ];
+  for (let i = 0; i < VEHICLE_PART_SLOTS.length; i++) {
+    const selected = result[VEHICLE_PART_SLOTS[i]!];
+    out.push(lists[i]!.findIndex((part) => part.id === selected));
+  }
+  out.push((result.frontLocker ? 1 : 0) | (result.rearLocker ? 2 : 0));
+  return out;
 }
 
 function unpackBuild(value: unknown): VehicleBuild {
@@ -288,33 +283,23 @@ function unpackBuild(value: unknown): VehicleBuild {
   const baseId = VEHICLE_BASE_IDS[value[0] as number];
   const paint = value[1] as number;
   const finish = value[2] as number;
-  const lockers = value[12] as number;
+  const lockers = value[BUILD_TUPLE_LENGTH - 1] as number;
   if (!baseId || paint < 0 || paint > 0xffffff || finish < 0 || finish > 2 || lockers < 0 || lockers > 3) {
     throw new Error('build: out of range');
   }
-  const catalog = VEHICLE_PART_CATALOGS[baseId];
-  const lists = [
-    catalog.suspension, catalog.axles, catalog.tires, catalog.wheels, catalog.frontBars,
-    catalog.winches, catalog.snorkels, catalog.roofs, catalog.rearBodies,
-  ];
-  const selected = lists.map((list, index) => list[value[index + 3] as number]?.id);
-  if (selected.some((id) => !id)) throw new Error('build: part index out of range');
-  const raw = {
+  const lists = partListsFor(baseId);
+  const raw: Record<string, unknown> = {
     ...createStockBuild(baseId),
     paintColor: `#${paint.toString(16).padStart(6, '0')}`,
     paintFinish: finish === 1 ? 'satin' : finish === 2 ? 'matte' : 'gloss',
-    suspensionId: selected[0],
-    axleId: selected[1],
-    tireId: selected[2],
-    wheelId: selected[3],
-    frontBarId: selected[4],
-    winchId: selected[5],
-    snorkelId: selected[6],
-    roofId: selected[7],
-    rearBodyId: selected[8],
     frontLocker: (lockers & 1) !== 0,
     rearLocker: (lockers & 2) !== 0,
   };
+  for (let i = 0; i < VEHICLE_PART_SLOTS.length; i++) {
+    const id = lists[i]![value[BUILD_HEADER_LENGTH + i] as number]?.id;
+    if (!id) throw new Error('build: part index out of range');
+    raw[VEHICLE_PART_SLOTS[i]!] = id;
+  }
   const result = normalizeVehicleBuildDetailed(raw);
   if (result.issues.length > 0) throw new Error(`build: incompatible (${result.issues[0]})`);
   return result.build;
