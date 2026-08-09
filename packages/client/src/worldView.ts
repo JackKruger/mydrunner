@@ -177,7 +177,7 @@ export class WorldView {
       this.scene.remove(this.obstacles.group);
       disposeObject3D(this.obstacles.group);
     }
-    this.obstacles = new Obstacles(list);
+    this.obstacles = new Obstacles(list, this.quality);
     this.scene.add(this.obstacles.group);
   }
 
@@ -219,6 +219,9 @@ export class WorldView {
    *  need the sky follow, so it belongs here rather than in each loop. */
   render(camera: THREE.Camera): void {
     this.sky.update(camera);
+    // The one place per frame holding both the camera and the obstacle set.
+    // A no-op unless the tier asks for culling.
+    this.obstacles?.updateVisibility(camera.position.x, camera.position.z);
     this.waterMeshRef?.update();
     this.renderer.render(this.scene, camera);
   }
