@@ -109,6 +109,12 @@ const frameDiag = {
   simulationMsSum: 0,
   simulationMsMax: 0,
 };
+const e2ePhysicsPerf = new URLSearchParams(window.location.search).has('e2ePerf')
+  ? { samples: new Float32Array(4096), count: 0 }
+  : null;
+if (e2ePhysicsPerf) {
+  (window as unknown as { __physicsPerf: typeof e2ePhysicsPerf }).__physicsPerf = e2ePhysicsPerf;
+}
 /** Draw-call and triangle counts for the frame just rendered.
  *
  *  These are the numbers the batching work is judged by — "fewer draw calls"
@@ -795,7 +801,17 @@ function frame(): void {
     while (inputAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
       const input = sampleInput();
       if ((input.buttons & BUTTON_RESET) !== 0) winchController.detach();
-      if (localSimulation) localSimulation.step(input);
+      if (localSimulation) {
+        if (e2ePhysicsPerf) {
+          const stepStarted = performance.now();
+          localSimulation.step(input);
+          if (e2ePhysicsPerf.count < e2ePhysicsPerf.samples.length) {
+            e2ePhysicsPerf.samples[e2ePhysicsPerf.count++] = performance.now() - stepStarted;
+          }
+        } else {
+          localSimulation.step(input);
+        }
+      }
       const rutStamp = !previewMode ? localSimulation?.createRutStampCandidate() : null;
       if (rutStamp) {
         scene.predictRutStamp(rutStamp);

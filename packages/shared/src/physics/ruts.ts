@@ -57,7 +57,10 @@ export class SparseRutField {
     return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * tz;
   }
 
-  applyStamp(stamp: Pick<RutStamp, 'x' | 'z' | 'heading' | 'radiusLong' | 'radiusLat' | 'depth'>): RutDirtyTile[] {
+  applyStamp(
+    stamp: Pick<RutStamp, 'x' | 'z' | 'heading' | 'radiusLong' | 'radiusLat' | 'depth'>,
+    restrictTo?: ReadonlySet<string>,
+  ): RutDirtyTile[] {
     const longRadius = clamp(stamp.radiusLong, RUT_CELL_SIZE, 1.5);
     const latRadius = clamp(stamp.radiusLat, RUT_CELL_SIZE * 0.5, 0.8);
     const maxRadius = Math.max(longRadius, latRadius);
@@ -80,9 +83,10 @@ export class SparseRutField {
           + (across * across) / (latRadius * latRadius);
         if (q > 1) continue;
         const falloff = (1 - q) * (1 - q);
+        const tileX = floorDiv(gx, RUT_TILE_CELLS);
+        const tileZ = floorDiv(gz, RUT_TILE_CELLS);
+        if (restrictTo && !restrictTo.has(tileKey(tileX, tileZ))) continue;
         if (this.addDepthAtCell(gx, gz, stamp.depth * falloff)) {
-          const tileX = floorDiv(gx, RUT_TILE_CELLS);
-          const tileZ = floorDiv(gz, RUT_TILE_CELLS);
           dirty.set(tileKey(tileX, tileZ), { tileX, tileZ });
         }
       }
@@ -97,6 +101,15 @@ export class SparseRutField {
   }
 
   clear(): void { this.tiles.clear(); }
+
+  deleteTile(tileX: number, tileZ: number): void {
+    this.tiles.delete(tileKey(tileX, tileZ));
+  }
+
+  tileBytes(tileX: number, tileZ: number): Uint8Array | undefined {
+    const bytes = this.tiles.get(tileKey(tileX, tileZ));
+    return bytes ? new Uint8Array(bytes) : undefined;
+  }
 
   exportTiles(): RutTilePayload[] {
     const result: RutTilePayload[] = [];
@@ -170,24 +183,21 @@ export class RutSessionReplica implements RutDepthField {
   }
 
   applyTile(tile: RutTilePayload): RutDirtyTile[] {
-    const dirty = this.authoritative.applyTile(tile);
-    this.rebuildCombined();
-    return dirty;
+    this.authoritative.applyTile(tile);
+    return this.rebuildCombinedTiles([{ tileX: tile.tileX, tileZ: tile.tileZ }]);
   }
 
   applyAuthoritative(stamps: readonly RutStamp[]): RutDirtyTile[] {
-    const dirty = new Map<string, RutDirtyTile>();
+    const affected = new Map<string, RutDirtyTile>();
     for (const stamp of stamps) {
       const id = stampKey(stamp.ownerId, stamp.ownerSequence);
       if (this.applied.has(id)) continue;
       this.applied.add(id);
       if (stamp.ownerId === this.localOwnerId) this.pending.delete(stamp.ownerSequence);
-      for (const tile of this.authoritative.applyStamp(stamp)) {
-        dirty.set(tileKey(tile.tileX, tile.tileZ), tile);
-      }
+      this.authoritative.applyStamp(stamp);
+      for (const tile of stampTiles(stamp, this.worldSize)) affected.set(tileKey(tile.tileX, tile.tileZ), tile);
     }
-    if (dirty.size > 0) this.rebuildCombined();
-    return [...dirty.values()].sort((a, b) => a.tileZ - b.tileZ || a.tileX - b.tileX);
+    return this.rebuildCombinedTiles([...affected.values()]);
   }
 
   resolve(ownerSequence: number, accepted: boolean, globalSequence?: number): RutDirtyTile[] {
@@ -210,18 +220,31 @@ export class RutSessionReplica implements RutDepthField {
         this.authoritative.applyStamp(stamp);
       }
     }
-    this.rebuildCombined();
-    return dirty;
+    return this.rebuildCombinedTiles(dirty);
   }
 
   exportTiles(): RutTilePayload[] { return this.combined.exportTiles(); }
   exportAuthoritativeTiles(): RutTilePayload[] { return this.authoritative.exportTiles(); }
 
-  private rebuildCombined(): void {
-    this.combined.clear();
-    for (const tile of this.authoritative.exportTiles()) this.combined.applyTile(tile);
+  private rebuildCombinedTiles(candidates: readonly RutDirtyTile[]): RutDirtyTile[] {
+    if (candidates.length === 0) return [];
+    const unique = new Map<string, RutDirtyTile>();
+    for (const tile of candidates) unique.set(tileKey(tile.tileX, tile.tileZ), tile);
+    const keys = new Set(unique.keys());
+    const before = new Map<string, Uint8Array | undefined>();
+    for (const [key, tile] of unique) {
+      before.set(key, this.combined.tileBytes(tile.tileX, tile.tileZ));
+      const authoritative = this.authoritative.tileBytes(tile.tileX, tile.tileZ);
+      if (authoritative) this.combined.applyTile({ ...tile, depths: authoritative });
+      else this.combined.deleteTile(tile.tileX, tile.tileZ);
+    }
     const ordered = [...this.pending.values()].sort((a, b) => a.ownerSequence - b.ownerSequence);
-    for (const stamp of ordered) this.combined.applyStamp(stamp);
+    for (const stamp of ordered) this.combined.applyStamp(stamp, keys);
+    const changed: RutDirtyTile[] = [];
+    for (const [key, tile] of unique) {
+      if (!sameBytes(before.get(key), this.combined.tileBytes(tile.tileX, tile.tileZ))) changed.push(tile);
+    }
+    return changed.sort((a, b) => a.tileZ - b.tileZ || a.tileX - b.tileX);
   }
 }
 
@@ -248,6 +271,12 @@ function stampKey(ownerId: string, ownerSequence: number): string {
 }
 
 function tileKey(x: number, z: number): string { return `${x},${z}`; }
+function sameBytes(a: Uint8Array | undefined, b: Uint8Array | undefined): boolean {
+  if (!a || !b) return a === b;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
 function floorDiv(value: number, divisor: number): number { return Math.floor(value / divisor); }
 function positiveMod(value: number, divisor: number): number { return ((value % divisor) + divisor) % divisor; }
 function clamp(value: number, min: number, max: number): number { return value < min ? min : value > max ? max : value; }

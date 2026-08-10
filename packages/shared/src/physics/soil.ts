@@ -32,6 +32,7 @@ export function estimateContactArea(
   return clamp(ideal, minimum, maximum);
 }
 
+/** @hotloop */
 export function stepSoftGround(
   state: SoftGroundState,
   kind: SoilKind,

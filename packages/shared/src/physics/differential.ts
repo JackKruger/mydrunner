@@ -33,6 +33,7 @@ export function drivenCarrierSpeed(
  * drivetrain controls; once 4H/4L is engaged the two carriers are one shaft.
  * The impulse therefore removes all relative speed while conserving total
  * four-wheel angular momentum. */
+/** @hotloop */
 export function solveCenterTransferImpulse(
   frontCarrier: number,
   rearCarrier: number,
@@ -60,6 +61,7 @@ export function solveCenterTransferImpulse(
  * relative speed while conserving wheel angular momentum. LSD uses the same
  * solution but caps the transferable reaction with preload and TBR.
  */
+/** @hotloop */
 export function solveDifferentialAngularImpulse(
   leftAngularVelocity: number,
   rightAngularVelocity: number,

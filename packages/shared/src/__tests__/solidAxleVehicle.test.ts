@@ -611,6 +611,43 @@ describe('solid-axle vehicle: drivetrain', () => {
 });
 
 describe('solid-axle vehicle: tyre pressure controls', () => {
+  it('adds sealed-road drag and softens steering response when aired down', () => {
+    const high = makeWorld();
+    const low = makeWorld();
+    settle(high.world, 120);
+    settle(low.world, 120);
+    low.vehicle.setInput({ ...EMPTY_INPUT, seq: 1, pressureAdjust: -1 });
+    settle(low.world, 8 * 60);
+    settle(high.world, 8 * 60);
+    expect(low.vehicle.pressureStatus().currentPsi).toBeLessThan(
+      high.vehicle.pressureStatus().currentPsi - 10,
+    );
+
+    high.vehicle.body.setLinvel({ x: 0, y: 0, z: 8 }, true);
+    low.vehicle.body.setLinvel({ x: 0, y: 0, z: 8 }, true);
+    high.vehicle.setInput({ ...EMPTY_INPUT, seq: 2 });
+    low.vehicle.setInput({ ...EMPTY_INPUT, seq: 2 });
+    settle(high.world, 2 * 60);
+    settle(low.world, 2 * 60);
+    const highCoast = Math.hypot(high.vehicle.getState().linVel.x, high.vehicle.getState().linVel.z);
+    const lowCoast = Math.hypot(low.vehicle.getState().linVel.x, low.vehicle.getState().linVel.z);
+    expect(lowCoast).toBeLessThan(highCoast);
+
+    high.vehicle.body.setLinvel({ x: 0, y: 0, z: 7 }, true);
+    low.vehicle.body.setLinvel({ x: 0, y: 0, z: 7 }, true);
+    const highYawStart = quatYaw(high.vehicle.getState().rotation);
+    const lowYawStart = quatYaw(low.vehicle.getState().rotation);
+    high.vehicle.setInput({ ...EMPTY_INPUT, seq: 3, steer: 0.7 });
+    low.vehicle.setInput({ ...EMPTY_INPUT, seq: 3, steer: 0.7 });
+    settle(high.world, 60);
+    settle(low.world, 60);
+    const highYaw = Math.abs(angleDiff(quatYaw(high.vehicle.getState().rotation), highYawStart));
+    const lowYaw = Math.abs(angleDiff(quatYaw(low.vehicle.getState().rotation), lowYawStart));
+    expect(lowYaw).toBeLessThan(highYaw);
+    high.world.dispose();
+    low.world.dispose();
+  });
+
   it('airs down at 2 psi/s, inflates at 1 psi/s, and preserves pressure on recovery', () => {
     const { world, vehicle } = makeWorld();
     settle(world, 120);

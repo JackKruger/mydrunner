@@ -49,6 +49,7 @@ export interface AxleState {
   rideDof: [number, number];
   rollDof: [number, number];
   stepResult: StepAxleResult;
+  travelStops: [TravelStopForce, TravelStopForce];
 }
 
 export function createAxleState(geom: AxleGeom): AxleState {
@@ -67,6 +68,10 @@ export function createAxleState(geom: AxleGeom): AxleState {
     rideDof: [0, 0],
     rollDof: [0, 0],
     stepResult: { chassisRideForce: 0, chassisRollTorque: 0 },
+    travelStops: [
+      { bumpForce: 0, reboundForce: 0, totalForce: 0 },
+      { bumpForce: 0, reboundForce: 0, totalForce: 0 },
+    ],
   };
 }
 
@@ -87,6 +92,11 @@ export function resetAxleState(s: AxleState): void {
   s.rollDof[1] = 0;
   s.stepResult.chassisRideForce = 0;
   s.stepResult.chassisRollTorque = 0;
+  for (const stop of s.travelStops) {
+    stop.bumpForce = 0;
+    stop.reboundForce = 0;
+    stop.totalForce = 0;
+  }
 }
 
 export interface StepAxleResult {
@@ -148,11 +158,13 @@ export interface TravelStopForce {
 }
 
 /** Progressive bump/rebound stops expressed as wheel-end forces. */
+/** @hotloop */
 export function progressiveTravelStopForce(
   travel: number,
   bumpMax: number,
   droopMax: number,
   mainSpringRate: number,
+  out: TravelStopForce = { bumpForce: 0, reboundForce: 0, totalForce: 0 },
 ): TravelStopForce {
   const bumpStart = Math.max(0, bumpMax) * 0.80;
   const bumpRange = Math.max(1e-6, Math.max(0, bumpMax) - bumpStart);
@@ -165,7 +177,29 @@ export function progressiveTravelStopForce(
   const reboundForce = reboundT > 0
     ? -1.5 * Math.max(0, mainSpringRate) * reboundRange * reboundT * reboundT
     : 0;
-  return { bumpForce, reboundForce, totalForce: bumpForce + reboundForce };
+  out.bumpForce = bumpForce;
+  out.reboundForce = reboundForce;
+  out.totalForce = bumpForce + reboundForce;
+  return out;
+}
+
+/** Apply the force opposite to chassis-mounted travel stops to the beam's
+ * generalized heave and roll velocities. This is the unsprung half of an
+ * internal reaction pair; the caller applies the supplied forces to the
+ * chassis at the corresponding mounts. */
+/** @hotloop */
+export function applyTravelStopReactionToAxle(
+  s: AxleState,
+  leftChassisForce: number,
+  rightChassisForce: number,
+  dt: number,
+): void {
+  if (dt <= 0) return;
+  const axleForce = -(leftChassisForce + rightChassisForce);
+  s.rideVelY += axleForce / Math.max(1e-6, s.geom.axleMass) * dt;
+  const chassisTorque = -s.geom.trackHalf * leftChassisForce
+    + s.geom.trackHalf * rightChassisForce;
+  s.rollVel += -chassisTorque / Math.max(1e-6, s.geom.axleRollInertia) * dt;
 }
 
 /** Convert relative axle articulation into paired wheel-end load transfer.
@@ -202,6 +236,7 @@ export function computeAntiRollLoadTransfer(input: AntiRollLoadInput): AntiRollL
  *  unsprung mass/inertia instead of snapping straight to that target.
  *  Returns the per-tick reaction force on the chassis (ride spring +
  *  damper) and roll torque (only non-zero past the articulation cap). */
+/** @hotloop */
 export function stepAxle(
   s: AxleState,
   input: StepAxleInputs,

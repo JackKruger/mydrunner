@@ -32,6 +32,33 @@ function remoteAt(
 }
 
 describe('LocalSimulation', () => {
+  it('preserves pressure on recovery but replacement and reconnect start nominal', () => {
+    const map = Maps.applyMapDoc(Maps.proceduralDoc());
+    const spawn = Maps.resolveSpawn(map, 0, 'ridgeback');
+    const build = createStockBuild('ridgeback');
+    const sim = new LocalSimulation(map, spawn, build);
+    for (let seq = 1; seq <= 8 * 60; seq++) {
+      sim.step({ ...EMPTY_INPUT, seq, pressureAdjust: -1 });
+    }
+    const airedDown = sim.pressureStatus().currentPsi;
+    expect(airedDown).toBeLessThan(sim.pressureStatus().nominalPsi);
+    sim.resetTo(spawn);
+    expect(sim.pressureStatus().currentPsi).toBeCloseTo(airedDown, 8);
+
+    const replacement = new LocalSimulation(map, spawn, {
+      ...build,
+      tireId: 'ridgeback.tire.mt-35-wide',
+    });
+    expect(replacement.pressureStatus().currentPsi).toBe(
+      replacement.pressureStatus().nominalPsi,
+    );
+    const reconnect = new LocalSimulation(map, spawn, build);
+    expect(reconnect.pressureStatus().currentPsi).toBe(reconnect.pressureStatus().nominalPsi);
+    sim.dispose();
+    replacement.dispose();
+    reconnect.dispose();
+  });
+
   it('interpolates between completed fixed steps', () => {
     const { sim } = makeSimulation();
     const before = { ...sim.state(1).position };

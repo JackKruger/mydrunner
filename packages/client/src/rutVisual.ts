@@ -1,11 +1,13 @@
-// Persistent room-session rut overlay. The physics field is deliberately
-// independent from the coarse terrain collider; this mesh consumes the same
-// quantized tiles and feathers the 25 cm samples into continuous wet tracks.
+// Sparse room-session rut geometry. Physics and rendering consume the same
+// quantized replica, while the immutable Rapier heightfield remains the firm
+// layer that can belly the chassis out.
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 
-const VERTICES_PER_CELL = 6;
+const TILE_VERTICES = Physics.RUT_TILE_CELLS + 1;
+const TILE_VERTEX_COUNT = TILE_VERTICES * TILE_VERTICES;
+const TILE_INDEX_COUNT = Physics.RUT_TILE_CELLS * Physics.RUT_TILE_CELLS * 6;
 const SURFACE_OFFSET = 0.018;
 
 const RUT_VERTEX_SHADER = /* glsl */`
@@ -23,18 +25,11 @@ const RUT_VERTEX_SHADER = /* glsl */`
 
 const RUT_FRAGMENT_SHADER = /* glsl */`
   varying float vRutDepth;
-
   void main() {
-    // Quantized field samples are interpolated across adjoining cells. The
-    // fade discards the zero-depth perimeter, so an elliptical stamp reads as
-    // a tyre groove rather than a collection of opaque 25 cm squares.
     float coverage = smoothstep(0.0005, 0.008, vRutDepth);
     if (coverage < 0.015) discard;
     float depthTone = smoothstep(0.0, 0.12, vRutDepth);
-    vec3 dampMud = vec3(0.20, 0.12, 0.075);
-    vec3 deepMud = vec3(0.055, 0.025, 0.012);
-    vec3 colour = mix(dampMud, deepMud, depthTone);
-    gl_FragColor = vec4(colour, 1.0);
+    gl_FragColor = vec4(mix(vec3(0.20, 0.12, 0.075), vec3(0.055, 0.025, 0.012), depthTone), 1.0);
   }
 `;
 
@@ -46,30 +41,32 @@ const RUT_MASK_FRAGMENT_SHADER = /* glsl */`
   }
 `;
 
+interface RutTileVisual {
+  geometry: THREE.BufferGeometry;
+  floor: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  mask: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  depths: Float32Array;
+}
+
 export class RutVisual {
   readonly group = new THREE.Group();
-  readonly mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
-  private readonly mask: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  private readonly floorMaterial: THREE.ShaderMaterial;
+  private readonly maskMaterial: THREE.ShaderMaterial;
+  private readonly emptyMesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  private readonly tileVisuals = new Map<string, RutTileVisual>();
   private terrain: Physics.TerrainData | null = null;
   private field: Physics.RutSessionReplica | null = null;
   private localOwnerId = 'local';
-  private readonly tiles = new Map<string, Physics.RutTilePayload>();
+  private stencilSupported = true;
   private cells = 0;
 
   constructor() {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
-    geometry.setAttribute('rutDepth', new THREE.BufferAttribute(new Float32Array(0), 1));
-    const material = new THREE.ShaderMaterial({
+    this.floorMaterial = new THREE.ShaderMaterial({
       vertexShader: RUT_VERTEX_SHADER,
       fragmentShader: RUT_FRAGMENT_SHADER,
       uniforms: { displace: { value: 1 } },
       transparent: false,
       depthWrite: true,
-      // Normal depth testing is essential: vehicles, rocks and vegetation
-      // must occlude the track. The tiny surface offset and polygon offset
-      // keep it above the immutable coarse terrain without drawing through
-      // foreground geometry.
       depthTest: true,
       polygonOffset: true,
       polygonOffsetFactor: -1,
@@ -82,12 +79,7 @@ export class RutVisual {
       stencilZFail: THREE.KeepStencilOp,
       stencilZPass: THREE.KeepStencilOp,
     });
-    this.mesh = new THREE.Mesh(geometry, material);
-    this.mesh.name = 'session-ruts';
-    this.mesh.visible = false;
-    this.mesh.renderOrder = 0;
-    this.mesh.frustumCulled = false;
-    const maskMaterial = new THREE.ShaderMaterial({
+    this.maskMaterial = new THREE.ShaderMaterial({
       vertexShader: RUT_VERTEX_SHADER,
       fragmentShader: RUT_MASK_FRAGMENT_SHADER,
       uniforms: { displace: { value: 0 } },
@@ -102,163 +94,206 @@ export class RutVisual {
       stencilZFail: THREE.KeepStencilOp,
       stencilZPass: THREE.ReplaceStencilOp,
     });
-    this.mask = new THREE.Mesh(geometry, maskMaterial);
-    this.mask.name = 'session-rut-stencil';
-    this.mask.visible = false;
-    this.mask.renderOrder = -2;
-    this.mask.frustumCulled = false;
-    this.group.add(this.mask, this.mesh);
+    const emptyGeometry = new THREE.BufferGeometry();
+    emptyGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+    emptyGeometry.setAttribute('rutDepth', new THREE.BufferAttribute(new Float32Array(0), 1));
+    this.emptyMesh = new THREE.Mesh(emptyGeometry, this.floorMaterial);
+    this.emptyMesh.visible = false;
+  }
+
+  /** Compatibility/debug accessor: the first live tile, or an empty mesh. */
+  get mesh(): THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> {
+    return this.tileVisuals.values().next().value?.floor ?? this.emptyMesh;
   }
 
   get activeCellCount(): number { return this.cells; }
+  get activeTileCount(): number { return this.tileVisuals.size; }
+
+  /** Test/debug access without exposing tile ownership to scene callers. */
+  tileGeometry(tileX: number, tileZ: number): THREE.BufferGeometry | undefined {
+    return this.tileVisuals.get(tileKey(tileX, tileZ))?.geometry;
+  }
 
   setStencilSupported(supported: boolean): void {
-    this.mask.material.stencilWrite = supported;
-    this.mesh.material.stencilWrite = supported;
-    this.mesh.material.stencilFunc = supported ? THREE.EqualStencilFunc : THREE.AlwaysStencilFunc;
-    this.mesh.material.uniforms.displace!.value = supported ? 1 : 0;
-    this.mask.visible = supported && this.cells > 0;
+    this.stencilSupported = supported;
+    this.maskMaterial.stencilWrite = supported;
+    this.floorMaterial.stencilWrite = supported;
+    this.floorMaterial.stencilFunc = supported ? THREE.EqualStencilFunc : THREE.AlwaysStencilFunc;
+    this.floorMaterial.uniforms.displace!.value = supported ? 1 : 0;
+    for (const tile of this.tileVisuals.values()) tile.mask.visible = supported;
   }
 
   setLocalOwnerId(id: string): void {
     if (id === this.localOwnerId) return;
     this.localOwnerId = id;
-    if (this.terrain) this.field = new Physics.RutSessionReplica(this.terrain.size, id);
-    this.tiles.clear();
-    this.rebuild();
+    this.field = this.terrain ? new Physics.RutSessionReplica(this.terrain.size, id) : null;
+    this.clearTiles();
+    this.cells = 0;
   }
 
   setTerrain(terrain: Physics.TerrainData | null): void {
     this.terrain = terrain;
     this.field = terrain ? new Physics.RutSessionReplica(terrain.size, this.localOwnerId) : null;
-    this.tiles.clear();
-    this.rebuild();
+    this.clearTiles();
+    this.cells = 0;
   }
 
   applyTile(tile: Physics.RutTilePayload): void {
     if (!this.field) return;
-    const copy = { tileX: tile.tileX, tileZ: tile.tileZ, depths: new Uint8Array(tile.depths) };
-    this.tiles.set(`${tile.tileX},${tile.tileZ}`, copy);
-    this.field.applyTile(copy);
-    this.rebuild();
+    this.updateDirty(this.field.applyTile({
+      tileX: tile.tileX,
+      tileZ: tile.tileZ,
+      depths: new Uint8Array(tile.depths),
+    }));
   }
 
   predictStamp(stamp: Physics.PredictedRutStamp): void {
     if (!this.field) return;
-    this.field.predict(stamp);
-    this.syncTilesAndRebuild();
+    this.updateDirty(this.field.predict(stamp));
   }
 
   applyStamps(stamps: readonly Physics.RutStamp[]): void {
     if (!this.field) return;
-    this.field.applyAuthoritative(stamps);
-    this.syncTilesAndRebuild();
+    this.updateDirty(this.field.applyAuthoritative(stamps));
   }
 
   resolveStamp(ownerSequence: number, accepted: boolean, globalSequence?: number): void {
     if (!this.field) return;
-    this.field.resolve(ownerSequence, accepted, globalSequence);
-    this.syncTilesAndRebuild();
-  }
-
-  private syncTilesAndRebuild(): void {
-    if (!this.field) return;
-    this.tiles.clear();
-    for (const tile of this.field.exportTiles()) this.tiles.set(`${tile.tileX},${tile.tileZ}`, tile);
-    this.rebuild();
+    this.updateDirty(this.field.resolve(ownerSequence, accepted, globalSequence));
   }
 
   dispose(): void {
-    this.mesh.geometry.dispose();
-    this.mesh.material.dispose();
-    this.mask.material.dispose();
+    this.clearTiles();
+    this.emptyMesh.geometry.dispose();
+    this.floorMaterial.dispose();
+    this.maskMaterial.dispose();
   }
 
-  private rebuild(): void {
-    const terrain = this.terrain;
-    if (!terrain) {
-      this.cells = 0;
-      this.mesh.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
-      this.mesh.geometry.setAttribute('rutDepth', new THREE.BufferAttribute(new Float32Array(0), 1));
-      this.mesh.visible = false;
-      this.mask.visible = false;
-      return;
-    }
-    const field = this.field;
-    if (!field) return;
-    let count = 0;
-    const cells = new Set<string>();
-    const cellLimit = Math.floor(terrain.size / Physics.RUT_CELL_SIZE);
-    for (const tile of this.tiles.values()) {
-      for (let localZ = 0; localZ < Physics.RUT_TILE_CELLS; localZ++) {
-        for (let localX = 0; localX < Physics.RUT_TILE_CELLS; localX++) {
-          const byte = tile.depths[localZ * Physics.RUT_TILE_CELLS + localX]!;
-          if (byte === 0) continue;
-          count++;
-          const gx = tile.tileX * Physics.RUT_TILE_CELLS + localX;
-          const gz = tile.tileZ * Physics.RUT_TILE_CELLS + localZ;
-          // A depth sample is shared by four quads. Including all four gives
-          // the shader a zero-depth perimeter over which it can interpolate
-          // a smooth edge instead of ending at a square cell boundary.
-          addCell(cells, gx - 1, gz - 1, cellLimit);
-          addCell(cells, gx, gz - 1, cellLimit);
-          addCell(cells, gx - 1, gz, cellLimit);
-          addCell(cells, gx, gz, cellLimit);
+  private updateDirty(dirty: readonly Physics.RutDirtyTile[]): void {
+    if (!this.field || !this.terrain || dirty.length === 0) return;
+    const affected = new Map<string, Physics.RutDirtyTile>();
+    for (const tile of dirty) {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const next = { tileX: tile.tileX + dx, tileZ: tile.tileZ + dz };
+          affected.set(tileKey(next.tileX, next.tileZ), next);
         }
       }
     }
-    const orderedCells = [...cells].map((key) => {
-      const comma = key.indexOf(',');
-      return { gx: Number(key.slice(0, comma)), gz: Number(key.slice(comma + 1)) };
-    }).sort((a, b) => a.gz - b.gz || a.gx - b.gx);
-    const positions = new Float32Array(orderedCells.length * VERTICES_PER_CELL * 3);
-    const depths = new Float32Array(orderedCells.length * VERTICES_PER_CELL);
-    let offset = 0;
-    let depthOffset = 0;
-    for (const { gx, gz } of orderedCells) {
-      const x0 = gx * Physics.RUT_CELL_SIZE - terrain.size * 0.5;
-      const x1 = x0 + Physics.RUT_CELL_SIZE;
-      const z0 = gz * Physics.RUT_CELL_SIZE - terrain.size * 0.5;
-      const z1 = z0 + Physics.RUT_CELL_SIZE;
-      const d00 = field.sampleDepth(x0, z0);
-      const d10 = field.sampleDepth(x1, z0);
-      const d01 = field.sampleDepth(x0, z1);
-      const d11 = field.sampleDepth(x1, z1);
-      const y00 = Physics.sampleHeightBilinear(terrain, x0, z0);
-      const y10 = Physics.sampleHeightBilinear(terrain, x1, z0);
-      const y01 = Physics.sampleHeightBilinear(terrain, x0, z1);
-      const y11 = Physics.sampleHeightBilinear(terrain, x1, z1);
-      offset = writeVertex(positions, offset, x0, y00, z0);
-      depths[depthOffset++] = d00;
-      offset = writeVertex(positions, offset, x0, y01, z1);
-      depths[depthOffset++] = d01;
-      offset = writeVertex(positions, offset, x1, y10, z0);
-      depths[depthOffset++] = d10;
-      offset = writeVertex(positions, offset, x1, y10, z0);
-      depths[depthOffset++] = d10;
-      offset = writeVertex(positions, offset, x0, y01, z1);
-      depths[depthOffset++] = d01;
-      offset = writeVertex(positions, offset, x1, y11, z1);
-      depths[depthOffset++] = d11;
+    for (const tile of affected.values()) this.updateTile(tile.tileX, tile.tileZ);
+    this.cells = countActiveCells(this.field.exportTiles());
+  }
+
+  private updateTile(tileX: number, tileZ: number): void {
+    const terrain = this.terrain!;
+    const field = this.field!;
+    const cellLimit = Math.floor(terrain.size / Physics.RUT_CELL_SIZE);
+    const baseX = tileX * Physics.RUT_TILE_CELLS;
+    const baseZ = tileZ * Physics.RUT_TILE_CELLS;
+    if (baseX + Physics.RUT_TILE_CELLS < 0 || baseZ + Physics.RUT_TILE_CELLS < 0
+      || baseX >= cellLimit || baseZ >= cellLimit) {
+      this.removeTile(tileX, tileZ);
+      return;
     }
-    this.cells = count;
-    this.mesh.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    this.mesh.geometry.setAttribute('rutDepth', new THREE.BufferAttribute(depths, 1));
-    this.mesh.geometry.setDrawRange(0, orderedCells.length * VERTICES_PER_CELL);
-    this.mesh.geometry.computeBoundingSphere();
-    this.mesh.visible = count > 0;
-    this.mask.visible = count > 0 && this.mask.material.stencilWrite;
+
+    let visual = this.tileVisuals.get(tileKey(tileX, tileZ));
+    const sampledDepths = visual?.depths ?? new Float32Array(TILE_VERTEX_COUNT);
+    let nonZero = false;
+    let offset = 0;
+    for (let localZ = 0; localZ < TILE_VERTICES; localZ++) {
+      const z = (baseZ + localZ) * Physics.RUT_CELL_SIZE - terrain.size * 0.5;
+      for (let localX = 0; localX < TILE_VERTICES; localX++) {
+        const x = (baseX + localX) * Physics.RUT_CELL_SIZE - terrain.size * 0.5;
+        const depth = field.sampleDepth(x, z);
+        sampledDepths[offset++] = depth;
+        nonZero ||= depth > 0;
+      }
+    }
+    if (!nonZero) {
+      this.removeTile(tileX, tileZ);
+      return;
+    }
+    if (!visual) {
+      visual = this.createTile(tileX, tileZ, sampledDepths);
+      this.tileVisuals.set(tileKey(tileX, tileZ), visual);
+      return;
+    }
+    const attribute = visual.geometry.getAttribute('rutDepth') as THREE.BufferAttribute;
+    attribute.needsUpdate = true;
+    visual.geometry.computeBoundingSphere();
+  }
+
+  private createTile(tileX: number, tileZ: number, depths: Float32Array): RutTileVisual {
+    const terrain = this.terrain!;
+    const baseX = tileX * Physics.RUT_TILE_CELLS;
+    const baseZ = tileZ * Physics.RUT_TILE_CELLS;
+    const positions = new Float32Array(TILE_VERTEX_COUNT * 3);
+    let vertex = 0;
+    for (let localZ = 0; localZ < TILE_VERTICES; localZ++) {
+      const z = (baseZ + localZ) * Physics.RUT_CELL_SIZE - terrain.size * 0.5;
+      for (let localX = 0; localX < TILE_VERTICES; localX++) {
+        const x = (baseX + localX) * Physics.RUT_CELL_SIZE - terrain.size * 0.5;
+        positions[vertex * 3] = x;
+        positions[vertex * 3 + 1] = Physics.sampleHeightBilinear(terrain, x, z);
+        positions[vertex * 3 + 2] = z;
+        vertex++;
+      }
+    }
+    const indices = new Uint16Array(TILE_INDEX_COUNT);
+    let index = 0;
+    for (let z = 0; z < Physics.RUT_TILE_CELLS; z++) {
+      for (let x = 0; x < Physics.RUT_TILE_CELLS; x++) {
+        const a = z * TILE_VERTICES + x;
+        const b = a + TILE_VERTICES;
+        indices[index++] = a;
+        indices[index++] = b;
+        indices[index++] = a + 1;
+        indices[index++] = a + 1;
+        indices[index++] = b;
+        indices[index++] = b + 1;
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('rutDepth', new THREE.BufferAttribute(depths, 1));
+    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+    geometry.computeBoundingSphere();
+
+    const floor = new THREE.Mesh(geometry, this.floorMaterial);
+    floor.name = `session-rut-floor:${tileX},${tileZ}`;
+    floor.renderOrder = 0;
+    floor.frustumCulled = false;
+    const mask = new THREE.Mesh(geometry, this.maskMaterial);
+    mask.name = `session-rut-stencil:${tileX},${tileZ}`;
+    mask.renderOrder = -2;
+    mask.frustumCulled = false;
+    mask.visible = this.stencilSupported;
+    this.group.add(mask, floor);
+    return { geometry, floor, mask, depths };
+  }
+
+  private removeTile(tileX: number, tileZ: number): void {
+    const key = tileKey(tileX, tileZ);
+    const visual = this.tileVisuals.get(key);
+    if (!visual) return;
+    this.group.remove(visual.floor, visual.mask);
+    visual.geometry.dispose();
+    this.tileVisuals.delete(key);
+  }
+
+  private clearTiles(): void {
+    for (const tile of this.tileVisuals.values()) {
+      this.group.remove(tile.floor, tile.mask);
+      tile.geometry.dispose();
+    }
+    this.tileVisuals.clear();
   }
 }
 
-function addCell(cells: Set<string>, gx: number, gz: number, limit: number): void {
-  if (gx < 0 || gz < 0 || gx >= limit || gz >= limit) return;
-  cells.add(`${gx},${gz}`);
+function countActiveCells(tiles: readonly Physics.RutTilePayload[]): number {
+  let count = 0;
+  for (const tile of tiles) for (const depth of tile.depths) if (depth !== 0) count++;
+  return count;
 }
 
-function writeVertex(out: Float32Array, offset: number, x: number, y: number, z: number): number {
-  out[offset] = x;
-  out[offset + 1] = y;
-  out[offset + 2] = z;
-  return offset + 3;
-}
+function tileKey(tileX: number, tileZ: number): string { return `${tileX},${tileZ}`; }
