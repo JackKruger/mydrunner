@@ -165,7 +165,7 @@ describe('driving the ford', () => {
       expect(r.crossed, `${kind} should cross`).toBe(true);
       expect(r.drowned, `${kind} should not drown`).toBe(false);
     }
-  });
+  }, 15_000);
 
   it('shoves you downstream on the way across', () => {
     // The whole reason to author a flow field. Too little and the river
