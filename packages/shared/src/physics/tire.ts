@@ -79,6 +79,7 @@ export interface CombinedForce {
 }
 
 /** Resolve longitudinal and lateral candidates through a friction ellipse. */
+/** @hotloop */
 export function combineFrictionEllipse(
   longitudinal: number,
   lateral: number,

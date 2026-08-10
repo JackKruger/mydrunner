@@ -89,6 +89,7 @@ import {
 import { geomFor, type AxleGeom, type VehicleGeom } from './vehicleGeom.js';
 import {
   applyAxleSnap,
+  applyTravelStopReactionToAxle,
   axleSnap,
   computeAntiRollLoadTransfer,
   createAxleState,
@@ -133,10 +134,45 @@ import {
 import { applyCollisionDamage, createDamageState, repairDamage } from './damage.js';
 
 type Vec3 = { x: number; y: number; z: number };
+type Quat = { x: number; y: number; z: number; w: number };
+
+interface VehicleStepContext {
+  readonly dt: number;
+  readonly t: Vec3;
+  readonly r: Quat;
+  readonly lv: Vec3;
+  readonly av: Vec3;
+  readonly fwd: Vec3;
+  readonly right: Vec3;
+  readonly up: Vec3;
+}
+
+function createVehicleStepContext(): VehicleStepContext {
+  return {
+    dt: FIXED_DT,
+    t: { x: 0, y: 0, z: 0 },
+    r: { x: 0, y: 0, z: 0, w: 1 },
+    lv: { x: 0, y: 0, z: 0 },
+    av: { x: 0, y: 0, z: 0 },
+    fwd: { x: 0, y: 0, z: 1 },
+    right: { x: 1, y: 0, z: 0 },
+    up: { x: 0, y: 1, z: 0 },
+  };
+}
 
 interface ContactPatchSample {
   grip: number;
   traction: SurfaceTractionSpec;
+}
+
+interface SuspensionSideScratch {
+  wheel: WheelKinematic | null;
+  localX: number;
+  world: Vec3;
+  supported: boolean;
+  comp: number;
+  compRate: number;
+  force: number;
 }
 
 function createContactPatchSample(): ContactPatchSample {
@@ -311,6 +347,21 @@ export class SolidAxleVehicle implements VehicleLike {
     reactionTorque: 0,
   };
   private readonly _scratchProbeVelocity: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly _stepContext = createVehicleStepContext();
+  private readonly _wheelBases: [WheelBasis | null, WheelBasis | null, WheelBasis | null, WheelBasis | null] = [
+    null, null, null, null,
+  ];
+  private readonly _ledgeContacts: [SteepWheelContact | null, SteepWheelContact | null, SteepWheelContact | null, SteepWheelContact | null] = [
+    null, null, null, null,
+  ];
+  private readonly _ledgeSemantics: [TireContactSemantics | null, TireContactSemantics | null, TireContactSemantics | null, TireContactSemantics | null] = [
+    null, null, null, null,
+  ];
+  private readonly _ledgeLoads: [number, number, number, number] = [0, 0, 0, 0];
+  private readonly _suspensionSides: [SuspensionSideScratch, SuspensionSideScratch] = [
+    { wheel: null, localX: 0, world: { x: 0, y: 0, z: 0 }, supported: false, comp: 0, compRate: 0, force: 0 },
+    { wheel: null, localX: 0, world: { x: 0, y: 0, z: 0 }, supported: false, comp: 0, compRate: 0, force: 0 },
+  ];
   private readonly externalPointLoads: ExternalPointLoad[] = [];
 
   constructor(
@@ -460,8 +511,36 @@ export class SolidAxleVehicle implements VehicleLike {
     this.externalPointLoads.length = 0;
   }
 
+  private captureStepContext(): VehicleStepContext {
+    const context = this._stepContext;
+    const translation = this.body.translation();
+    const rotation = this.body.rotation();
+    const linearVelocity = this.body.linvel();
+    const angularVelocity = this.body.angvel();
+    context.t.x = translation.x; context.t.y = translation.y; context.t.z = translation.z;
+    context.r.x = rotation.x; context.r.y = rotation.y; context.r.z = rotation.z; context.r.w = rotation.w;
+    context.lv.x = linearVelocity.x; context.lv.y = linearVelocity.y; context.lv.z = linearVelocity.z;
+    context.av.x = angularVelocity.x; context.av.y = angularVelocity.y; context.av.z = angularVelocity.z;
+
+    const x = rotation.x; const y = rotation.y; const z = rotation.z; const w = rotation.w;
+    const xx = x * x; const yy = y * y; const zz = z * z;
+    const xy = x * y; const xz = x * z; const yz = y * z;
+    const xw = x * w; const yw = y * w; const zw = z * w;
+    context.right.x = 1 - 2 * (yy + zz);
+    context.right.y = 2 * (xy + zw);
+    context.right.z = 2 * (xz - yw);
+    context.up.x = 2 * (xy - zw);
+    context.up.y = 1 - 2 * (xx + zz);
+    context.up.z = 2 * (yz + xw);
+    context.fwd.x = 2 * (xz + yw);
+    context.fwd.y = 2 * (yz - xw);
+    context.fwd.z = 1 - 2 * (xx + yy);
+    return context;
+  }
+
   preStep(): void {
-    const dt = FIXED_DT;
+    const stepContext = this.captureStepContext();
+    const dt = stepContext.dt;
 
     // CRITICAL: Rapier accumulates external forces across step() calls
     // until reset. Without these calls, last tick's spring force would
@@ -475,13 +554,13 @@ export class SolidAxleVehicle implements VehicleLike {
     this.externalPointLoads.length = 0;
 
     // 1. Capture chassis pose ONCE (determinism rule).
-    const t = this.body.translation();
-    const r = this.body.rotation();
-    const lv = this.body.linvel();
-    const av = this.body.angvel();
-    const fwd = rotateVecByQuat({ x: 0, y: 0, z: 1 }, r);
-    const right = rotateVecByQuat({ x: 1, y: 0, z: 0 }, r);
-    const up = rotateVecByQuat({ x: 0, y: 1, z: 0 }, r);
+    const t = stepContext.t;
+    const r = stepContext.r;
+    const lv = stepContext.lv;
+    const av = stepContext.av;
+    const fwd = stepContext.fwd;
+    const right = stepContext.right;
+    const up = stepContext.up;
     if (this.debugVelocityInitialized) {
       this.debugAcceleration.x = (lv.x - this.debugPreviousLinVel.x) / dt;
       this.debugAcceleration.y = (lv.y - this.debugPreviousLinVel.y) / dt;
@@ -499,10 +578,16 @@ export class SolidAxleVehicle implements VehicleLike {
     this.impactSpeed = groundSpeed;
     this.updateDrivetrainControls(groundSpeed);
     this.updatePressure(groundSpeed, dt);
-    const wheelBases: Array<WheelBasis | null> = [null, null, null, null];
-    const ledgeContacts: Array<SteepWheelContact | null> = [null, null, null, null];
-    const ledgeSemantics: Array<TireContactSemantics | null> = [null, null, null, null];
-    const ledgeLoads = [0, 0, 0, 0];
+    const wheelBases = this._wheelBases;
+    const ledgeContacts = this._ledgeContacts;
+    const ledgeSemantics = this._ledgeSemantics;
+    const ledgeLoads = this._ledgeLoads;
+    for (let wheelIndex = 0; wheelIndex < 4; wheelIndex++) {
+      wheelBases[wheelIndex] = null;
+      ledgeContacts[wheelIndex] = null;
+      ledgeSemantics[wheelIndex] = null;
+      ledgeLoads[wheelIndex] = 0;
+    }
 
     // 2. Smooth steering.
     const steeringAuthority = 0.28 + this.damage.steering * 0.72;
@@ -731,14 +816,12 @@ export class SolidAxleVehicle implements VehicleLike {
       // cannot see. It is based on the previous axle pose so the tyre starts
       // touching a ledge when its circumference reaches it, not when the
       // wheel centre has already crossed the face.
-      const volumeSides: Array<{ index: number; wheel: WheelKinematic; localX: number }> = [
-        { index: wIdxL, wheel: wL, localX: -ag.trackHalf },
-        { index: wIdxR, wheel: wR, localX: +ag.trackHalf },
-      ];
-      for (const volumeSide of volumeSides) {
-        const w = volumeSide.wheel;
-        const center = wheelCenterWorldPose(t, r, ag, candidateRide, candidateRoll, volumeSide.localX);
-        const debug = this.wheelDebug[volumeSide.index]!;
+      for (let volumeSideIndex = 0; volumeSideIndex < 2; volumeSideIndex++) {
+        const wheelIndex = volumeSideIndex === 0 ? wIdxL : wIdxR;
+        const w = volumeSideIndex === 0 ? wL : wR;
+        const localX = volumeSideIndex === 0 ? -ag.trackHalf : ag.trackHalf;
+        const center = wheelCenterWorldPose(t, r, ag, candidateRide, candidateRoll, localX);
+        const debug = this.wheelDebug[wheelIndex]!;
         debug.wheelCenter.x = center.x;
         debug.wheelCenter.y = center.y;
         debug.wheelCenter.z = center.z;
@@ -772,7 +855,7 @@ export class SolidAxleVehicle implements VehicleLike {
             LEDGE_CONTACT.prediction,
           );
         }
-        ledgeContacts[volumeSide.index] = ledge;
+        ledgeContacts[wheelIndex] = ledge;
         const semantics = ledge
           ? classifyTireContact(
             ledge.normal.x * basis.axle.x
@@ -780,7 +863,7 @@ export class SolidAxleVehicle implements VehicleLike {
             + ledge.normal.z * basis.axle.z,
           )
           : null;
-        ledgeSemantics[volumeSide.index] = semantics;
+        ledgeSemantics[wheelIndex] = semantics;
         w.ledgeContact = ledge !== null;
         w.ledgeNormalForce = 0;
         w.ledgeLongForce = 0;
@@ -864,7 +947,7 @@ export class SolidAxleVehicle implements VehicleLike {
             LEDGE_CONTACT.maxForce * dt,
           );
           const normalForce = constraint.impulse / dt;
-          ledgeLoads[volumeSide.index] = normalForce;
+          ledgeLoads[wheelIndex] = normalForce;
           w.ledgeNormalForce = normalForce;
           if (!w.contact || constraint.deflection > w.tireDeflection) {
             w.tireDeflection = constraint.deflection;
@@ -941,6 +1024,21 @@ export class SolidAxleVehicle implements VehicleLike {
         rollStiffnessMult: at.rollStiffnessMult,
         maxArticulationMult: at.maxArticulationMult,
       }, axle.stepResult);
+      const finalRollSin = Math.sin(axle.rollAngle);
+      const leftStop = progressiveTravelStopForce(
+        axle.rideY - ag.trackHalf * finalRollSin,
+        ag.bumpMax,
+        ag.droopMax,
+        0.5 * ag.rideStiffness * at.rideStiffnessMult,
+        axle.travelStops[0],
+      );
+      const rightStop = progressiveTravelStopForce(
+        axle.rideY + ag.trackHalf * finalRollSin,
+        ag.bumpMax,
+        ag.droopMax,
+        0.5 * ag.rideStiffness * at.rideStiffnessMult,
+        axle.travelStops[1],
+      );
 
       // Per-wheel-end ride forces. Compression is read directly from
       // each wheel's raycast (capped at bumpMax to mirror the axle's
@@ -954,20 +1052,28 @@ export class SolidAxleVehicle implements VehicleLike {
       // the visible 1.7 Hz body bob the user reported as stutter while
       // driving. Saturating earlier brings it to ~critical without
       // hardening the first-contact response.
-      const sides: Array<{
-        wheel: WheelKinematic;
-        localX: number;
-        world: Vec3;
-        supported: boolean;
-        comp: number;
-        compRate: number;
-        force: number;
-      }> = [
-        { wheel: wL, localX: -ag.trackHalf, world: leftMountWorld, supported: false, comp: 0, compRate: 0, force: 0 },
-        { wheel: wR, localX: +ag.trackHalf, world: rightMountWorld, supported: false, comp: 0, compRate: 0, force: 0 },
-      ];
+      const sides = this._suspensionSides;
+      sides[0].wheel = wL;
+      sides[0].localX = -ag.trackHalf;
+      sides[0].world.x = leftMountWorld.x;
+      sides[0].world.y = leftMountWorld.y;
+      sides[0].world.z = leftMountWorld.z;
+      sides[1].wheel = wR;
+      sides[1].localX = ag.trackHalf;
+      sides[1].world.x = rightMountWorld.x;
+      sides[1].world.y = rightMountWorld.y;
+      sides[1].world.z = rightMountWorld.z;
+      for (let sideIndex = 0; sideIndex < 2; sideIndex++) {
+        const side = sides[sideIndex]!;
+        side.supported = false;
+        side.comp = 0;
+        side.compRate = 0;
+        side.force = 0;
+      }
+      let suspensionSideIndex = 0;
       for (const side of sides) {
-        const w = side.wheel;
+        const w = side.wheel!;
+        const stop = axle.travelStops[suspensionSideIndex++]!;
         w.lastForce = 0;
         w.suspensionForce = 0;
         if (!w.contact) {
@@ -1028,13 +1134,7 @@ export class SolidAxleVehicle implements VehicleLike {
           ? w.carcassForce
             + 0.5 * ag.rideDamping * at.rideDampingMult * engagement * compRate
           : 0;
-        F += progressiveTravelStopForce(
-          travel,
-          ag.bumpMax,
-          ag.droopMax,
-          0.5 * ag.rideStiffness * at.rideStiffnessMult,
-        ).bumpForce;
-        side.force = clamp(F, 0, LEDGE_CONTACT.maxForce);
+        side.force = clamp(F, 0, LEDGE_CONTACT.maxForce - stop.bumpForce);
         w.suspensionForce = side.force;
       }
 
@@ -1071,7 +1171,7 @@ export class SolidAxleVehicle implements VehicleLike {
 
       for (const side of sides) {
         if (!side.supported) continue;
-        const w = side.wheel;
+        const w = side.wheel!;
         w.suspensionForce = side.force;
         // Apply the suspension-side resultant once. Carcass reaction is
         // retained separately for diagnostics; applying it again here would
@@ -1101,6 +1201,33 @@ export class SolidAxleVehicle implements VehicleLike {
         this.body.addForceAtPoint(sf, side.world, true);
         w.prevContactDepth = side.comp;
       }
+
+      // Mechanical travel stops act between the chassis mount and beam, not
+      // between the chassis and terrain. Apply their chassis half along the
+      // suspension axis at each final mount and feed the equal/opposite
+      // generalized reaction into the axle's unsprung heave/roll state.
+      // The Rapier chassis owns total vehicle mass, including the abstract
+      // beam. With no ground support an internal stop may move the relative
+      // axle DOF, but must not accelerate that total-mass rigid body.
+      const leftStopForce = hasSuspensionSupport(wL)
+        ? clamp(leftStop.totalForce, -LEDGE_CONTACT.maxForce, LEDGE_CONTACT.maxForce)
+        : 0;
+      const rightStopForce = hasSuspensionSupport(wR)
+        ? clamp(rightStop.totalForce, -LEDGE_CONTACT.maxForce, LEDGE_CONTACT.maxForce)
+        : 0;
+      if (leftStopForce !== 0) {
+        const sf = this._scratchForce;
+        sf.x = up.x * leftStopForce; sf.y = up.y * leftStopForce; sf.z = up.z * leftStopForce;
+        this.body.addForceAtPoint(sf, leftMountWorld, true);
+      }
+      if (rightStopForce !== 0) {
+        const sf = this._scratchForce;
+        sf.x = up.x * rightStopForce; sf.y = up.y * rightStopForce; sf.z = up.z * rightStopForce;
+        this.body.addForceAtPoint(sf, rightMountWorld, true);
+      }
+      applyTravelStopReactionToAxle(axle, leftStopForce, rightStopForce, dt);
+      wL.suspensionForce += Math.max(0, leftStopForce);
+      wR.suspensionForce += Math.max(0, rightStopForce);
 
       // Roll torque dump when terrain demands more articulation than the
       // axle can absorb. Below the cap the per-wheel-end forces above

@@ -69,6 +69,26 @@ function setupAtSpeed(targetSpeed: number): {
 }
 
 describe('brake stopping distance', () => {
+  it('uses the sliding tyre tail after the wheels lock', () => {
+    const { world, v } = setupAtSpeed(12);
+    v.setInput({ ...EMPTY_INPUT, seq: 2, brake: 1 });
+    let lockedRatio: number | null = null;
+    for (let i = 0; i < 120; i++) {
+      world.step();
+      if (speedXZ(v) < 3) break;
+      const debug = v.debugTelemetry?.();
+      const wheel = debug?.wheels.find((entry) => entry.contact && Math.abs(entry.angularVelocity) < 0.1);
+      if (wheel && wheel.gripLimit > 0 && Math.abs(wheel.slipRatio) > 0.9) {
+        lockedRatio = Math.abs(wheel.longitudinalForce) / wheel.gripLimit;
+        break;
+      }
+    }
+    expect(lockedRatio, 'a wheel should lock while the chassis is still sliding').not.toBeNull();
+    expect(lockedRatio!).toBeGreaterThan(0.55);
+    expect(lockedRatio!).toBeLessThan(0.9);
+    world.dispose();
+  });
+
   it('stops within 25 m from 12 m/s under full brake', () => {
     // Pre-fix baseline: ~38 m and didn't actually stop within 10 s.
     // Post-fix (clamp + brakeForce 4500): ~18 m / ~6 s.

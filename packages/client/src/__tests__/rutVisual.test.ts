@@ -19,7 +19,7 @@ function terrain(): Physics.TerrainData {
 }
 
 describe('session rut visual', () => {
-  it('builds persistent feathered geometry from an authoritative tile', () => {
+  it('builds reusable indexed 17x17 geometry from an authoritative tile', () => {
     const visual = new RutVisual();
     visual.setTerrain(terrain());
     const depths = new Uint8Array(Physics.RUT_TILE_DEPTH_BYTES);
@@ -29,10 +29,9 @@ describe('session rut visual', () => {
     expect(visual.mesh.visible).toBe(true);
     const positions = visual.mesh.geometry.getAttribute('position');
     const rutDepth = visual.mesh.geometry.getAttribute('rutDepth');
-    // One non-zero field sample contributes to its four adjoining quads so
-    // interpolation can fade the track to zero instead of drawing a square.
-    expect(positions.count).toBe(24);
-    expect(rutDepth.count).toBe(24);
+    expect(positions.count).toBe(17 * 17);
+    expect(rutDepth.count).toBe(17 * 17);
+    expect(visual.mesh.geometry.index?.count).toBe(16 * 16 * 6);
     expect(Array.from({ length: rutDepth.count }, (_, i) => rutDepth.getX(i)))
       .toContain(0);
     expect(Math.max(...Array.from({ length: rutDepth.count }, (_, i) => rutDepth.getX(i))))
@@ -51,8 +50,33 @@ describe('session rut visual', () => {
     const depths = new Uint8Array(Physics.RUT_TILE_DEPTH_BYTES);
     depths[4] = 20;
     visual.applyTile({ tileX: 2, tileZ: 2, depths });
+    const geometry = visual.tileGeometry(2, 2);
     visual.applyTile({ tileX: 2, tileZ: 2, depths });
     expect(visual.activeCellCount).toBe(1);
+    expect(visual.tileGeometry(2, 2)).toBe(geometry);
+    visual.dispose();
+  });
+
+  it('updates boundary neighbours and disposes tiles that become empty', () => {
+    const visual = new RutVisual();
+    visual.setTerrain(terrain());
+    const depths = new Uint8Array(Physics.RUT_TILE_DEPTH_BYTES);
+    depths[0] = 80;
+    visual.applyTile({ tileX: 2, tileZ: 2, depths });
+    const owner = visual.tileGeometry(2, 2)!;
+    const neighbour = visual.tileGeometry(1, 2)!;
+    expect(owner).toBeDefined();
+    expect(neighbour).toBeDefined();
+    let ownerDisposed = false;
+    let neighbourDisposed = false;
+    owner.addEventListener('dispose', () => { ownerDisposed = true; });
+    neighbour.addEventListener('dispose', () => { neighbourDisposed = true; });
+
+    visual.applyTile({ tileX: 2, tileZ: 2, depths: new Uint8Array(depths.length) });
+    expect(visual.activeCellCount).toBe(0);
+    expect(visual.activeTileCount).toBe(0);
+    expect(ownerDisposed).toBe(true);
+    expect(neighbourDisposed).toBe(true);
     visual.dispose();
   });
 });

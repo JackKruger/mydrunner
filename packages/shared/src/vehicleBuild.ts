@@ -660,7 +660,7 @@ export function resolveVehicleSpec(value: VehicleBuild | unknown): ResolvedVehic
     wet: rallyTarmacTire ? 1.04 : rallyGravelTire ? 0.92 : 0.98,
   } : {
     road: mud ? (tire40 ? 0.78 : tire37 ? 0.82 : tire35 ? 0.86 : 0.89) : allTerrain ? (wideTire ? 0.93 : 0.95) : 1,
-    dirt: mud ? (tire40 ? 1.70 : tire37 ? 1.35 : tire35 ? 1.20 : 1.08) : allTerrain ? 1.06 : 1,
+    dirt: mud ? (tire40 ? 1.78 : tire37 ? 1.35 : tire35 ? 1.20 : 1.08) : allTerrain ? 1.06 : 1,
     gravel: mud ? 1.04 : allTerrain ? 1.09 : 1,
     mud: mud ? (tire40 ? 1.58 : tire37 ? 1.46 : tire35 ? (wideTire ? 1.43 : 1.35) : 1.24) : allTerrain ? (wideTire ? 1.18 : 1.12) : 1,
     deepMud: mud ? (tire40 ? 1.74 : tire37 ? 1.59 : tire35 ? (wideTire ? 1.56 : 1.46) : 1.30) : allTerrain ? (wideTire ? 1.20 : 1.12) : 1,
