@@ -17,6 +17,11 @@ export function el(tag: string, cls: string): HTMLElement {
 
 export function section(parent: HTMLElement, title: string): HTMLElement {
   const s = el('div', 'ed-section');
+  // Addressable by name. Matching a section on its text picks up every
+  // control inside it — the marker palette's "Objective" option matched a
+  // hasText('Object') filter, and the tool grid's own buttons match every
+  // section name there is.
+  s.dataset.section = title;
   const h = el('h2', 'ed-title');
   h.textContent = title;
   s.appendChild(h);

@@ -24,8 +24,8 @@ import { ObjectGhost } from './ghost.js';
 import { BrushCursor, SpawnMarkers } from './gizmos.js';
 import { Picker } from './pick.js';
 import {
-  applyKindDefaults, defaultToolState, isContinuous, isSculpt, objectBaseY, stepYaw,
-  TOOL_KEYS, type ToolId,
+  applyKindDefaults, applyMarkerKindDefaults, cursorRadius, defaultToolState, isContinuous,
+  isSculpt, objectBaseY, stepYaw, TOOL_KEYS, type ToolId,
 } from './tools.js';
 import { EditorUi } from './ui.js';
 import { writePreview } from '../previewHandoff.js';
@@ -43,7 +43,11 @@ const panelHost = document.getElementById('panel')!;
 // directly, with no WorldView in the path, and the ghost must come out of the
 // same code as the object it previews.
 setQualityTier('high');
-const view = new WorldView(app, QUALITY.high);
+// markerPreview: the editor draws every authored marker kind and its
+// trigger radius. The game draws only the garage bays it simulates —
+// showing a ring around a cargo marker nothing reads yet would promise
+// the player a feature that is not in the build.
+const view = new WorldView(app, QUALITY.high, { markerPreview: true });
 const camera = new FlyCamera(window.innerWidth / window.innerHeight, { x: 0, y: 60, z: 120 });
 const picker = new Picker();
 const cursor = new BrushCursor();
@@ -56,7 +60,7 @@ view.scene.add(ghost.group);
 const tools = defaultToolState();
 let session: EditSession;
 /** The document as opened. Kept so a save carries forward the fields the
- *  editor does not edit (base, roads, bogs, pad, markers). */
+ *  editor does not edit (base, roads, bogs, pad). */
 let openedDoc: Maps.MapDoc;
 let bakeOnSave = false;
 
@@ -73,6 +77,11 @@ const ui = new EditorUi(panelHost, tools, {
     setTool('object');
   },
   onObjectPlacementChange: () => { gizmosDirty = true; },
+  onMarkerKindChange: (kind) => {
+    applyMarkerKindDefaults(tools, kind);
+    ui.syncMarker();
+    setTool('marker');
+  },
   onAutoFlow: () => {
     const rect = session.autoFlow(tools.waterSpeed);
     if (!rect) {
@@ -107,6 +116,7 @@ function loadDoc(doc: Maps.MapDoc, message: string): void {
   camera.setGroundSampler((x, z) => view.heightAt(x, z));
   camera.lookAtPoint(0, view.heightAt(0, 0), 0, 140);
   refreshSpawnMarkers();
+  refreshMarkers();
   ui.setIdentity(doc.id, doc.name);
   ui.status(message);
 }
@@ -183,11 +193,19 @@ function applyHistory(changed: boolean, what: string): void {
   view.refreshWater(session.world.terrain);
   view.refreshObstacles(session.world.obstacles);
   refreshSpawnMarkers();
+  refreshMarkers();
   ui.status(what);
 }
 
 function refreshSpawnMarkers(): void {
   spawnMarkers.set(session.spawnPoints, (x, z) => view.heightAt(x, z));
+}
+
+/** Rebuild the marker visuals against the terrain as it is now. Called
+ *  after a marker edit and after any stroke that moved the ground under
+ *  one — the bay paint is seated on sampled ground, like the objects. */
+function refreshMarkers(): void {
+  view.refreshMarkers(session.markerList, session.world.terrain);
 }
 
 // --- Input ------------------------------------------------------------
@@ -267,12 +285,23 @@ canvas.addEventListener('pointerleave', () => {
 // so there is nothing to steal the gesture from, and preventDefault keeps
 // the page from scrolling under the canvas.
 canvas.addEventListener('wheel', (e) => {
-  if (tools.tool !== 'object') return;
+  if (tools.tool !== 'object' && tools.tool !== 'marker') return;
   e.preventDefault();
-  tools.objectYaw = stepYaw(tools.objectYaw, e.deltaY > 0 ? 1 : -1);
-  ui.syncObject();
-  gizmosDirty = true;
+  aim(e.deltaY > 0 ? 1 : -1);
 }, { passive: false });
+
+/** Turn whatever the active tool is about to place. A garage bay is a
+ *  parked pose, so it is aimed with the same gesture an object is. */
+function aim(dir: number): void {
+  if (tools.tool === 'marker') {
+    tools.markerYaw = stepYaw(tools.markerYaw, dir);
+    ui.syncMarker();
+  } else {
+    tools.objectYaw = stepYaw(tools.objectYaw, dir);
+    ui.syncObject();
+  }
+  gizmosDirty = true;
+}
 
 const endPointer = (e: PointerEvent): void => {
   if (e.button === 2 || camera.isLooking) camera.endLook();
@@ -286,6 +315,7 @@ const endPointer = (e: PointerEvent): void => {
       session.rebuildObjects();
       view.refreshObstacles(session.world.obstacles);
       refreshSpawnMarkers();
+      refreshMarkers();
     }
   }
   lastPointer = null;
@@ -313,7 +343,7 @@ function updateGizmos(): void {
     ghost.hide();
     return;
   }
-  cursor.update(hoverHit.x, hoverHit.z, tools.radius, (x, z) => view.heightAt(x, z));
+  cursor.update(hoverHit.x, hoverHit.z, cursorRadius(tools), (x, z) => view.heightAt(x, z));
   if (tools.tool === 'object') {
     const info = Physics.objectInfo(tools.objectKind);
     ghost.show(
@@ -437,17 +467,34 @@ function applyClick(hit: { x: number; z: number }, e: PointerEvent): void {
       ui.status(`spawn at ${hit.x.toFixed(1)}, ${hit.z.toFixed(1)}`);
       break;
     }
+    case 'marker': {
+      const marker = session.addMarker({
+        kind: tools.markerKind,
+        x: hit.x,
+        z: hit.z,
+        radius: tools.markerRadius,
+        yaw: tools.markerYaw,
+        label: tools.markerLabel,
+      });
+      refreshMarkers();
+      ui.status(`placed ${marker.label}`);
+      break;
+    }
     case 'delete': {
       if (tools.deleteMode === 'radius') {
         const deleted = session.deleteInRadius(hit.x, hit.z, tools.radius);
         if (deleted.objects > 0) view.refreshObstacles(session.world.obstacles);
         if (deleted.spawns > 0) refreshSpawnMarkers();
+        if (deleted.markers > 0) refreshMarkers();
         const parts: string[] = [];
         if (deleted.objects > 0) {
           parts.push(`${deleted.objects} object${deleted.objects === 1 ? '' : 's'}`);
         }
         if (deleted.spawns > 0) {
           parts.push(`${deleted.spawns} spawn${deleted.spawns === 1 ? '' : 's'}`);
+        }
+        if (deleted.markers > 0) {
+          parts.push(`${deleted.markers} marker${deleted.markers === 1 ? '' : 's'}`);
         }
         ui.status(parts.length > 0 ? `deleted ${parts.join(' and ')}` : 'nothing to delete there');
         break;
@@ -456,10 +503,18 @@ function applyClick(hit: { x: number; z: number }, e: PointerEvent): void {
       const id = group
         ? picker.obstacle(canvas, camera.camera, group, e.clientX, e.clientY)
         : null;
+      // Markers are checked before objects would be if the ray missed:
+      // they have no pickable geometry of their own (the bay paint is a
+      // decal you can stand a rock on top of), so the only thing that can
+      // select one is proximity to the ground hit.
+      const marker = id ? null : session.deleteMarkerNear(hit.x, hit.z, tools.radius);
       if (id) {
         session.deleteObject(id);
         view.refreshObstacles(session.world.obstacles);
         ui.status(`deleted ${id}`);
+      } else if (marker) {
+        refreshMarkers();
+        ui.status(`deleted ${marker.label}`);
       } else if (session.deleteSpawnNear(hit.x, hit.z, tools.radius)) {
         refreshSpawnMarkers();
         ui.status('deleted spawn');
@@ -481,9 +536,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
-    tools.objectYaw = stepYaw(tools.objectYaw, e.code === 'BracketRight' ? 1 : -1);
-    ui.syncObject();
-    gizmosDirty = true;
+    aim(e.code === 'BracketRight' ? 1 : -1);
     return;
   }
   if (e.code === 'KeyZ' && !e.ctrlKey && !e.metaKey) { applyHistory(session.undo(), 'undo'); return; }

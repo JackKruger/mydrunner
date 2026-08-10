@@ -220,6 +220,7 @@ export class Scene {
       terrain,
       obstacles: map.obstacles,
       landmarks: map.landmarks,
+      markers: map.markers,
     });
     this.minimap.setTerrain(terrain);
     this.effects.setTerrain(terrain);

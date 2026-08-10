@@ -3,13 +3,14 @@
 // The DOM vocabulary it is built from lives in dom.ts; this file is only
 // the layout and the bindings.
 
-import { Physics } from '@mydrunner/shared';
+import { Maps, Physics } from '@mydrunner/shared';
 import {
   button, caption, checkbox, el, numberField, section, select, slider, textField,
   type NumberHandle, type SelectHandle, type SliderHandle,
 } from './dom.js';
 import {
-  TOOL_KEYS, isSculpt, paintableSurfaces, placeableKinds, type ToolId, type ToolState,
+  TOOL_KEYS, isSculpt, paintableSurfaces, placeableKinds, placeableMarkerKinds,
+  type ToolId, type ToolState,
 } from './tools.js';
 
 export interface UiCallbacks {
@@ -32,6 +33,9 @@ export interface UiCallbacks {
   onObjectPlacementChange(): void;
   /** Derive the whole flow field from the water surface's slope. */
   onAutoFlow(): void;
+  /** The marker kind changed: the caller reseeds the radius and clears a
+   *  label typed for the previous kind. */
+  onMarkerKindChange(kind: Maps.MarkerKind): void;
 }
 
 export class EditorUi {
@@ -46,6 +50,7 @@ export class EditorUi {
   private waterSection: HTMLElement;
   private objectSection: HTMLElement;
   private spawnSection: HTMLElement;
+  private markerSection: HTMLElement;
   private deleteSection: HTMLElement;
   private radiusSlider: SliderHandle;
   private strengthSlider: SliderHandle;
@@ -58,6 +63,11 @@ export class EditorUi {
   private placementModeSelect: SelectHandle;
   private placementYInput: NumberHandle;
   private dimsCaption: { set(t: string): void };
+  private markerKindSelect: SelectHandle;
+  private markerRadiusSlider: SliderHandle;
+  private markerYawSlider: SliderHandle;
+  private markerLabelInput: HTMLInputElement;
+  private markerCaption: { set(t: string): void };
 
   constructor(parent: HTMLElement, private state: ToolState, private cb: UiCallbacks) {
     this.root = el('div', 'ed-panel');
@@ -165,6 +175,24 @@ export class EditorUi {
     const spawn = this.spawnSection = section(this.root, 'Spawn');
     slider(spawn, 'yaw', -Math.PI, Math.PI, 0.05, state.spawnYaw, (v) => { this.state.spawnYaw = v; });
 
+    // --- Markers ---
+    const markers = this.markerSection = section(this.root, 'Marker');
+    this.markerKindSelect = select(
+      markers,
+      'kind',
+      placeableMarkerKinds().map((m) => ({ value: m.kind, label: m.label })),
+      state.markerKind,
+      (v) => this.cb.onMarkerKindChange(v as Maps.MarkerKind),
+    );
+    this.markerLabelInput = textField(markers, 'label', state.markerLabel, (v) => {
+      this.state.markerLabel = v;
+    });
+    this.markerRadiusSlider = slider(markers, 'radius', 1, 6, 0.05, state.markerRadius,
+      (v) => { this.state.markerRadius = v; });
+    this.markerYawSlider = slider(markers, 'yaw', -Math.PI, Math.PI, 0.05, state.markerYaw,
+      (v) => { this.state.markerYaw = v; });
+    this.markerCaption = caption(markers);
+
     // --- Delete ---
     const remove = this.deleteSection = section(this.root, 'Delete');
     select(
@@ -217,6 +245,7 @@ export class EditorUi {
     parent.appendChild(this.root);
     this.syncTool();
     this.syncObject();
+    this.syncMarker();
   }
 
   setIdentity(id: string, name: string): void {
@@ -242,7 +271,26 @@ export class EditorUi {
     this.waterSection.hidden = tool !== 'water';
     this.objectSection.hidden = tool !== 'object';
     this.spawnSection.hidden = tool !== 'spawn';
+    this.markerSection.hidden = tool !== 'marker';
     this.deleteSection.hidden = tool !== 'delete';
+  }
+
+  /** Push the marker state back into the panel, after a kind change
+   *  reseeds the radius and clears the label. */
+  syncMarker(): void {
+    const info = Maps.markerInfo(this.state.markerKind);
+    this.markerKindSelect.set(this.state.markerKind);
+    this.markerLabelInput.value = this.state.markerLabel;
+    this.markerLabelInput.placeholder = `${info.labelPrefix} 1`;
+    this.markerRadiusSlider.retarget({
+      min: info.radiusLimits[0], max: info.radiusLimits[1],
+    });
+    this.markerRadiusSlider.set(this.state.markerRadius);
+    // A yaw control on a kind whose yaw is never written is the editor's
+    // version of a TUNING slider nothing reads.
+    this.markerYawSlider.setVisible(info.usesYaw);
+    this.markerYawSlider.set(this.state.markerYaw);
+    this.markerCaption.set(info.hint);
   }
 
   /** Push the object state back into the panel: after a kind change, and

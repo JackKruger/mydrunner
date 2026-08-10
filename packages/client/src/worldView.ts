@@ -14,11 +14,12 @@
 // input. Both pass their own camera to render().
 
 import * as THREE from 'three';
-import { Physics } from '@mydrunner/shared';
+import { Maps, Physics } from '@mydrunner/shared';
 import { TerrainMesh } from './terrain.js';
 import { WaterMesh } from './water.js';
 import { Obstacles } from './obstacles/index.js';
 import { LandmarkMeshes } from './landmarks.js';
+import { MarkerMeshes, type MarkerViewOptions } from './markers.js';
 import { Sky } from './sky.js';
 import { disposeObject3D } from './three/dispose.js';
 import { activeQuality, type QualitySettings } from './quality.js';
@@ -36,6 +37,15 @@ export interface WorldVisuals {
   terrain: Physics.TerrainData;
   obstacles: readonly Physics.Obstacle[];
   landmarks: Physics.Landmarks;
+  /** Authored markers. Optional because the menu panorama and the tests
+   *  compose a world from the generator, which authors none. */
+  markers?: readonly Maps.Marker[];
+}
+
+export interface WorldViewOptions {
+  /** Draw every authored marker kind and its trigger radius. The editor
+   *  turns this on; the game shows only the markers it simulates. */
+  markerPreview?: boolean;
 }
 
 export class WorldView {
@@ -48,13 +58,20 @@ export class WorldView {
   private terrainPlaceholder: THREE.Mesh | null = null;
   private obstacles: Obstacles | null = null;
   private landmarks: LandmarkMeshes | null = null;
+  private markers: MarkerMeshes | null = null;
   private readonly quality: QualitySettings;
+  private readonly markerOptions: MarkerViewOptions;
 
   /** `quality` defaults to the resolved tier so the game gets it for free.
    *  The editor passes QUALITY.high explicitly — it exists to show the world
    *  as the game ships it, so it must not render a reduced version of it. */
-  constructor(canvasParent: HTMLElement, quality: QualitySettings = activeQuality()) {
+  constructor(
+    canvasParent: HTMLElement,
+    quality: QualitySettings = activeQuality(),
+    options: WorldViewOptions = {},
+  ) {
     this.quality = quality;
+    this.markerOptions = { preview: options.markerPreview === true };
     // MSAA off at low tier. On a tile-based mobile GPU the resolve is a
     // bandwidth cost on every frame, and at pixelRatioCap 1.0 the crispness
     // it was buying has already been given up.
@@ -150,6 +167,7 @@ export class WorldView {
     this.refreshWater(v.terrain);
     this.refreshObstacles(v.obstacles);
     this.refreshLandmarks(v.landmarks);
+    this.refreshMarkers(v.markers ?? [], v.terrain);
   }
 
   /** Build, drop or rebuild the water surface for a terrain.
@@ -190,10 +208,30 @@ export class WorldView {
     this.scene.add(this.landmarks.group);
   }
 
+  /** Rebuild the marker visuals. Its own entry point because the editor
+   *  places and deletes markers without touching anything else in the
+   *  world, and the bay paint is seated on sampled ground — so a sculpt
+   *  under a bay has to be able to re-seat it. */
+  refreshMarkers(markers: readonly Maps.Marker[], terrain: Physics.TerrainData): void {
+    if (this.markers) {
+      this.scene.remove(this.markers.group);
+      this.markers.dispose();
+    }
+    this.markers = new MarkerMeshes(markers, terrain, this.markerOptions);
+    this.scene.add(this.markers.group);
+  }
+
   /** The obstacle group, for editor picking (meshes carry obstacleId in
    *  userData). Null before setWorld. */
   get obstacleGroup(): THREE.Group | null {
     return this.obstacles?.group ?? null;
+  }
+
+  /** The marker group. Not picked against — markers are selected by
+   *  proximity to the ground hit, because bay paint is a decal you can
+   *  park a rock on — but the e2e suite asserts against what it holds. */
+  get markerGroup(): THREE.Group | null {
+    return this.markers?.group ?? null;
   }
 
   /** Nearest-neighbour ground height. Used by the chase camera's floor
@@ -223,6 +261,7 @@ export class WorldView {
     // A no-op unless the tier asks for culling.
     this.obstacles?.updateVisibility(camera.position.x, camera.position.z);
     this.waterMeshRef?.update();
+    this.markers?.update();
     this.renderer.render(this.scene, camera);
   }
 
@@ -246,6 +285,11 @@ export class WorldView {
       this.scene.remove(this.landmarks.group);
       disposeObject3D(this.landmarks.group);
       this.landmarks = null;
+    }
+    if (this.markers) {
+      this.scene.remove(this.markers.group);
+      this.markers.dispose();
+      this.markers = null;
     }
     disposeObject3D(this.sky.mesh);
     this.renderer.dispose();

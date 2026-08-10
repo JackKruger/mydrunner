@@ -4,10 +4,11 @@
 // than the place the state lives — the keyboard shortcuts and the panel
 // both write here, and only one of them can be the source of truth.
 
-import { Physics } from '@mydrunner/shared';
+import { Maps, Physics } from '@mydrunner/shared';
 import type { SculptMode } from './editSession.js';
 
-export type ToolId = SculptMode | 'paint' | 'water' | 'object' | 'spawn' | 'delete';
+export type ToolId =
+  SculptMode | 'paint' | 'water' | 'object' | 'spawn' | 'marker' | 'delete';
 
 /** What the water brush does with a drag.
  *  - raise: flood to `waterDepth` above the ground at the stroke centre
@@ -42,6 +43,17 @@ export interface ToolState {
   objectWorldY: number;
   /** Facing written onto the next spawn point placed, in radians. */
   spawnYaw: number;
+  markerKind: Maps.MarkerKind;
+  /** Trigger radius of the next marker, in metres. For a garage bay this
+   *  also sizes the painted bay: the box and the volume you have to be
+   *  inside are the same number, so they cannot drift apart. */
+  markerRadius: number;
+  /** Parked facing for kinds whose `usesYaw` is set, in radians. */
+  markerYaw: number;
+  /** Blank means "number one from the kind's prefix" — the common case,
+   *  and the reason placing three bays does not need three trips to a
+   *  text field. */
+  markerLabel: string;
   waterMode: WaterMode;
   /** Metres of water the raise mode floods to, above the ground under
    *  the stroke centre. */
@@ -73,6 +85,10 @@ export function defaultToolState(): ToolState {
     objectWorldY: 0,
     // pi/2 matches Room's road-grid spawn: local +Z rotated onto world +X.
     spawnYaw: Math.PI / 2,
+    markerKind: 'garageBay',
+    markerRadius: Maps.markerInfo('garageBay').defaultRadius,
+    markerYaw: Math.PI / 2,
+    markerLabel: '',
     waterMode: 'raise',
     // Just over the Hilux's air intake and well under the Patrol's
     // snorkel, so the default brush authors a crossing that already
@@ -113,7 +129,17 @@ export const TOOL_KEYS: ReadonlyArray<{ code: string; tool: ToolId; label: strin
   { code: 'Digit7', tool: 'spawn', label: 'Spawn' },
   { code: 'Digit8', tool: 'delete', label: 'Delete' },
   { code: 'Digit9', tool: 'water', label: 'Water' },
+  { code: 'Digit0', tool: 'marker', label: 'Marker' },
 ];
+
+/** The radius the brush ring should draw for a tool.
+ *
+ *  The marker tool's footprint is its own trigger radius, not the shared
+ *  brush radius — a ring showing 12 m while the bay you are about to drop
+ *  is 1.65 m is worse than no ring at all. */
+export function cursorRadius(state: ToolState): number {
+  return state.tool === 'marker' ? state.markerRadius : state.radius;
+}
 
 /** Surfaces offered by the paint tool.
  *
@@ -133,6 +159,23 @@ export function paintableSurfaces(): Array<{ id: Physics.Surface; label: string 
  *  of three, and the compiler checked none of them. */
 export function placeableKinds(): ReturnType<typeof Physics.objectKindsByGroup> {
   return Physics.objectKindsByGroup();
+}
+
+/** Kinds offered by the marker tool.
+ *
+ *  Derived from MARKER_INFO for the same reason the surface and object
+ *  palettes derive from their tables: a hand-written copy here is a list
+ *  the compiler does not check. */
+export function placeableMarkerKinds(): Array<{ kind: Maps.MarkerKind; label: string }> {
+  return Maps.MARKER_KINDS.map((kind) => ({ kind, label: Maps.markerInfo(kind).label }));
+}
+
+/** Reseed the marker radius from the kind, and drop a label typed for the
+ *  previous kind — "Workshop bay" on a checkpoint is worse than blank. */
+export function applyMarkerKindDefaults(state: ToolState, kind: Maps.MarkerKind): void {
+  state.markerKind = kind;
+  state.markerRadius = Maps.markerInfo(kind).defaultRadius;
+  state.markerLabel = '';
 }
 
 /** Seed the size/height/length sliders from the kind's own defaults.

@@ -18,6 +18,7 @@ const callbacks: UiCallbacks = {
   onObjectKindChange: () => {},
   onObjectPlacementChange: () => {},
   onAutoFlow: () => {},
+  onMarkerKindChange: () => {},
 };
 
 beforeEach(() => {
@@ -55,7 +56,7 @@ describe('EditorUi tool options', () => {
     const { selectTool } = setup();
 
     expect(section('Brush').hidden).toBe(false);
-    for (const title of ['Surface', 'Water', 'Object', 'Spawn', 'Delete']) {
+    for (const title of ['Surface', 'Water', 'Object', 'Spawn', 'Marker', 'Delete']) {
       expect(section(title).hidden, title).toBe(true);
     }
 
@@ -77,11 +78,28 @@ describe('EditorUi tool options', () => {
     expect(section('Object').hidden).toBe(true);
     expect(section('Spawn').hidden).toBe(false);
 
+    selectTool('marker');
+    expect(section('Spawn').hidden).toBe(true);
+    expect(section('Marker').hidden).toBe(false);
+
     selectTool('delete');
     expect(section('Brush').hidden).toBe(false);
     expect(visibleFieldLabels('Brush')).toEqual(['radius']);
-    expect(section('Spawn').hidden).toBe(true);
+    expect(section('Marker').hidden).toBe(true);
     expect(section('Delete').hidden).toBe(false);
+  });
+
+  it('hides the marker yaw control for kinds that never write one', () => {
+    const { ui, state, selectTool } = setup();
+    selectTool('marker');
+
+    // A garage bay is a parked pose, so its facing is authored.
+    expect(state.markerKind).toBe('garageBay');
+    expect(visibleFieldLabels('Marker')).toEqual(['kind', 'label', 'radius', 'yaw']);
+
+    state.markerKind = 'checkpoint';
+    ui.syncMarker();
+    expect(visibleFieldLabels('Marker')).toEqual(['kind', 'label', 'radius']);
   });
 
   it('hides brush controls that the selected brush does not consume', () => {
