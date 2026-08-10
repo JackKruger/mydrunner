@@ -2357,6 +2357,8 @@ body.touch #help {
 #workshop-prompt { position:fixed; left:50%; bottom:18%; transform:translateX(-50%); z-index:31; padding:10px 16px; border:1px solid #f0a449; background:#17191ddd; color:#fff; font:700 13px system-ui; letter-spacing:.04em; border-radius:5px; display:none; }
 #workshop-prompt.visible { display:block; }
 .hud-drivetrain { grid-column:1/-1; margin-top:5px; color:#9fd3ff; font-size:10px; letter-spacing:.08em; }
+.hud-pressure { grid-column:1/-1; min-height:14px; color:#9fd3ff; font-size:10px; letter-spacing:.04em; }
+.hud-pressure.active { color:#f4bf4f; }
 .hud-condition { grid-column:1/-1; min-height:14px; color:#ff9a78; font-size:10px; letter-spacing:.04em; }
 .hud-winch { grid-column:1/-1; min-height:14px; color:#f4bf4f; font-size:10px; letter-spacing:.05em; }
 #winch-reticle { position:fixed; left:50%; top:50%; width:20px; height:20px; margin:-10px 0 0 -10px; border:2px solid #e46955; border-radius:50%; pointer-events:none; z-index:15; display:none; box-shadow:0 0 8px #000a; }

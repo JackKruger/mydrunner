@@ -118,6 +118,8 @@ export interface PlayerInput {
   manualGear: ManualGear | null;
   /** One-shot direct selection from the on-screen transfer-case stick. */
   transferCase: TransferCaseMode | null;
+  /** Hold to air down (-1) or inflate (+1). */
+  pressureAdjust: -1 | 0 | 1;
   // Bitfield of misc actions. See BUTTON_* below.
   buttons: number;
 }
@@ -149,6 +151,7 @@ export const EMPTY_INPUT: PlayerInput = {
   handbrake: 0,
   manualGear: null,
   transferCase: null,
+  pressureAdjust: 0,
   buttons: 0,
 };
 

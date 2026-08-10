@@ -46,6 +46,8 @@ interface InternalPlayer {
   winchCommandSeq: number;
   winchRevision: number;
   lastWinchAttachAtMs: number;
+  rutSequence: number;
+  lastRutAtMs: number;
 }
 
 interface InternalWinch extends WinchLinkSnapshot {
@@ -75,12 +77,15 @@ export class Room {
   private snapshotBytes = 0;
   private snapshotMaxBytes = 0;
   private perfStartedAtMs = performance.now();
+  private readonly ruts: Physics.SparseRutField;
+  private rutGlobalSequence = 0;
 
   constructor(map: string | Maps.MapDoc = Maps.DEFAULT_MAP_ID) {
     const doc = typeof map === 'string' ? Maps.getMap(map) : map;
     if (!doc) throw new Error(`Room: unknown map "${String(map)}"`);
     this.map = Maps.applyMapDoc(doc);
     this.mapRev = Maps.mapDocRev(doc);
+    this.ruts = new Physics.SparseRutField(this.map.terrain.size);
   }
 
   start(): void {
@@ -145,6 +150,8 @@ export class Room {
       winchCommandSeq: 0,
       winchRevision: 0,
       lastWinchAttachAtMs: Number.NEGATIVE_INFINITY,
+      rutSequence: 0,
+      lastRutAtMs: Number.NEGATIVE_INFINITY,
     });
     handle.send(
       Net.encode({
@@ -158,6 +165,56 @@ export class Room {
         build,
       }),
     );
+    this.sendRutSync(handle);
+  }
+
+  private sendRutSync(handle: PlayerHandle): void {
+    const tiles = this.ruts.exportTiles();
+    handle.send(Net.encode({
+      t: 'rut-sync-start',
+      globalSequence: this.rutGlobalSequence,
+      tileCount: tiles.length,
+    }));
+    for (const tile of tiles) handle.send(Net.encode({ t: 'rut-tile', tile }));
+    handle.send(Net.encode({ t: 'rut-sync-end', globalSequence: this.rutGlobalSequence }));
+  }
+
+  applyRutStamp(id: PlayerId, proposed: Physics.PredictedRutStamp): boolean {
+    const player = this.players.get(id);
+    if (!player) return false;
+    const reject = (): false => {
+      player.handle.send(Net.encode({
+        t: 'rut-result', ownerSequence: proposed.ownerSequence, accepted: false,
+      }));
+      return false;
+    };
+    if (proposed.ownerSequence <= player.rutSequence) return reject();
+    const now = this.nowMs();
+    if (now - player.lastRutAtMs < 100) return reject();
+    if (Math.hypot(proposed.x - player.state.position.x, proposed.z - player.state.position.z) > 4) return reject();
+    if (proposed.radiusLong < 0.25 || proposed.radiusLong > 1.5
+      || proposed.radiusLat < 0.125 || proposed.radiusLat > 0.8
+      || proposed.depth <= 0 || proposed.depth > 0.04) return reject();
+    const surface = Physics.sampleSurface(this.map.terrain, proposed.x, proposed.z);
+    if (surface !== Physics.Surface.Mud && surface !== Physics.Surface.DeepMud) return reject();
+
+    player.rutSequence = proposed.ownerSequence;
+    player.lastRutAtMs = now;
+    const stamp: Physics.RutStamp = {
+      ...proposed,
+      ownerId: id,
+      globalSequence: ++this.rutGlobalSequence,
+    };
+    this.ruts.applyStamp(stamp);
+    player.handle.send(Net.encode({
+      t: 'rut-result',
+      ownerSequence: proposed.ownerSequence,
+      accepted: true,
+      globalSequence: stamp.globalSequence,
+    }));
+    const message = Net.encode({ t: 'rut-batch', stamps: [stamp] });
+    for (const peer of this.players.values()) peer.handle.send(message);
+    return true;
   }
 
   removePlayer(id: PlayerId): void {

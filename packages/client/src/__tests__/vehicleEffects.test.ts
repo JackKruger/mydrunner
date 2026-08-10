@@ -277,25 +277,3 @@ describe('offline preview', () => {
     fx.dispose();
   });
 });
-
-describe('axle sink', () => {
-  it('is zero over water on a firm bed — water is not mud', () => {
-    // Water keeps the bed surface precisely so this stays true: a gravel
-    // ford does not swallow the axle the way deep mud does.
-    const t = terrain(0.5);
-    t.surfaces.fill(Physics.Surface.Gravel);
-    const fx = new VehicleEffects();
-    fx.setTerrain(t);
-    expect(fx.axleSink(pose(), { centerLocalY: -0.2, centerLocalZ: 1.3 })).toBe(0);
-    fx.dispose();
-  });
-
-  it('still sinks in mud under water', () => {
-    const t = terrain(0.5);
-    t.surfaces.fill(Physics.Surface.DeepMud);
-    const fx = new VehicleEffects();
-    fx.setTerrain(t);
-    expect(fx.axleSink(pose(), { centerLocalY: -0.2, centerLocalZ: 1.3 })).toBeGreaterThan(0);
-    fx.dispose();
-  });
-});

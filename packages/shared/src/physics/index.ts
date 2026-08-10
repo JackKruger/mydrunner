@@ -5,6 +5,8 @@ export * from './vehicleTypes.js';
 export * from './vehicleGeom.js';
 export * from './axle.js';
 export * from './wheelDynamics.js';
+export * from './differential.js';
+export * from './soil.js';
 export * from './terrain.js';
 export * from './water.js';
 export * from './ruts.js';

@@ -177,6 +177,10 @@ export class LocalSimulation {
   private winchRuntimeState: Physics.WinchRuntimeState | null = null;
   private winchRuntimeLinkId: string | null = null;
   private pendingWinchBreak: string | null = null;
+  private rutSequence = 0;
+  private lastRutStampStep = -1000;
+  private rutSide = 0;
+  private readonly rutReplica: Physics.RutSessionReplica;
 
   constructor(
     map: Maps.MapWorld,
@@ -185,7 +189,8 @@ export class LocalSimulation {
     localPlayerId = 'local',
   ) {
     this.localPlayerId = localPlayerId;
-    this.world = new Physics.World({ map });
+    this.rutReplica = new Physics.RutSessionReplica(map.terrain.size, localPlayerId);
+    this.world = new Physics.World({ map, ruts: this.rutReplica });
     this.spawn = { position: { ...spawn.position }, yaw: spawn.yaw ?? 0 };
     this.vehicle = this.world.spawnVehicle('local', this.spawn, build);
     this.vehicle.body.enableCcd(true);
@@ -398,6 +403,71 @@ export class LocalSimulation {
       drowned: false,
       flood: 0,
     };
+  }
+
+  pressureStatus(): Physics.PressureStatus {
+    return this.vehicle.pressureStatus?.() ?? {
+      currentPsi: 34, nominalPsi: 34, minPsi: 20, maxPsi: 42,
+      adjusting: 0, reason: null,
+    };
+  }
+
+  createRutStampCandidate(): Physics.PredictedRutStamp | null {
+    // Seven fixed ticks (116.7 ms) leaves delivery jitter headroom under the
+    // server's strict 10 Hz receipt-time gate; a six-tick cadence can arrive
+    // a fraction under 100 ms and strand an unacknowledged predicted stamp.
+    if (this.lastSteppedSeq - this.lastRutStampStep < 7) return null;
+    const telemetry = this.vehicle.debugTelemetry?.();
+    if (!telemetry) return null;
+    let selected: Physics.WheelDebugTelemetry | null = null;
+    for (let wheelIndex = this.rutSide; wheelIndex < telemetry.wheels.length; wheelIndex += 2) {
+      const wheel = telemetry.wheels[wheelIndex]!;
+      const soil = Physics.surfaceInfo(wheel.surface).traction.soil;
+      if (!wheel.contact || soil === 'none' || Math.abs(wheel.slipRatio) < 0.15 || wheel.normalLoad < 100) continue;
+      if (!selected || wheel.slipWork > selected.slipWork) selected = wheel;
+    }
+    if (!selected) return null;
+    this.rutSide = 1 - this.rutSide;
+    const q = telemetry.rotation;
+    const forwardX = 2 * (q.x * q.z + q.w * q.y);
+    const forwardZ = 1 - 2 * (q.x * q.x + q.y * q.y);
+    const pressure = this.pressureStatus();
+    const footprintScale = Math.sqrt(pressure.nominalPsi / Math.max(4, pressure.currentPsi));
+    const maxSink = Physics.surfaceInfo(selected.surface).traction.soil === 'deep-mud' ? 0.38 : 0.18;
+    const disturbance = Math.min(1, selected.sinkDepth / maxSink);
+    const work = Math.min(1, selected.slipWork / 4_000);
+    const pressureDepthScale = (pressure.currentPsi / pressure.nominalPsi) ** 0.35;
+    const wheelWidth = Physics.geomFor(this.vehicle.build).wheelWidth;
+    const stamp: Physics.PredictedRutStamp = {
+      ownerSequence: ++this.rutSequence,
+      x: selected.contactPoint.x,
+      z: selected.contactPoint.z,
+      heading: Math.atan2(forwardX, forwardZ),
+      radiusLong: Math.min(1.5, Math.max(0.25, telemetry.wheelRadius * 0.75 * footprintScale)),
+      radiusLat: Math.min(0.8, Math.max(0.125, wheelWidth * 0.55 * footprintScale)),
+      depth: Math.min(0.04, Math.max(0.001,
+        selected.normalLoad / 12_000
+          * Math.abs(selected.slipRatio)
+          * pressureDepthScale
+          * (0.35 + disturbance * 0.65)
+          * (0.2 + work * 0.8)
+          * 0.012)),
+    };
+    this.rutReplica.predict(stamp);
+    this.lastRutStampStep = this.lastSteppedSeq;
+    return stamp;
+  }
+
+  applyRutTile(tile: Physics.RutTilePayload): void {
+    this.rutReplica.applyTile(tile);
+  }
+
+  applyRutStamps(stamps: readonly Physics.RutStamp[]): void {
+    this.rutReplica.applyAuthoritative(stamps);
+  }
+
+  resolveRutStamp(ownerSequence: number, accepted: boolean, globalSequence?: number): void {
+    this.rutReplica.resolve(ownerSequence, accepted, globalSequence);
   }
 
   /** High-rate owner-only values consumed by the `?dev` tuning UI. */

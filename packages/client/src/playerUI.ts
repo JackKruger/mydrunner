@@ -1,4 +1,4 @@
-import type { ManualGear, TransferCaseMode } from '@mydrunner/shared';
+import type { ManualGear, PressureStatus, TransferCaseMode } from '@mydrunner/shared';
 
 export type PlayerConnectionMode =
   | 'connecting'
@@ -38,6 +38,7 @@ export interface PlayerTelemetry {
   steeringCondition?: number;
   drivetrainNotice?: string;
   winchStatus?: string;
+  pressure?: PressureStatus;
 }
 
 export interface PlayerHudState extends PlayerTelemetry {
@@ -115,6 +116,7 @@ export class PlayerUI {
   private readonly drivetrainText: HTMLElement;
   private readonly conditionText: HTMLElement;
   private readonly winchText: HTMLElement;
+  private readonly pressureText: HTMLElement;
   private readonly shifter: HTMLElement;
   private readonly gearGate: HTMLElement;
   private readonly gearKnob: HTMLElement;
@@ -149,6 +151,7 @@ export class PlayerUI {
       bodyCondition: 1, engineCondition: 1, steeringCondition: 1,
       drivetrainNotice: '',
       winchStatus: '',
+      pressure: undefined,
       version: options.version,
     };
 
@@ -199,6 +202,7 @@ export class PlayerUI {
         <div id="hud-drivetrain" class="hud-drivetrain" role="status">HIGH · LOCKERS OPEN</div>
         <div id="hud-condition" class="hud-condition" role="status"></div>
         <div id="hud-winch" class="hud-winch" role="status" aria-live="polite"></div>
+        <div id="hud-pressure" class="hud-pressure" role="status" aria-live="polite">TYRES — PSI</div>
       </section>
 
       <section id="hud-shifter" class="hud-shifter instrument-panel" aria-label="Transmission selector" data-mode="auto">
@@ -257,6 +261,7 @@ export class PlayerUI {
     this.drivetrainText = root.querySelector('#hud-drivetrain')!;
     this.conditionText = root.querySelector('#hud-condition')!;
     this.winchText = root.querySelector('#hud-winch')!;
+    this.pressureText = root.querySelector('#hud-pressure')!;
     this.shifter = root.querySelector('#hud-shifter')!;
     this.gearGate = root.querySelector('#gear-gate')!;
     this.gearKnob = root.querySelector('#gear-knob')!;
@@ -358,6 +363,12 @@ export class PlayerUI {
     this.conditionText.classList.toggle('active', damaged);
     setText(this.winchText, this.state.winchStatus ?? '');
     this.winchText.classList.toggle('active', Boolean(this.state.winchStatus));
+    const pressure = this.state.pressure;
+    const pressureText = pressure
+      ? `TYRES ${pressure.currentPsi.toFixed(1)} PSI · ${pressure.minPsi.toFixed(0)}–${pressure.maxPsi.toFixed(0)}${pressure.reason ? ` · ${pressure.reason}` : ''}`
+      : 'TYRES — PSI';
+    setText(this.pressureText, pressureText);
+    this.pressureText.classList.toggle('active', Boolean(pressure?.reason || pressure?.adjusting));
 
     setText(this.tickText, `tick=${this.state.tick ?? 0}`);
     setText(this.fpsText, `${this.state.fps ?? 0} FPS`);

@@ -44,12 +44,19 @@ describe('owner simulation determinism', () => {
     }
     const sa = a.vehicle.getState();
     const sb = b.vehicle.getState();
-    // Under bit-perfect determinism this would be exact. Even without
-    // strict determinism, identical IEEE-754 ops on identical inputs
-    // typically match to many digits in single-threaded Rapier.
-    expect(sa.position.x).toBeCloseTo(sb.position.x, 3);
-    expect(sa.position.y).toBeCloseTo(sb.position.y, 3);
-    expect(sa.position.z).toBeCloseTo(sb.position.z, 3);
+    const serialize = (rig: ReturnType<typeof makeWorld>, state: typeof sa): string => JSON.stringify({
+      state,
+      axles: rig.vehicle.axleSnaps?.(),
+      pressure: rig.vehicle.pressureStatus?.(),
+      drivetrain: rig.vehicle.drivetrainStatus?.(),
+      soil: rig.vehicle.debugTelemetry?.().wheels.map((wheel) => ({
+        sinkDepth: wheel.sinkDepth,
+        soilDrag: wheel.soilDrag,
+        slipWork: wheel.slipWork,
+      })),
+      ruts: (rig.world.ruts as Physics.SparseRutField).exportTiles(),
+    });
+    expect(serialize(a, sa)).toBe(serialize(b, sb));
     a.world.dispose();
     b.world.dispose();
   });

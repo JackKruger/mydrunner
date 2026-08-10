@@ -261,12 +261,13 @@ describe('physics audit: rolling resistance', () => {
     settle(road.world, 60);
     settle(mud.world, 60);
 
-    for (let i = 0; i < 60; i++) {
-        road.vehicle.setInput({ ...EMPTY_INPUT, seq: i, throttle: 1 });
-        road.world.step();
-    }
+    // Establish comparable rolling states with controlled throttle. Full
+    // throttle is intentionally a poor launch strategy in mud now: it spins
+    // and digs instead of being a useful way to seed a coasting test.
     for (let i = 0; i < 120; i++) {
-        mud.vehicle.setInput({ ...EMPTY_INPUT, seq: i, throttle: 1 });
+        road.vehicle.setInput({ ...EMPTY_INPUT, seq: i, throttle: 0.35 });
+        mud.vehicle.setInput({ ...EMPTY_INPUT, seq: i, throttle: 0.35 });
+        road.world.step();
         mud.world.step();
     }
 

@@ -3,7 +3,13 @@
 // progress than shallower ones (traction is correctly grade-dependent).
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { Physics, EMPTY_INPUT } from '@mydrunner/shared';
+import {
+  BUTTON_FRONT_LOCKER,
+  BUTTON_REAR_LOCKER,
+  Physics,
+  EMPTY_INPUT,
+  createStockBuild,
+} from '@mydrunner/shared';
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -88,13 +94,8 @@ describe('incline traction', () => {
       return dz;
     }
 
-    // Comparing low grades (e.g. 10% vs 25%) is no longer informative:
-    // with the unsaturated ride spring + incline assist, the truck climbs
-    // moderate grades at near-flat speed (within a few cm over 5 s of
-    // driving). The grade-dependence cliff sits between ~50% and ~65%
-    // for this vehicle. We assert the old shape of "more grade -> less
-    // progress" using a moderate vs near-cliff comparison, which is the
-    // regime where physics meaningfully resists the climb.
+    // This compares two synthetic planes as a physical grade measurement;
+    // the production mountain route is intentionally not an acceptance rig.
     const moderate = progressOn(0.20);
     const veryHard = progressOn(0.60);
     expect(veryHard, `moderate (0.20) > very-hard (0.60): ${moderate.toFixed(2)} vs ${veryHard.toFixed(2)}`)
@@ -115,6 +116,43 @@ describe('incline traction', () => {
     const y1 = v.getState().position.y;
     // Vehicle moved forward on a rising slope, so its world-y should be higher.
     expect(y1, `elevation after climb: y0=${y0.toFixed(2)} y1=${y1.toFixed(2)}`).toBeGreaterThan(y0 + 0.5);
+    world.dispose();
+  });
+
+  it('lets a prepared locked crawler climb a 60 % dirt grade under controlled throttle', () => {
+    const world = makeSlopedWorld(0.60, Physics.Surface.Dirt);
+    const build = {
+      ...createStockBuild('outclaw'),
+      suspensionId: 'outclaw.suspension.flex-100',
+      axleId: 'outclaw.axle.portal-240',
+      tireId: 'outclaw.tire.xt-40-wide',
+      wheelId: 'outclaw.wheel.beadlock-alloy',
+      frontLocker: true,
+      rearLocker: true,
+    };
+    const vehicle = world.spawnVehicle(
+      'crawler',
+      { position: { x: 0, y: 1.8, z: 0 } },
+      build,
+    );
+    const pitch = -Math.atan(0.60);
+    vehicle.body.setRotation({ x: Math.sin(pitch / 2), y: 0, z: 0, w: Math.cos(pitch / 2) }, true);
+    vehicle.setInput({
+      ...EMPTY_INPUT,
+      seq: 1,
+      transferCase: '4l',
+      buttons: BUTTON_FRONT_LOCKER | BUTTON_REAR_LOCKER,
+    });
+    world.step();
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 2, brake: 1 });
+    simSteps(world, 120);
+    expect(vehicle.drivetrainStatus?.()).toMatchObject({ transferCase: '4l', frontLocked: true, rearLocked: true });
+    const start = vehicle.getState().position;
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 3, throttle: 0.35 });
+    simSteps(world, 10 * 60);
+    const end = vehicle.getState().position;
+    expect(end.z - start.z).toBeGreaterThan(2);
+    expect(end.y - start.y).toBeGreaterThan(1);
     world.dispose();
   });
 });

@@ -16,7 +16,8 @@
     "test:watch": "vitest",
     "build": "tsc",
     "lint": "tsc --noEmit",
-    "map": "tsx src/generateMaps.ts"
+    "map": "tsx src/generateMaps.ts",
+    "benchmark:physics": "tsx scripts/physicsBenchmark.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

@@ -71,6 +71,19 @@ export interface WheelKinematic {
   carcassForce: number;
   suspensionForce: number;
   tireDeflectionRate: number;
+  /** Series longitudinal force after relaxation (N). */
+  relaxedLongitudinalForce: number;
+  sinkDepth: number;
+  slipDisplacement: number;
+  soilCompaction: number;
+  bulldozingResistance: number;
+  slipWork: number;
+  soilResult: {
+    contactArea: number;
+    shearMultiplier: number;
+    bulldozingForce: number;
+    targetSinkDepth: number;
+  };
 }
 
 export function createWheelKinematic(): WheelKinematic {
@@ -107,6 +120,13 @@ export function createWheelKinematic(): WheelKinematic {
     carcassForce: 0,
     suspensionForce: 0,
     tireDeflectionRate: 0,
+    relaxedLongitudinalForce: 0,
+    sinkDepth: 0,
+    slipDisplacement: 0,
+    soilCompaction: 0,
+    bulldozingResistance: 0,
+    slipWork: 0,
+    soilResult: { contactArea: 0, shearMultiplier: 1, bulldozingForce: 0, targetSinkDepth: 0 },
   };
 }
 
@@ -139,6 +159,16 @@ export function resetWheelKinematic(w: WheelKinematic): void {
   w.carcassForce = 0;
   w.suspensionForce = 0;
   w.tireDeflectionRate = 0;
+  w.relaxedLongitudinalForce = 0;
+  w.sinkDepth = 0;
+  w.slipDisplacement = 0;
+  w.soilCompaction = 0;
+  w.bulldozingResistance = 0;
+  w.slipWork = 0;
+  w.soilResult.contactArea = 0;
+  w.soilResult.shearMultiplier = 1;
+  w.soilResult.bulldozingForce = 0;
+  w.soilResult.targetSinkDepth = 0;
 }
 
 /** Integrate wheel angular velocity by net torque this tick.
@@ -160,6 +190,7 @@ export function integrateWheelSpin(
   groundTorque: number,
   dt: number,
   rollingResistance: number = WHEEL.rollingResistance,
+  inertia: number = WHEEL.inertia,
 ): void {
   // Brake torque opposes the current angVel; if the wheel is stopped
   // and only brake is applied, hold it at zero (don't let brake reverse
@@ -177,7 +208,7 @@ export function integrateWheelSpin(
   // soft surfaces like mud.
   const rolling = -rollingResistance * w.angVel;
   const net = driveTorque + brake + groundTorque + rolling;
-  const newAngVel = w.angVel + (net / WHEEL.inertia) * dt;
+  const newAngVel = w.angVel + (net / Math.max(1e-4, inertia)) * dt;
   // Brake-induced wheel-sign flip protection: if a brake (and only a
   // brake) is strong enough to reverse the wheel's direction in a
   // single tick, the integrator without this clamp will overshoot to

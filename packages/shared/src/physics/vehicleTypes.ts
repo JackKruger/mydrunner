@@ -33,6 +33,15 @@ export interface WaterStatus {
   flood: number;
 }
 
+export interface PressureStatus {
+  currentPsi: number;
+  nominalPsi: number;
+  minPsi: number;
+  maxPsi: number;
+  adjusting: -1 | 0 | 1;
+  reason: string | null;
+}
+
 /** Owner-only physics instrumentation used by the `?dev` visualiser.
  *
  * This deliberately stays outside VehicleState: it is high-frequency tuning
@@ -48,6 +57,7 @@ export interface WheelDebugTelemetry {
   gripCoefficient: number;
   gripLimit: number;
   longitudinalForce: number;
+  relaxedLongitudinalForce: number;
   lateralForce: number;
   force: { x: number; y: number; z: number };
   slipRatio: number;
@@ -71,6 +81,9 @@ export interface WheelDebugTelemetry {
   carcassDeflection: number;
   suspensionForce: number;
   carcassForce: number;
+  sinkDepth: number;
+  soilDrag: number;
+  slipWork: number;
 }
 
 export interface VehicleDebugTelemetry {
@@ -82,6 +95,7 @@ export interface VehicleDebugTelemetry {
   wheelbase: number;
   track: number;
   wheelRadius: number;
+  pressurePsi: number;
   rollAngle: number;
   pitchAngle: number;
   staticRollLimit: number;
@@ -100,6 +114,8 @@ export interface VehicleDebugTelemetry {
     frontLocked: boolean;
     rearLocked: boolean;
     outputTorque: number;
+    drivenCarrierRpm: number;
+    differentialReactionTorque: number;
   };
   water: {
     submerged: number;
@@ -109,6 +125,15 @@ export interface VehicleDebugTelemetry {
     dragPoint: { x: number; y: number; z: number };
     dragTorque: { x: number; y: number; z: number };
   };
+  axles: [{
+    iterationResidual: number;
+    tubeContact: boolean;
+    housingContact: boolean;
+  }, {
+    iterationResidual: number;
+    tubeContact: boolean;
+    housingContact: boolean;
+  }];
   wheels: [WheelDebugTelemetry, WheelDebugTelemetry, WheelDebugTelemetry, WheelDebugTelemetry];
 }
 
@@ -127,6 +152,7 @@ export interface VehicleLike {
   axleSnaps?(): [AxleSnap, AxleSnap];
   applyAxleSnaps?(snaps: [AxleSnap, AxleSnap]): void;
   waterStatus?(): WaterStatus;
+  pressureStatus?(): PressureStatus;
   debugTelemetry?(): VehicleDebugTelemetry;
   repair?(): void;
   damageStatus?(): VehicleDamageState;

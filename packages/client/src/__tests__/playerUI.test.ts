@@ -87,6 +87,25 @@ describe('PlayerUI telemetry', () => {
     expect(warning.textContent).toBe('');
     expect(warning.getAttribute('aria-hidden')).toBe('true');
   });
+
+  it('shows current tyre PSI, fitted range, and adjustment refusal', () => {
+    const { root, ui } = makeUI();
+    ui.updateTelemetry({
+      pressure: {
+        currentPsi: 17.5,
+        nominalPsi: 24,
+        minPsi: 6,
+        maxPsi: 28,
+        adjusting: -1,
+        reason: 'Release the throttle to adjust tyre pressure.',
+      },
+    });
+    const status = root.querySelector('#hud-pressure')!;
+    expect(status.textContent).toContain('17.5 PSI');
+    expect(status.textContent).toContain('6–28');
+    expect(status.textContent).toContain('Release the throttle');
+    expect(status.classList.contains('active')).toBe(true);
+  });
 });
 
 describe('H-pattern transmission selector', () => {

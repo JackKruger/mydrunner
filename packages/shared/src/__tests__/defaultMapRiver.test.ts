@@ -1,69 +1,18 @@
-// The valley river as shipped in the default map.
-//
-// These pin the crossing's design intent, not its exact geometry: the
-// river is authored by scripts/carveRiver.ts and its numbers will be
-// retuned. What must not silently change is the shape of the decision it
-// puts in front of the player — a road ford that most rigs can take, a
-// river either side that punishes leaving it, and a current that shoves
-// you while you cross.
+// Acceptance checks for the authored default map. Route-specific geometry
+// belongs to the map document, so replacing that document must not leave
+// tests pinned to coordinates from the previous level.
 
-import { beforeAll, describe, expect, it } from 'vitest';
-import { EMPTY_INPUT, type CarKind } from '../types.js';
+import { describe, expect, it } from 'vitest';
 import { applyMapDoc, baseChecksumOf } from '../map/applyMapDoc.js';
-import { carveRiver } from '../map/riverCarve.js';
 import { defaultMap } from '../map/maps/defaultMap.js';
 import { gridSpawn, resolveSpawn } from '../map/spawn.js';
-import { TERRAIN } from '../constants.js';
-import { generateTerrain, sampleHeightBilinear } from '../physics/terrain.js';
-import { hasWater, sampleWaterDepth, sampleWaterFlow } from '../physics/water.js';
-import { World, initRapier } from '../physics/world.js';
-
-beforeAll(async () => {
-  await initRapier();
-});
+import { generateTerrain } from '../physics/terrain.js';
+import { hasWater, sampleWaterDepth } from '../physics/water.js';
 
 const map = applyMapDoc(defaultMap);
-const FORD_X = -40;
-const ROAD_Z = TERRAIN.roadZ;
 
-describe('the carve is a fixed point', () => {
-  // scripts/carveRiver.ts tells you to re-run it whenever the river moves,
-  // and its whole safety story is that a run which changes nothing writes
-  // nothing. That was untrue for a while: the reset was keyed on the last
-  // run's water grid, which excludes the graded bank, so every run re-cut
-  // the shoulders on top of their own previous cut and the valley crept
-  // deeper. Nothing failed - the map simply drifted a little each time
-  // somebody followed the instructions.
-  it('re-carving the shipped map reproduces it exactly', () => {
-    const again = carveRiver(defaultMap);
-    expect(again.doc.heightDelta).toEqual(defaultMap.heightDelta);
-    expect(again.doc.water).toEqual(defaultMap.water);
-  });
-
-  it('converges from any starting delta, not just the committed one', () => {
-    const once = carveRiver(defaultMap).doc;
-    const twice = carveRiver(once).doc;
-    expect(twice.heightDelta).toEqual(once.heightDelta);
-    expect(twice.water).toEqual(once.water);
-  });
-
-  it('cuts a bank wider than it floods, which is why the reset spans the footprint', () => {
-    // If these were ever equal the old water-keyed reset would have looked
-    // correct, and this whole class of drift would be invisible.
-    const { carved, wet } = carveRiver(defaultMap);
-    expect(wet).toBeLessThan(carved);
-  });
-});
-
-describe('the map still composes', () => {
-  it('carries water', () => {
-    expect(hasWater(map.terrain)).toBe(true);
-  });
-
-  it('did not move the procedural base', () => {
-    // The river is document data, not a height layer. If someone moves
-    // it into the generator this fails, and every authored map's delta
-    // silently starts meaning something different.
+describe('the authored default map', () => {
+  it('matches the procedural base it was authored against', () => {
     expect(defaultMap.baseChecksum).toBe(baseChecksumOf(generateTerrain({
       seed: defaultMap.base.seed,
       size: defaultMap.base.size,
@@ -74,104 +23,34 @@ describe('the map still composes', () => {
     })));
   });
 
-  it('leaves every spawn slot on dry land', () => {
+  it('composes finite terrain grids at the declared resolution', () => {
+    const cells = defaultMap.base.resolution ** 2;
+    expect(map.terrain.heights).toHaveLength(cells);
+    expect(map.terrain.surfaces).toHaveLength(cells);
+    expect(Array.from(map.terrain.heights).every(Number.isFinite)).toBe(true);
+  });
+
+  it('retains its authored water layer', () => {
+    expect(hasWater(map.terrain)).toBe(true);
+  });
+
+  it('keeps every fallback spawn slot on dry land', () => {
     for (let slot = 0; slot < 16; slot++) {
       const { x, z } = gridSpawn(map.terrain.size, slot);
       expect(sampleWaterDepth(map.terrain, x, z)).toBe(0);
     }
   });
 
-  it('spawns the player above the ground, not in the river', () => {
+  it('resolves the first player above dry ground', () => {
     const pose = resolveSpawn(map, 0, 'patrol');
     expect(sampleWaterDepth(map.terrain, pose.position.x, pose.position.z)).toBe(0);
-  });
-});
-
-describe('the ford', () => {
-  it('crosses the main road', () => {
-    expect(sampleWaterDepth(map.terrain, FORD_X, ROAD_Z)).toBeGreaterThan(1);
+    expect(Number.isFinite(pose.position.y)).toBe(true);
   });
 
-  it('is far enough from spawn to arrive at speed', () => {
-    const spawn = gridSpawn(map.terrain.size, 0);
-    expect(FORD_X - spawn.x).toBeGreaterThan(60);
-  });
-
-  it('has banks that shelve rather than a wall', () => {
-    // A step-sided channel is a collision, not a crossing.
-    const deep = sampleWaterDepth(map.terrain, FORD_X, ROAD_Z);
-    const mid = sampleWaterDepth(map.terrain, FORD_X - 12, ROAD_Z);
-    const edge = sampleWaterDepth(map.terrain, FORD_X - 18, ROAD_Z);
-    expect(mid).toBeGreaterThan(0);
-    expect(mid).toBeLessThan(deep);
-    expect(edge).toBeLessThan(mid);
-  });
-
-  it('is the shallowest point on the river', () => {
-    // A road crosses where the water is shallow. That is why real fords
-    // exist, and it is what stops the map's main artery being a wall.
-    const ford = sampleWaterDepth(map.terrain, FORD_X, ROAD_Z);
-    expect(sampleWaterDepth(map.terrain, -45, -75)).toBeGreaterThan(ford);
-    expect(sampleWaterDepth(map.terrain, -34, -18)).toBeGreaterThan(ford);
-  });
-
-  it('flows downstream, roughly along the channel', () => {
-    const flow = sampleWaterFlow(map.terrain, FORD_X, ROAD_Z, { x: 0, z: 0 });
-    const speed = Math.hypot(flow.x, flow.z);
-    // A barely moving field can satisfy the direction assertions while
-    // remaining imperceptible from the cab. The shipped centre current
-    // is deliberately swift enough to read through body load and drift.
-    expect(speed).toBeGreaterThan(0.9);
-    // The river runs north to south here, so the current is mostly -z:
-    // across a road that runs along x, which is what makes it a shove
-    // rather than a headwind.
-    expect(flow.z).toBeLessThan(0);
-    expect(Math.abs(flow.z)).toBeGreaterThan(Math.abs(flow.x));
-  });
-});
-
-/** Drive from the road west of the ford toward the far bank. */
-function cross(kind: CarKind): { crossed: boolean; drowned: boolean; drift: number } {
-  const world = new World({ map });
-  const y = sampleHeightBilinear(map.terrain, -80, ROAD_Z) + 1.6;
-  const v = world.spawnVehicle('p', { position: { x: -80, y, z: ROAD_Z }, yaw: Math.PI / 2 }, kind);
-  let crossed = false;
-  let drowned = false;
-  let drift = 0;
-  for (let i = 0; i < 60 * 40; i++) {
-    v.setInput({ ...EMPTY_INPUT, seq: i + 1, throttle: 0.6 });
-    world.step();
-    const s = v.getState();
-    if (v.waterStatus?.().drowned) drowned = true;
-    drift = Math.max(drift, Math.abs(s.position.z - ROAD_Z));
-    if (s.position.x > -18) { crossed = true; break; }
-  }
-  world.dispose();
-  return { crossed, drowned, drift };
-}
-
-describe('driving the ford', () => {
-  it('lets the Ridgeback through', () => {
-    const r = cross('ridgeback');
-    expect(r.crossed).toBe(true);
-    expect(r.drowned).toBe(false);
-  });
-
-  it('lets every other stock 4x4 through too', () => {
-    // The road ford is the map's main artery; walling off most of the
-    // garage would make the whole east half a vehicle-select screen.
-    for (const kind of ['overlander', 'stockman-single', 'stockman-dual', 'longreach'] as CarKind[]) {
-      const r = cross(kind);
-      expect(r.crossed, `${kind} should cross`).toBe(true);
-      expect(r.drowned, `${kind} should not drown`).toBe(false);
-    }
-  }, 15_000);
-
-  it('shoves you downstream on the way across', () => {
-    // The whole reason to author a flow field. Too little and the river
-    // is a puddle; too much and you lose the road entirely.
-    const drift = cross('ridgeback').drift;
-    expect(drift).toBeGreaterThan(2);
-    expect(drift).toBeLessThan(30);
+  it('has unique authored object and marker ids', () => {
+    const objectIds = defaultMap.objects.added.map((object) => object.id);
+    const markerIds = defaultMap.markers.map((marker) => marker.id);
+    expect(new Set(objectIds).size).toBe(objectIds.length);
+    expect(new Set(markerIds).size).toBe(markerIds.length);
   });
 });

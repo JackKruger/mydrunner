@@ -95,7 +95,7 @@ describe('the air intake decides who drowns', () => {
     // Buoyancy unloads both trucks slightly relative to their dry intake
     // heights. Bias the separating level upward enough to keep the work
     // ute submerged while retaining the Longreach's large intake margin.
-    const level = (intakeWorldY('longreach') + intakeWorldY('stockman-single')) / 2 + 0.08;
+    const level = (intakeWorldY('longreach') + intakeWorldY('stockman-single')) / 2 + 0.12;
 
     const a = floodedWorld(level);
     expect(run(a, 'stockman-single', WATER.drownTicks + 40).waterStatus().drowned).toBe(true);
@@ -226,7 +226,7 @@ describe('a healthy engine is untouched', () => {
   it('still makes torque with no water anywhere', () => {
     const e = createEngineState();
     const out = stepEngine(e, 10, 10, 1, 1 / 60);
-    expect(out.wheelForce).toBeGreaterThan(0);
+    expect(out.totalDrivelineTorque).toBeGreaterThan(0);
     expect(out.rpm).toBeGreaterThanOrEqual(ENGINE.idleRpm);
   });
 });

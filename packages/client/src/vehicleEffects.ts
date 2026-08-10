@@ -11,7 +11,6 @@
 
 import * as THREE from 'three';
 import {
-  VEHICLE,
   Physics,
   type VehicleBuild,
   type PlayerId,
@@ -21,6 +20,7 @@ import {
 import { ParticleSystem } from './particles.js';
 import { activeQuality, type QualitySettings } from './quality.js';
 import { TyreTrackSystem } from './tyreTracks.js';
+import { RutVisual } from './rutVisual.js';
 
 /** The drawn pose of one vehicle. THREE.Group satisfies this structurally,
  *  which is the point — this module never learns what a VehicleVisual is. */
@@ -106,6 +106,7 @@ export class VehicleEffects {
   readonly group = new THREE.Group();
   private particles: ParticleSystem;
   private tracks: TyreTrackSystem;
+  private ruts = new RutVisual();
   private terrain: Physics.TerrainData | null = null;
   private lastSnapMs = -1;
   private lastLocalMs = -1;
@@ -119,11 +120,29 @@ export class VehicleEffects {
     this.tracks = new TyreTrackSystem(quality.trackSegments);
     this.group.add(this.particles.group);
     this.group.add(this.tracks.group);
+    this.group.add(this.ruts.group);
   }
 
   setTerrain(t: Physics.TerrainData | null): void {
     this.terrain = t;
     this.tracks.setTerrain(t);
+    this.ruts.setTerrain(t);
+  }
+
+  applyRutTile(tile: Physics.RutTilePayload): void { this.ruts.applyTile(tile); }
+
+  setRutOwner(id: PlayerId): void { this.ruts.setLocalOwnerId(id); }
+
+  setRutStencilSupported(supported: boolean): void { this.ruts.setStencilSupported(supported); }
+
+  predictRutStamp(stamp: Physics.PredictedRutStamp): void { this.ruts.predictStamp(stamp); }
+
+  applyRutStamps(stamps: readonly Physics.RutStamp[]): void {
+    this.ruts.applyStamps(stamps);
+  }
+
+  resolveRutStamp(ownerSequence: number, accepted: boolean, globalSequence?: number): void {
+    this.ruts.resolveStamp(ownerSequence, accepted, globalSequence);
   }
 
   /** Emit for one snapshot's worth of players.
@@ -350,28 +369,6 @@ export class VehicleEffects {
     }
   }
 
-  /** How far below its physics-resolved position an axle visual should
-   *  drop because the ground beneath it is soft (mud). Both wheels of a
-   *  solid axle share the beam, so the sink applies to the whole axle -
-   *  one wheel digging in pulls its partner down too, matching the rigid
-   *  coupling. Pure visual; the chassis still rides at its
-   *  physics-determined height. Returns 0 on road / dirt. */
-  axleSink(pose: EffectPose, anchor: { centerLocalY: number; centerLocalZ: number }): number {
-    if (!this.terrain) return 0;
-    const q = pose.quaternion;
-    // Sample at the axle centre - in chassis-local that's (0, anchor.centerLocalY, anchor.centerLocalZ).
-    const local = { x: 0, y: anchor.centerLocalY, z: anchor.centerLocalZ };
-    const w = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
-    const surf = Physics.sampleSurface(
-      this.terrain,
-      pose.position.x + w.x,
-      pose.position.z + w.z,
-    );
-    if (surf === Physics.Surface.Mud) return VEHICLE.wheelRadius * 0.18;
-    if (surf === Physics.Surface.DeepMud) return VEHICLE.wheelRadius * 0.35;
-    return 0;
-  }
-
   update(frameDtMs: number): void {
     this.particles.update(frameDtMs);
     this.tracks.update(frameDtMs);
@@ -380,6 +377,7 @@ export class VehicleEffects {
   dispose(): void {
     this.particles.dispose();
     this.tracks.dispose();
+    this.ruts.dispose();
     this.group.clear();
   }
 }

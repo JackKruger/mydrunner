@@ -49,6 +49,7 @@ export class WorldView {
   private obstacles: Obstacles | null = null;
   private landmarks: LandmarkMeshes | null = null;
   private readonly quality: QualitySettings;
+  readonly stencilSupported: boolean;
 
   /** `quality` defaults to the resolved tier so the game gets it for free.
    *  The editor passes QUALITY.high explicitly — it exists to show the world
@@ -58,7 +59,8 @@ export class WorldView {
     // MSAA off at low tier. On a tile-based mobile GPU the resolve is a
     // bandwidth cost on every frame, and at pixelRatioCap 1.0 the crispness
     // it was buying has already been given up.
-    this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias });
+    this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, stencil: true });
+    this.stencilSupported = this.renderer.getContextAttributes()?.stencil ?? false;
     // Cap pixel ratio. Uncapped on a 2x or 3x display the GPU pays 4-9x
     // the fragment cost - the difference between 60 FPS and 20 FPS on
     // mid-tier mobile + integrated GPUs. 1.5 is a good compromise: still
@@ -144,7 +146,7 @@ export class WorldView {
       this.scene.remove(this.terrainMeshRef.mesh);
       this.terrainMeshRef.dispose();
     }
-    this.terrainMeshRef = new TerrainMesh(v.terrain, this.quality);
+    this.terrainMeshRef = new TerrainMesh(v.terrain, this.quality, this.stencilSupported);
     this.scene.add(this.terrainMeshRef.mesh);
 
     this.refreshWater(v.terrain);

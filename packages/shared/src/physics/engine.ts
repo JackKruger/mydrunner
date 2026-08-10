@@ -4,11 +4,10 @@
 //   - throttle in [-1, 1] (negative selects reverse)
 //   - the current gear (managed automatically)
 //
-// The actual force per wheel is computed by the caller via:
-//   wheelForce = (torqueAtWheels * driveSplitShare) where torqueAtWheels
-//   is engineTorque * gearRatio * finalDrive (already divided by wheel
-//   radius implicitly because Rapier expects a force, not a torque, and
-//   we just label our output as a force).
+// Output remains torque throughout this module, in Nm:
+//   totalDrivelineTorque = engineTorque * gearRatio * finalDrive.
+// The caller splits it between driven wheels; the tyre contact path alone
+// converts each wheel torque to force using the effective radius.
 //
 // We don't try to model the clutch - throttle goes to zero in neutral, and
 // gear changes are instantaneous. Good enough for a game; bad for a
@@ -118,7 +117,7 @@ export function stepEngine(
   dt: number,
   manualGear: ManualGear | null = null,
   finalDrive: number = ENGINE.finalDrive,
-): { wheelForce: number; rpm: number; gear: number } {
+): { totalDrivelineTorque: number; rpm: number; gear: number } {
   // A flooded engine makes no torque and winds down to a stop. This has
   // to short-circuit before the RPM block below, which floors targetRpm
   // at idleRpm - the assumption everywhere else that the engine is
@@ -129,7 +128,7 @@ export function stepEngine(
     state.rpm = Math.max(0, state.rpm - ENGINE.idleRpm * dt * 2);
     state.gearIndex = ENGINE.neutralGear;
     state.shiftCooldown = 0;
-    return { wheelForce: 0, rpm: state.rpm, gear: 0 };
+    return { totalDrivelineTorque: 0, rpm: state.rpm, gear: 0 };
   }
 
   // Derive engine RPM from driveshaft. In neutral, RPM follows throttle
@@ -219,7 +218,7 @@ export function stepEngine(
 
   const activeRatio = ENGINE.gears[nextGear] ?? 0;
   if (activeRatio === 0) {
-    return { wheelForce: 0, rpm, gear: signedGear(nextGear) };
+    return { totalDrivelineTorque: 0, rpm, gear: signedGear(nextGear) };
   }
 
   // Engine torque this tick.
@@ -257,7 +256,7 @@ export function stepEngine(
   }
 
   return {
-    wheelForce: torqueAtWheels - brakeT,
+    totalDrivelineTorque: torqueAtWheels - brakeT,
     rpm,
     gear: signedGear(nextGear),
   };

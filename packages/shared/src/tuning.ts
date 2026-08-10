@@ -11,7 +11,6 @@
 import {
   ANTI_ROLL,
   AXLE,
-  INCLINE_ASSIST_MAX,
   SURFACE_FRICTION,
   TIRE_LATERAL,
   VEHICLE,
@@ -36,7 +35,6 @@ export interface AxleTuning {
 }
 
 export interface Tuning {
-  inclineAssistMax: number;
   surfaceFriction: {
     road: number;
     dirt: number;
@@ -106,7 +104,6 @@ export interface Tuning {
 }
 
 export const TUNING: Tuning = {
-  inclineAssistMax: INCLINE_ASSIST_MAX,
   surfaceFriction: { ...SURFACE_FRICTION } as Tuning['surfaceFriction'],
   brakeForce: VEHICLE.brakeForce,
   maxSteer: VEHICLE.maxSteer,

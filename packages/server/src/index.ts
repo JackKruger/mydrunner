@@ -145,6 +145,10 @@ async function main(): Promise<void> {
           if (!joined) return;
           room.requestWinchCommand(id, msg);
           break;
+        case 'rut-stamp':
+          if (!joined) return;
+          room.applyRutStamp(id, msg.stamp);
+          break;
       }
     });
 

@@ -19,6 +19,7 @@ function telemetry(): Physics.VehicleDebugTelemetry {
     gripCoefficient: contact ? 0.8 : 0,
     gripLimit: contact ? 3_200 : 0,
     longitudinalForce: 2_000,
+    relaxedLongitudinalForce: 1_900,
     lateralForce: 1_000,
     force: { x: 1_000, y: 0, z: 2_000 },
     slipRatio: 0.12,
@@ -41,6 +42,9 @@ function telemetry(): Physics.VehicleDebugTelemetry {
     carcassDeflection: contact ? 0.016 : 0,
     suspensionForce: contact ? 4_000 : 0,
     carcassForce: contact ? 4_000 : 0,
+    sinkDepth: contact ? 0.04 : 0,
+    soilDrag: contact ? 250 : 0,
+    slipWork: contact ? 120 : 0,
   });
   return {
     position: { x: 0, y: 1, z: 0 },
@@ -51,6 +55,7 @@ function telemetry(): Physics.VehicleDebugTelemetry {
     wheelbase: 2.7,
     track: 1.6,
     wheelRadius: 0.4,
+    pressurePsi: 24,
     rollAngle: 0.1,
     pitchAngle: -0.05,
     staticRollLimit: 0.7,
@@ -69,6 +74,8 @@ function telemetry(): Physics.VehicleDebugTelemetry {
       frontLocked: false,
       rearLocked: true,
       outputTorque: 900,
+      drivenCarrierRpm: 800,
+      differentialReactionTorque: 120,
     },
     water: {
       submerged: 0,
@@ -78,6 +85,10 @@ function telemetry(): Physics.VehicleDebugTelemetry {
       dragPoint: { x: 0, y: 0, z: 0 },
       dragTorque: { x: 0, y: 0, z: 0 },
     },
+    axles: [
+      { iterationResidual: 0, tubeContact: false, housingContact: false },
+      { iterationResidual: 0, tubeContact: false, housingContact: false },
+    ],
     wheels: [wheel(true), wheel(true), wheel(true), wheel(true)],
   };
 }
@@ -95,7 +106,7 @@ describe('physics debug panel', () => {
     expect(tuningRows.length).toBeGreaterThan(20);
     expect(tuningRows.every((row) => Boolean(row.dataset.help && row.title))).toBe(true);
     tuningRows[0]!.querySelector('input')!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
-    expect(document.querySelector('#debug-tuning-help')?.textContent).toContain('climbing assist');
+    expect(document.querySelector('#debug-tuning-help')?.textContent).toContain('front axle friction budget');
     expect(document.querySelector('[data-debug="tip-state"]')?.textContent).toContain('STABLE');
     expect(document.querySelector('[data-wheel="0"] [data-field="surface"]')?.textContent).toContain('mud');
     expect((document.querySelector('[data-wheel="0"] [data-field="bar"]') as HTMLElement).style.width).toBe('72%');

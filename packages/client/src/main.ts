@@ -251,6 +251,8 @@ let workshopEntryPending = false;
 let previewMode = false;
 let previewMapName = '';
 let stateUploadReady = false;
+let rutSyncReady = false;
+let rutGlobalSequence = 0;
 let stateUploadAcc = 0;
 let stateSeq = 0;
 
@@ -573,6 +575,8 @@ async function start(): Promise<void> {
     onOpen() {
       connected = true;
       stateUploadReady = false;
+      rutSyncReady = false;
+      rutGlobalSequence = 0;
       reconnectDelayMs = 1000;
       playerUI.setConnectionState({ mode: 'connected', driverName: choice.name });
       chat.pushSystem('connected — press T to chat');
@@ -587,7 +591,7 @@ async function start(): Promise<void> {
         return;
       }
       enterWorld(resolved.doc, spawn, build, id);
-      stateUploadReady = true;
+      stateUploadReady = false;
       playerUI.setConnectionState({
         mode: 'connected',
         driverName: choice.name,
@@ -612,12 +616,39 @@ async function start(): Promise<void> {
       // Owner physics is intentionally untouched. The snapshot exists for
       // remote-player interpolation and membership only.
     },
+    onRutSyncStart() {
+      rutSyncReady = false;
+      stateUploadReady = false;
+    },
+    onRutTile(msg) {
+      localSimulation?.applyRutTile(msg.tile);
+      scene.applyRutTile(msg.tile);
+    },
+    onRutSyncEnd(msg) {
+      rutGlobalSequence = msg.globalSequence;
+      rutSyncReady = true;
+      stateUploadReady = true;
+    },
+    onRutBatch(msg) {
+      const ordered = [...msg.stamps]
+        .sort((a, b) => a.globalSequence - b.globalSequence)
+        .filter((stamp) => stamp.globalSequence > rutGlobalSequence);
+      if (ordered.length === 0) return;
+      rutGlobalSequence = ordered[ordered.length - 1]!.globalSequence;
+      localSimulation?.applyRutStamps(ordered);
+      scene.applyRutStamps(ordered);
+    },
+    onRutResult(msg) {
+      localSimulation?.resolveRutStamp(msg.ownerSequence, msg.accepted, msg.globalSequence);
+      scene.resolveRutStamp(msg.ownerSequence, msg.accepted, msg.globalSequence);
+    },
     onChat(from, fromName, text) {
       chat.push(fromName, text, from === localId);
     },
     onClose(reason, fatal) {
       connected = false;
       stateUploadReady = false;
+      rutSyncReady = false;
       // A fatal close is one retrying cannot fix (protocol-version
       // mismatch). Leave the reason on screen instead of burying it under
       // a retry countdown that would never succeed.
@@ -758,13 +789,18 @@ function frame(): void {
   if (localSimulation && !previewMode) {
     localSimulation.syncRemoteVehicles(scene.remoteCollisionStates(), now);
   }
-  if (connected || previewMode) {
+  if ((connected && rutSyncReady) || previewMode) {
     inputAcc += frameDt;
     let steps = 0;
     while (inputAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
       const input = sampleInput();
       if ((input.buttons & BUTTON_RESET) !== 0) winchController.detach();
       if (localSimulation) localSimulation.step(input);
+      const rutStamp = !previewMode ? localSimulation?.createRutStampCandidate() : null;
+      if (rutStamp) {
+        scene.predictRutStamp(rutStamp);
+        currentNet?.sendRutStamp(rutStamp);
+      }
       winchController.afterStep();
       inputAcc -= FIXED_DT;
       steps += 1;
@@ -888,6 +924,7 @@ function updateHud(): void {
       steeringCondition: t?.damage.steering ?? 1,
       drivetrainNotice: performance.now() < drivetrainNoticeUntil ? drivetrainNotice : '',
       winchStatus: winchController.statusText(),
+      pressure: localSimulation?.pressureStatus(),
     });
     return;
   }
@@ -910,6 +947,7 @@ function updateHud(): void {
     steeringCondition: lastSteeringCondition,
     drivetrainNotice: performance.now() < drivetrainNoticeUntil ? drivetrainNotice : '',
     winchStatus: winchController.statusText(),
+    pressure: localSimulation?.pressureStatus(),
   });
 }
 

@@ -99,6 +99,17 @@ describe('game keys targeting the page', () => {
     clearKeys();
   });
 
+  it('holds bracket keys as tyre pressure adjustment input', () => {
+    press('BracketLeft', document.body);
+    expect(sampleInput().pressureAdjust).toBe(-1);
+    release('BracketLeft', document.body);
+    press('BracketRight', document.body);
+    expect(sampleInput().pressureAdjust).toBe(1);
+    release('BracketRight', document.body);
+    expect(sampleInput().pressureAdjust).toBe(0);
+    clearKeys();
+  });
+
   it('toggles the handbrake on space', () => {
     const before = isHandbrakeOn();
     press('Space', document.body);

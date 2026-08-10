@@ -9,6 +9,9 @@ export interface TireCarcassSpec {
   sidewallDampingRatio: number;
   /** Tangential friction retained by a pure sidewall. */
   sidewallFrictionRatio: number;
+  nominalPressurePsi: number;
+  minPressurePsi: number;
+  maxPressurePsi: number;
 }
 
 export type TireContactZone = 'tread' | 'shoulder' | 'sidewall';
@@ -110,10 +113,12 @@ export function carcassRates(
   radius: number,
   nominalQuarterLoad: number,
   quarterMass: number,
+  pressureScale = 1,
 ): { stiffness: number; radialDamping: number; sidewallDamping: number; maxDeflection: number } {
   const maxDeflection = Math.max(0.005, radius * spec.staticDeflectionRatio * 2);
   const staticDeflection = Math.max(0.001, radius * spec.staticDeflectionRatio);
-  const stiffness = Math.max(1, nominalQuarterLoad / staticDeflection);
+  const stiffness = Math.max(1, nominalQuarterLoad / staticDeflection)
+    * Math.max(0.55, Math.min(1.35, pressureScale));
   const critical = 2 * Math.sqrt(stiffness * Math.max(1, quarterMass));
   const radialDamping = critical * spec.radialDampingRatio;
   return {
@@ -122,4 +127,21 @@ export function carcassRates(
     sidewallDamping: radialDamping * spec.sidewallDampingRatio,
     maxDeflection,
   };
+}
+
+export function pressureRadialScale(pressurePsi: number, nominalPsi: number): number {
+  return clamp(pressurePsi / Math.max(1, nominalPsi), 0.55, 1.35);
+}
+
+export function pressureRollingScale(pressurePsi: number, nominalPsi: number): number {
+  return (Math.max(1, nominalPsi) / Math.max(1, pressurePsi)) ** 0.6;
+}
+
+export function pressureLateralScale(pressurePsi: number, nominalPsi: number): number {
+  return clamp(Math.sqrt(Math.max(1, pressurePsi) / Math.max(1, nominalPsi)), 0.75, 1.15);
+}
+
+export function sealedRoadPressureGripScale(pressurePsi: number, nominalPsi: number): number {
+  const ratio = pressurePsi / Math.max(1, nominalPsi);
+  return 1 - Math.max(0, 1 - ratio) * 0.08;
 }

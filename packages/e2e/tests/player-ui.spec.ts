@@ -181,3 +181,39 @@ test('desktop and touch layouts keep instruments and controls separated', async 
   });
   expect(transitionMs).toBeLessThanOrEqual(0.01);
 });
+
+test('keyboard and touch pressure controls adjust while stopped and explain refusals', async ({ page }) => {
+  await page.goto('/?auto=1&name=pressure-check&q=low');
+  await waitConnected(page);
+
+  const pressure = page.locator('#hud-pressure');
+  await expect(pressure).toContainText(/TYRES \d+\.\d PSI · \d+–\d+/);
+  const readPsi = async (): Promise<number> => {
+    const text = await pressure.textContent();
+    const match = text?.match(/TYRES (\d+(?:\.\d)?) PSI/);
+    if (!match) throw new Error(`No pressure reading in: ${text ?? '<empty>'}`);
+    return Number(match[1]);
+  };
+
+  const nominal = await readPsi();
+  await page.keyboard.down('BracketLeft');
+  await page.waitForTimeout(700);
+  await page.keyboard.up('BracketLeft');
+  await expect.poll(readPsi).toBeLessThan(nominal - 0.5);
+  const airedDown = await readPsi();
+
+  await page.evaluate(() => document.body.classList.add('touch'));
+  const inflate = page.getByRole('button', { name: 'Hold to inflate tyres' });
+  await inflate.dispatchEvent('pointerdown', { pointerId: 7 });
+  await expect(inflate).toHaveAttribute('aria-pressed', 'true');
+  await page.waitForTimeout(1_100);
+  await inflate.dispatchEvent('pointerup', { pointerId: 7 });
+  await expect.poll(readPsi).toBeGreaterThan(airedDown + 0.5);
+
+  await page.keyboard.down('KeyW');
+  await page.keyboard.down('BracketLeft');
+  await expect(pressure).toContainText('Release the throttle', { timeout: 5_000 });
+  await expect(pressure).toHaveClass(/active/);
+  await page.keyboard.up('BracketLeft');
+  await page.keyboard.up('KeyW');
+});

@@ -31,14 +31,14 @@ describe('live engine tuning', () => {
         TUNING.engineTorqueMult = mult;
         const state = createEngineState();
         state.gearIndex = ENGINE.firstGear;
-        return stepEngine(state, 4, 4, 1, dt).wheelForce;
+        return stepEngine(state, 4, 4, 1, dt).totalDrivelineTorque;
       };
       expect(drive(1.5)).toBeCloseTo(drive(1) * 1.5, 5);
 
       TUNING.engineBrakeMult = 0;
       const coast = createEngineState();
       coast.gearIndex = ENGINE.firstGear + 1;
-      expect(stepEngine(coast, 20, 20, 0, dt).wheelForce).toBe(0);
+      expect(stepEngine(coast, 20, 20, 0, dt).totalDrivelineTorque).toBe(0);
     } finally {
       TUNING.engineTorqueMult = savedTorque;
       TUNING.engineBrakeMult = savedBrake;
@@ -94,14 +94,14 @@ describe('gearbox', () => {
     s.gearIndex = ENGINE.firstGear + 1; // 2nd
     // Decent forward angular velocity, no throttle -> engine braking.
     const out = stepEngine(s, 30, 30, 0, dt);
-    expect(out.wheelForce).toBeLessThan(0);
+    expect(out.totalDrivelineTorque).toBeLessThan(0);
   });
 
   it('produces positive force at idle in 1st gear with throttle', () => {
     const s = createEngineState();
     s.gearIndex = ENGINE.firstGear;
     const out = stepEngine(s, 0.5, 0.5, 1.0, dt);
-    expect(out.wheelForce).toBeGreaterThan(0);
+    expect(out.totalDrivelineTorque).toBeGreaterThan(0);
   });
 
   it('engine braking scales with chassis speed (downhill coast hold)', () => {
@@ -117,15 +117,15 @@ describe('gearbox', () => {
     fast.gearIndex = ENGINE.firstGear + 1;
     const slowOut = stepEngine(slow, 5, 5, 0, dt);
     const fastOut = stepEngine(fast, 5, 50, 0, dt); // 10x chassis speed
-    expect(fastOut.wheelForce).toBeLessThan(slowOut.wheelForce);
-    expect(fastOut.wheelForce).toBeLessThan(0); // actually braking, not just less drive
+    expect(fastOut.totalDrivelineTorque).toBeLessThan(slowOut.totalDrivelineTorque);
+    expect(fastOut.totalDrivelineTorque).toBeLessThan(0); // actually braking, not just less drive
   });
 
   it('produces no engine braking in neutral (coasts freely)', () => {
     const s = createEngineState();
     s.gearIndex = ENGINE.neutralGear;
     const out = stepEngine(s, 30, 30, 0, dt);
-    expect(out.wheelForce).toBeCloseTo(0, 1);
+    expect(out.totalDrivelineTorque).toBeCloseTo(0, 1);
   });
 
   it('holds a manually selected gear instead of automatic shifting', () => {
@@ -136,12 +136,12 @@ describe('gearbox', () => {
 
   it('supports manual neutral and reverse with the gas pedal', () => {
     const neutral = createEngineState();
-    expect(stepEngine(neutral, 0, 0, 1, dt, 0)).toMatchObject({ gear: 0, wheelForce: 0 });
+    expect(stepEngine(neutral, 0, 0, 1, dt, 0)).toMatchObject({ gear: 0, totalDrivelineTorque: 0 });
 
     const reverse = createEngineState();
     const out = stepEngine(reverse, 0, 0, 1, dt, -1);
     expect(out.gear).toBe(-1);
-    expect(out.wheelForce).toBeLessThan(0);
+    expect(out.totalDrivelineTorque).toBeLessThan(0);
   });
 });
 
@@ -156,8 +156,8 @@ describe('engine braking opposes travel, not gear', () => {
     s.gearIndex = ENGINE.firstGear;
     const out = stepEngine(s, -8, 8, 0, dt);
     expect(
-      out.wheelForce,
-      `rolling backward in 1st off-throttle gave ${out.wheelForce.toFixed(1)} N·m; ` +
+      out.totalDrivelineTorque,
+      `rolling backward in 1st off-throttle gave ${out.totalDrivelineTorque.toFixed(1)} N·m; ` +
         'engine braking must oppose the rollback, not add to it',
     ).toBeGreaterThan(0);
   });
@@ -166,23 +166,23 @@ describe('engine braking opposes travel, not gear', () => {
     const s = createEngineState();
     s.gearIndex = ENGINE.reverseGear;
     const out = stepEngine(s, 8, 8, 0, dt);
-    expect(out.wheelForce).toBeLessThan(0);
+    expect(out.totalDrivelineTorque).toBeLessThan(0);
   });
 
   it('still brakes normally when travel matches the gear', () => {
     const fwd = createEngineState();
     fwd.gearIndex = ENGINE.firstGear;
-    expect(stepEngine(fwd, 8, 8, 0, dt).wheelForce).toBeLessThan(0);
+    expect(stepEngine(fwd, 8, 8, 0, dt).totalDrivelineTorque).toBeLessThan(0);
 
     const rev = createEngineState();
     rev.gearIndex = ENGINE.reverseGear;
-    expect(stepEngine(rev, -8, 8, 0, dt).wheelForce).toBeGreaterThan(0);
+    expect(stepEngine(rev, -8, 8, 0, dt).totalDrivelineTorque).toBeGreaterThan(0);
   });
 
   it('applies no engine braking at a standstill in gear', () => {
     const s = createEngineState();
     s.gearIndex = ENGINE.firstGear;
     const out = stepEngine(s, 0, 0, 0, dt);
-    expect(out.wheelForce).toBeCloseTo(0, 1);
+    expect(out.totalDrivelineTorque).toBeCloseTo(0, 1);
   });
 });

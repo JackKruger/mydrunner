@@ -38,16 +38,28 @@ export interface SurfaceInfo {
   friction: keyof typeof SURFACE_FRICTION;
   /** Flat RGB approximation of the shader's palette, for the minimap. */
   minimapColor: readonly [number, number, number];
+  traction: SurfaceTractionSpec;
 }
 
+export interface SurfaceTractionSpec {
+  peakSlip: number;
+  slidingToPeak: number;
+  relaxationLength: number;
+  lateralPeakAngle: number;
+  loadSensitivityExponent: number;
+  soil: 'none' | 'mud' | 'deep-mud';
+}
+
+const DEG = Math.PI / 180;
+
 export const SURFACE_INFO: Record<Surface, SurfaceInfo> = {
-  [Surface.Road]: { label: 'road', friction: 'road', minimapColor: [128, 121, 112] },
-  [Surface.Dirt]: { label: 'dirt', friction: 'dirt', minimapColor: [138, 107, 66] },
-  [Surface.Mud]: { label: 'mud', friction: 'mud', minimapColor: [74, 48, 24] },
-  [Surface.DeepMud]: { label: 'deep mud', friction: 'deepMud', minimapColor: [32, 18, 9] },
-  [Surface.Grass]: { label: 'grass', friction: 'grass', minimapColor: [63, 92, 42] },
-  [Surface.Gravel]: { label: 'gravel', friction: 'gravel', minimapColor: [119, 113, 107] },
-  [Surface.Concrete]: { label: 'concrete', friction: 'concrete', minimapColor: [68, 68, 68] },
+  [Surface.Road]: { label: 'road', friction: 'road', minimapColor: [128, 121, 112], traction: { peakSlip: 0.10, slidingToPeak: 0.78, relaxationLength: 0.35, lateralPeakAngle: 8 * DEG, loadSensitivityExponent: 0.08, soil: 'none' } },
+  [Surface.Dirt]: { label: 'dirt', friction: 'dirt', minimapColor: [138, 107, 66], traction: { peakSlip: 0.18, slidingToPeak: 0.72, relaxationLength: 0.50, lateralPeakAngle: 10 * DEG, loadSensitivityExponent: 0.04, soil: 'none' } },
+  [Surface.Mud]: { label: 'mud', friction: 'mud', minimapColor: [74, 48, 24], traction: { peakSlip: 0.30, slidingToPeak: 0.72, relaxationLength: 0.75, lateralPeakAngle: 14 * DEG, loadSensitivityExponent: 0, soil: 'mud' } },
+  [Surface.DeepMud]: { label: 'deep mud', friction: 'deepMud', minimapColor: [32, 18, 9], traction: { peakSlip: 0.40, slidingToPeak: 0.78, relaxationLength: 0.90, lateralPeakAngle: 18 * DEG, loadSensitivityExponent: 0, soil: 'deep-mud' } },
+  [Surface.Grass]: { label: 'grass', friction: 'grass', minimapColor: [63, 92, 42], traction: { peakSlip: 0.16, slidingToPeak: 0.62, relaxationLength: 0.55, lateralPeakAngle: 9 * DEG, loadSensitivityExponent: 0.04, soil: 'none' } },
+  [Surface.Gravel]: { label: 'gravel', friction: 'gravel', minimapColor: [119, 113, 107], traction: { peakSlip: 0.22, slidingToPeak: 0.68, relaxationLength: 0.65, lateralPeakAngle: 12 * DEG, loadSensitivityExponent: 0.04, soil: 'none' } },
+  [Surface.Concrete]: { label: 'concrete', friction: 'concrete', minimapColor: [68, 68, 68], traction: { peakSlip: 0.09, slidingToPeak: 0.82, relaxationLength: 0.30, lateralPeakAngle: 8 * DEG, loadSensitivityExponent: 0.08, soil: 'none' } },
 };
 
 /** SURFACE_INFO for `s`, falling back to Dirt for an out-of-range value.
@@ -312,9 +324,8 @@ export const HILL_CLIMB_PATH_HALF_WIDTH = 3.5;
  *  earlier world size; they are NOT what the shipped 320 m heightmap
  *  delivers.  Measured against the generated terrain (which has the
  *  bench cut, trail features and base noise layered on top) the trail
- *  runs a 39 % median and 87 % p90 - climbable only because of
- *  INCLINE_ASSIST_MAX.  See production-world.test.ts, which pins the
- *  measured shape.  Treat the percentages below as the original intent,
+ *  runs a 39 % median and 87 % p90. production-world.test.ts pins the
+ *  measured shape as content only. Treat the percentages below as the original intent,
  *  not a guarantee.  Traverses alternate
  *  east and west so the trail zigzags up the southern face like a real
  *  mountain road.  The switchback turn-arounds are implicit — the vehicle

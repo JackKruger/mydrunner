@@ -1,8 +1,17 @@
 // Tire slip-curve unit tests.
 
 import { describe, it, expect } from 'vitest';
-import { gripFromSlip, slipRatio, slipAngle, lateralGripFromSlipAngle } from '../physics/tire.js';
-import { TIRE, TIRE_LATERAL } from '../constants.js';
+import {
+  combineFrictionEllipse,
+  lateralGripFromSlipAngle,
+  loadSensitivityMultiplier,
+  longitudinalGripFromSlip,
+  relaxLongitudinalForce,
+  slipAngle,
+  slipRatio,
+  tyreFrictionCapacity,
+} from '../physics/tire.js';
+import { TIRE_LATERAL } from '../constants.js';
 import { TUNING } from '../tuning.js';
 
 describe('slipRatio', () => {
@@ -23,34 +32,54 @@ describe('slipRatio', () => {
   });
 });
 
-describe('gripFromSlip', () => {
-  it('returns slipFloor at zero slip (avoids standstill deadlock)', () => {
-    expect(gripFromSlip(0)).toBeCloseTo(TIRE.slipFloor, 5);
+describe('live longitudinal tyre model', () => {
+  it('builds to a peak and falls to sliding grip', () => {
+    const peak = longitudinalGripFromSlip(0.1, 0.1, 0.78);
+    const locked = longitudinalGripFromSlip(-1, 0.1, 0.78);
+    expect(peak).toBeCloseTo(1);
+    expect(locked).toBeLessThan(peak);
+    expect(locked).toBeCloseTo(0.78, 3);
   });
 
-  it('peaks at slipPeak with grip = 1.0', () => {
-    const peak = gripFromSlip(TIRE.slipPeak);
-    expect(peak).toBeCloseTo(1.0, 5);
-    expect(gripFromSlip(TIRE.slipPeak * 0.5)).toBeLessThan(peak);
-    expect(gripFromSlip(TIRE.slipPeak * 2.0)).toBeLessThan(peak);
+  it('uses the same symmetric law uphill and downhill', () => {
+    expect(longitudinalGripFromSlip(0.2, 0.1, 0.78))
+      .toBeCloseTo(longitudinalGripFromSlip(-0.2, 0.1, 0.78));
   });
 
-  it('rises monotonically up to peak', () => {
-    const a = gripFromSlip(0.02);
-    const b = gripFromSlip(0.05);
-    const c = gripFromSlip(TIRE.slipPeak);
-    expect(a).toBeLessThan(b);
-    expect(b).toBeLessThan(c);
+  it('cannot create capacity from an unloaded tyre', () => {
+    expect(loadSensitivityMultiplier(0, 4_000, 0.08)).toBe(0);
+    expect(tyreFrictionCapacity(0, 1, 4_000, 0.08)).toBe(0);
   });
 
-  it('falls toward (but not below) slipFloor as slip grows large', () => {
-    const wayPast = gripFromSlip(2.0);
-    expect(wayPast).toBeGreaterThanOrEqual(TIRE.slipFloor);
-    expect(wayPast).toBeLessThan(TIRE.slipFloor + 0.15);
+  it('does not change grip when chassis pitch changes at equal contact load', () => {
+    const load = 4_000;
+    const capacityAtNoseDown = tyreFrictionCapacity(load, 0.8, load, 0.08);
+    const capacityAtNoseUp = tyreFrictionCapacity(load, 0.8, load, 0.08);
+    expect(capacityAtNoseUp).toBe(capacityAtNoseDown);
   });
 
-  it('is symmetric for positive and negative slip', () => {
-    expect(gripFromSlip(0.3)).toBeCloseTo(gripFromSlip(-0.3), 5);
+  it('matches the planar climb threshold mu >= tan(slope)', () => {
+    const mass = 1_500;
+    const gravity = 9.81;
+    const angle = Math.atan(0.6);
+    const normalLoad = mass * gravity * Math.cos(angle);
+    const required = mass * gravity * Math.sin(angle);
+    expect(tyreFrictionCapacity(normalLoad, 0.59, normalLoad, 0)).toBeLessThan(required);
+    expect(tyreFrictionCapacity(normalLoad, 0.61, normalLoad, 0)).toBeGreaterThan(required);
+  });
+
+  it('relaxes force progressively over distance', () => {
+    const first = relaxLongitudinalForce(0, 4_000, 10, 0.35, 1 / 60);
+    const second = relaxLongitudinalForce(first, 4_000, 10, 0.35, 1 / 60);
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(first);
+    expect(second).toBeLessThan(4_000);
+  });
+
+  it('shares a friction ellipse between longitudinal and lateral force', () => {
+    const force = combineFrictionEllipse(4_000, 4_000, 4_000, 4_000);
+    expect(force.utilization).toBe(1);
+    expect(Math.hypot(force.longitudinal / 4_000, force.lateral / 4_000)).toBeCloseTo(1);
   });
 });
 

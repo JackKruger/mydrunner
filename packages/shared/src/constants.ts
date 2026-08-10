@@ -39,7 +39,8 @@
 //     tyre packages, changing both the build tuple and vehicle geometry.
 // 14: wheel snapshots add carcass deflection and a chassis-local contact
 //     normal; schema-5 clients would otherwise misread the 63-value tuple.
-export const PROTOCOL_VERSION = 14;
+// 15: sparse session-rut stamps, authoritative batches, and chunked tile sync.
+export const PROTOCOL_VERSION = 16;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // The client-owned vehicle simulation advances at this fixed cadence.
@@ -96,10 +97,6 @@ export const VEHICLE = {
   // a slope at speed or hit a rut sideways - which is the point.
   frontGripMult: 1.0,
   rearGripMult: 1.0,
-  // Exact rigid-body mass properties removed the accidental extra mass of
-  // the roof-height collider. Preserve the already-approved flat-road
-  // acceleration/shift character while the chassis now reports its real kg.
-  massPropertyDriveScale: 0.52,
 } as const;
 
 /** Recovery-winch tuning. Forces are deliberately softer than a rigid
@@ -121,22 +118,6 @@ export const WINCH = {
   maxIncomingLinks: 2,
 } as const;
 
-// Tire slip model. Real tires have a Pacejka-style "magic formula"
-// grip-vs-slip curve: grip rises with slip up to ~10-20% slip, then
-// falls off as the tire breaks loose. We approximate it cheaply: peak
-// grip at SLIP_PEAK, falls off either side. Force scales the chassis
-// throttle output by this curve so wheel-spin actually loses traction
-// (you'll spin out from a hard launch on mud, then have to back off).
-export const TIRE = {
-  // Slip ratio at peak grip. Beyond this the tire is sliding.
-  slipPeak: 0.12,
-  // Sharpness of the falloff after peak (higher = more sudden loss).
-  slipFalloff: 4.0,
-  // Minimum grip retained after the tire is fully sliding (so you can
-  // still recover from a slide instead of losing all traction).
-  slipFloor: 0.45,
-} as const;
-
 // Engine + gearbox. Torque curve peaks in the 3000-4500 RPM band. Off
 // the band the engine produces less torque regardless of throttle.
 // Auto-gearbox shifts on RPM thresholds.
@@ -144,9 +125,9 @@ export const ENGINE = {
   idleRpm: 850,
   redlineRpm: 5800,
   peakTorqueRpm: 3500,
-  // Off-roader peak torque - bumped from 480 → 560 so the truck has the
-  // grunt to overcome drag at the new taller top gear.
-  peakTorqueNm: 560,
+  // Real crankshaft torque; the gearbox, final drive and tyre radius now
+  // produce tractive force without a hidden mass-property scale.
+  peakTorqueNm: 290,
   finalDrive: 4.1,
   // Reverse ratio bumped back to -2.5 (from -1.8). The softer -1.8
   // gave a high theoretical reverse top end but anaemic acceleration
@@ -238,6 +219,14 @@ export const AXLE = {
     hasDrive: true,
     hasSteering: true,
     diffLocked: false,
+    probe: {
+      friction: 0.08,
+      tubeRadius: 0.07,
+      tubeHalfLength: 0.36,
+      housingHalfExtents: { x: 0.20, y: 0.15, z: 0.16 },
+      verticalOffset: 0,
+      portal: false,
+    },
   },
   rear: {
     centerLocalY: -0.45,
@@ -260,6 +249,14 @@ export const AXLE = {
     hasDrive: true,
     hasSteering: false,
     diffLocked: false,
+    probe: {
+      friction: 0.08,
+      tubeRadius: 0.07,
+      tubeHalfLength: 0.36,
+      housingHalfExtents: { x: 0.20, y: 0.15, z: 0.16 },
+      verticalOffset: 0,
+      portal: false,
+    },
   },
 } as const;
 
@@ -315,10 +312,8 @@ export const TIRE_LONG_FRICTION = 1.15;
 // rollingResistance is a viscous drag torque (N*m per rad/s of wheel
 // speed) that bleeds spin when the throttle is off, so the truck doesn't
 // coast forever. The rollingMult* factors scale it on soft surfaces -
-// mud drags far more than hardpack. minNormalLoad floors the
-// friction-circle load so an unweighted tire keeps a sliver of grip
-// instead of a zero-grip singularity (the car can still slide when
-// unweighted).
+// mud drags far more than hardpack. Friction capacity always uses the
+// actual positive contact load, so an unloaded tyre cannot make traction.
 //
 // rollingResistance was 0.010, which at a 10 m/s cruise is ~0.2 N*m
 // against per-wheel drive torques in the thousands - so it did nothing
@@ -334,8 +329,7 @@ export const WHEEL = {
   inertia: 1.6,
   rollingResistance: 1.2,
   rollingMultMud: 4.0,
-  rollingMultDeepMud: 12.0,
-  minNormalLoad: 500,
+  rollingMultDeepMud: 18.0,
 } as const;
 
 // Suspension raycast / damping shape shared by every axle end.
@@ -377,48 +371,20 @@ export const LEDGE_CONTACT = {
   normalCorrectionRate: 5,
   maxNormalCorrectionSpeed: 0.15,
   maxForce: 45_000,
+  // Tangential ledge drive is a compliant tread reaction, not a winch. A
+  // separate cap prevents a high-grip prepared tyre from converting its
+  // entire axle load into a one-tick upward launch at a square corner.
+  maxDriveForce: 8_000,
   // A deformable off-road tread can hook a sharp corner more strongly than
-  // rigid face friction alone. This multiplier is ledge-only; ordinary
-  // terrain keeps its existing friction and incline-assist tuning.
+  // rigid face friction alone. This multiplier is ledge-only.
   tractionMultiplier: 1.5,
-  // The automatic gearbox has no separate transfer-case low range. Supply
-  // that missing crawl ratio only while a tread is hooked on a steep face.
-  crawlTorqueMultiplier: 1.5,
-  crawlMaxSpeed: 1.0,
-  crawlSpeedDamping: 10_000,
-  crawlMaxBrakeForce: 18_000,
-  crawlPitchStiffness: 30_000,
-  crawlPitchDamping: 12_000,
-  crawlMaxPitchTorque: 24_000,
-  // Keep low range engaged while the wheelbase passes the same obstacle;
-  // otherwise the front clears, normal gearing accelerates the chassis, and
-  // the rear axle strikes the face at road speed.
-  crawlHoldTicks: 180,
-  edgeMotorMaxSpeed: 0.35,
-  edgeMotorMaxForce: 10_000,
-  edgeMotorMassFraction: 0.25,
-  // A sharp corner keys into deformable tread before a rigid-cylinder
-  // penalty solver develops much face-normal load. This floor models that
-  // mechanical hook; low-friction colliders still reduce the resulting cap.
-  minHookNormalLoad: 6_500,
-  // The crawler assist only engages if a downward probe just beyond the
-  // face finds an actual upper surface within this hub-rise. Tall walls do
-  // not become driveable simply because the tyre touches them.
+  // A downward probe just beyond the face accepts a top transition only
+  // when an actual upper surface is within this hub-rise. Tall walls do not
+  // become driveable simply because the tyre touches them.
   maxClimbHeight: 0.9,
   // Aim slightly beyond the top edge so the drive reaction has a forward
   // component and carries the hub onto the upper support surface.
   edgeAdvance: 0.08,
-  // The software wheel has no unsprung rigid body or suspension links to
-  // absorb contact torque. Transfer only this fraction of the raw tread
-  // moment arm to the chassis; forces and wheel slip still use the real
-  // contact point. This prevents a sharp face from acting like a lever that
-  // instantly stuffs the bumper down or wheelies the whole vehicle.
-  chassisMomentArmScale: 0.1,
-  // Rate at which positive wheel rotation can wind the axle up toward a
-  // detected upper surface. Kept below the handoff rate so the spring and
-  // damper load progressively instead of recreating the original launch.
-  climbCompressionRate: 0.1,
-  maxClimbSuspensionForce: 6_500,
   // Keep the last validated edge support briefly while the cylinder normal
   // rotates through pure-up and the chassis-axis ray has not yet moved over
   // the top. This bridges query representations, not arbitrary air time.
@@ -429,7 +395,7 @@ export const LEDGE_CONTACT = {
   // A ledge-to-top transition may change the downward-ray depth by the full
   // obstacle height in one tick. Limit that handoff instead of teleporting
   // the axle and feeding the discontinuity into the spring/damper.
-  depthCatchupRate: 0.8,
+  depthCatchupRate: 3.0,
 } as const;
 
 // Anti-roll bar. This is suspension-relative load transfer, never a
@@ -445,22 +411,6 @@ export const ANTI_ROLL = {
   rearShare: 0.45,
   maxStaticLoadTransfer: 0.45,
 } as const;
-
-// Hill-climb traction assist. Real 4x4s lose grip on slopes because
-// gravity peels the tyre's contact away; in our model it manifests as
-// chronic spin-out partway up. Boost per-wheel grip linearly with the
-// chassis "nose up" component (forward.y, =sin(pitch)). At flat ground
-// the multiplier is 1; at forward.y=0.5 (~30 degree climb) it's
-// (1 + INCLINE_ASSIST_MAX). Negative pitch (nose down, descending)
-// gets no boost - going downhill grip isn't the problem. Tuned to make
-// a properly-driven 4x4 climb the rocky-hill route to the summit.
-//
-// Bumped 1.5 -> 2.5 after switching the spring force from world-up
-// to contact-normal: the new (correct) model carries mg*cos(slope) of
-// tire load on a hill instead of full mg, so the friction-circle cap
-// dropped by cos(slope) at any climb. The bigger assist compensates
-// and keeps the rocky-hill route climbable.
-export const INCLINE_ASSIST_MAX = 2.5;
 
 // Water: buoyancy, drag, current and drowning.
 //
@@ -514,7 +464,7 @@ export const WATER = {
    *  one. Vertical is high on purpose: it is the main thing stopping a
    *  buoyant box from oscillating. */
   dragLong: 900,
-  dragLat: 2600,
+  dragLat: 3400,
   dragVert: 3200,
 
   /** Angular drag while submerged, N*m per (rad/s). The rotational half
@@ -524,7 +474,7 @@ export const WATER = {
 
   /** Grip multiplier for a fully submerged tyre. Water between the tread
    *  and the bed is the classic way to lose a crossing. */
-  wheelGripFloor: 0.45,
+  wheelGripFloor: 0.35,
   /** Depth at which a wheel counts as fully submerged for grip, relative
    *  to wheel radius. Above the hub is plenty. */
   wheelGripDepthRatio: 1.6,
@@ -604,9 +554,8 @@ export const TERRAIN = {
   // Peak and sigma were chosen targeting ~30 % grade on the switchback
   // traverses, but that figure was analytic (bare Gaussian, earlier world
   // size) and the shipped map does not meet it: measured on the generated
-  // 320 m heightmap the trail runs a 39 % median / 87 % p90. It stays
-  // drivable because of INCLINE_ASSIST_MAX. production-world.test.ts pins
-  // the measured numbers, so changing peak/sigma will fail there first.
+  // 320 m heightmap the trail runs a 39 % median / 87 % p90.
+  // production-world.test.ts pins the measured numbers as content only.
   // Steeper off-trail face is intentional — you can't shortcut the path.
   mtnPeak: 70,
   mtnSigmaRatio: 0.19,
@@ -748,26 +697,6 @@ export const TRAIL_FEATURES = {
   },
 } as const;
 
-// Rut formation. Each driven wheel in mud carves the heightmap each tick:
-//   delta_y = RUT_RATE * (1 - grip) * |throttle| * wheelInContact
-// Capped to RUT_MAX_DEPTH per cell.
-//
-// Ruts are NOT wired into the game. RutBuffer (physics/ruts.ts) and these
-// two rates survive as the tested building block for a re-implementation;
-// everything that used to carry deltas to the client - the `rut` wire
-// message, World.rebuildTerrain, Scene.applyRuts, TerrainMesh.applyRut,
-// the RUTS_ENABLED flag and Room's flush loop - was deleted, because it
-// sat dead across 13 files for months and read as live surface area.
-//
-// Two problems have to be solved before ruts come back, and the shape of
-// the fix decides what the plumbing should look like, so there was no
-// point preserving the old shape:
-//   1. At 320 m / resolution 128 a heightfield cell is ~2.5 m across,
-//      much wider than a tyre, so a wheel pass sinks a large patch
-//      instead of carving a track. Needs higher resolution, or a
-//      sub-cell visual overlay decoupled from the collider.
-//   2. Each owner's local world runs its own copy of the terrain and
-//      would need the deltas too, or the local sim drives on stale ground
-//      and rubber-bands on mud.
-export const RUT_RATE = 0.0035;        // m per tick at full slip
-export const RUT_MAX_DEPTH = 0.6;      // m below original height
+// Sparse session rut field depth range. Quantized 0..255 over this range;
+// it never mutates the authored map or the coarse Rapier heightfield.
+export const RUT_MAX_DEPTH = 0.6;

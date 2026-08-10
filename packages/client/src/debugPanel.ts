@@ -41,7 +41,6 @@ const TUNING_GROUP_HELP = {
 
 const SLIDERS: Slider[] = [
   // Tyre-grip headline numbers.
-  { group: 'TIRE + GRIP', label: 'inclineAssistMax', description: 'Extra longitudinal grip applied progressively as the vehicle points uphill. 0 disables the climbing assist.', min: 0, max: 3, step: 0.05, get: () => TUNING.inclineAssistMax, set: (v) => (TUNING.inclineAssistMax = v) },
   { label: 'frontGripMult', description: 'Global multiplier on the front axle friction budget after tire and surface grip are resolved.', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.frontGripMult, set: (v) => (TUNING.frontGripMult = v) },
   { label: 'rearGripMult', description: 'Global multiplier on the rear axle friction budget. Lower values make power oversteer easier.', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.rearGripMult, set: (v) => (TUNING.rearGripMult = v) },
   { label: 'longGrip×', description: 'Multiplier on the base acceleration and braking grip available at every tire. Surface and axle grip still apply afterward.', min: 0.5, max: 1.5, step: 0.02, get: () => TUNING.tireLongGripMult, set: (v) => (TUNING.tireLongGripMult = v) },
@@ -339,7 +338,6 @@ function tuningRecord(): Record<string, RecordedValue> {
     tune_slip_peak_deg: TUNING.tireSlipAnglePeak * 180 / Math.PI,
     tune_slip_falloff: TUNING.tireSlipAngleFalloff,
     tune_slide_grip_floor: TUNING.tireSlipAngleFloor,
-    tune_incline_assist: TUNING.inclineAssistMax,
     tune_front_spring: TUNING.axleFront.rideStiffnessMult,
     tune_front_damping: TUNING.axleFront.rideDampingMult,
     tune_front_roll_constraint: TUNING.axleFront.rollStiffnessMult,
@@ -788,7 +786,6 @@ function serialiseTuning(): string {
   // their own rates in vehicleGeom.ts and scale by the same factor.
   const ax = (base: number, mult: number, d = 0): string => f(base * mult, d);
   return `// Paste into shared/src/constants.ts as new defaults.
-export const INCLINE_ASSIST_MAX = ${f(t.inclineAssistMax)};
 export const SURFACE_FRICTION = {
   road: ${f(t.surfaceFriction.road)},
   dirt: ${f(t.surfaceFriction.dirt)},

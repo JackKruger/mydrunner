@@ -171,6 +171,7 @@ export class Scene {
     this.menuCamera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.1, 700);
 
     this.effects = new VehicleEffects();
+    this.effects.setRutStencilSupported(this.view.stencilSupported);
     this.scene.add(this.effects.group);
     this.scene.add(this.winchView.group);
 
@@ -191,6 +192,7 @@ export class Scene {
 
   setLocalPlayer(id: PlayerId, build: VehicleBuild = createStockBuild(), buildRevision = 1): void {
     this.localId = id;
+    this.effects.setRutOwner(id);
     this.localBuild = build;
     this.localBuildRevision = buildRevision;
   }
@@ -228,6 +230,20 @@ export class Scene {
 
   setLocalWinchLinks(links: readonly WinchLinkSnapshot[]): void {
     this.localWinches = [...links];
+  }
+
+  applyRutTile(tile: Physics.RutTilePayload): void { this.effects.applyRutTile(tile); }
+
+  predictRutStamp(stamp: Physics.PredictedRutStamp): void {
+    this.effects.predictRutStamp(stamp);
+  }
+
+  applyRutStamps(stamps: readonly Physics.RutStamp[]): void {
+    this.effects.applyRutStamps(stamps);
+  }
+
+  resolveRutStamp(ownerSequence: number, accepted: boolean, globalSequence?: number): void {
+    this.effects.resolveRutStamp(ownerSequence, accepted, globalSequence);
   }
 
   /** Draw the real map behind the main menu along a slow, closed panorama.
@@ -452,32 +468,20 @@ export class Scene {
    *  Suspension rays and physical wheel travel both use chassis-local Y, so
    *  spring extension must remain in that same frame. The old world-down
    *  correction divided extension by cos(pitch), pushing wheels progressively
-   *  through the ground on even modest slopes. Mud sink is intentionally a
-   *  world-vertical visual effect, so only that offset needs conversion. */
+   *  through the ground on even modest slopes. Soft-ground sink is already in
+   *  the authoritative axle pose and must not be applied again cosmetically. */
   private poseAxles(
     v: VehicleVisual,
     axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
   ): void {
     const geom = Physics.geomFor(v.build);
-    const q = v.group.quaternion;
-    // World-Y component of the chassis's local-Y (up) axis.
-    const chassisUp = Physics.rotateVecByQuat(
-      { x: 0, y: 1, z: 0 },
-      { x: q.x, y: q.y, z: q.z, w: q.w },
-    );
-    // Bound only the cosmetic sink conversion while heavily tilted/inverted.
-    const upY = Math.max(0.7, chassisUp.y);
     for (let i = 0; i < 2; i++) {
       const ag = i === 0 ? geom.front : geom.rear;
       const ax = axles[i]!;
-      const sink = this.effects.axleSink(v.group, {
-        centerLocalY: ag.centerLocalY,
-        centerLocalZ: ag.centerLocalZ,
-      });
       const springExt = ag.suspensionRestLength - ax.rideY;
       v.axles[i]!.position.set(
         0,
-        ag.centerLocalY - springExt - sink / upY,
+        ag.centerLocalY - springExt,
         ag.centerLocalZ,
       );
       // Roll about chassis-forward (local +Z). YXZ ordering keeps the

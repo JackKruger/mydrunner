@@ -9,6 +9,7 @@ import {
   partCompatibility,
   resolveVehicleSpec,
 } from '../vehicleBuild.js';
+import { geomFor } from '../physics/vehicleGeom.js';
 
 describe('vehicle builds', () => {
   it('creates a valid stock build for all production bases', () => {
@@ -191,5 +192,17 @@ describe('vehicle builds', () => {
       expect(garage.builds[0]!.build.baseId).toBe('ridgeback');
       expect(garage.builds[0]!.build.paintColor).toBe('#123456');
     }
+  });
+
+  it('raises and scales portal axle probes from the resolved build', () => {
+    const standard = geomFor(createStockBuild('outclaw')).front.probe;
+    const portal = geomFor({
+      ...createStockBuild('outclaw'),
+      axleId: 'outclaw.axle.portal-240',
+    }).front.probe;
+    expect(portal.portal).toBe(true);
+    expect(portal.verticalOffset).toBeCloseTo(0.08, 8);
+    expect(portal.tubeRadius).toBeCloseTo(standard.tubeRadius * 0.75, 8);
+    expect(portal.housingHalfExtents.x).toBeCloseTo(standard.housingHalfExtents.x * 0.75, 8);
   });
 });

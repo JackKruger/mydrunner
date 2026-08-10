@@ -11,6 +11,7 @@ import {
 } from '@mydrunner/shared';
 import type { MapHandshake, SpawnHandshake } from '@mydrunner/shared/net';
 import type { WinchAttachTarget } from '@mydrunner/shared/net';
+import type { PredictedRutStamp } from '@mydrunner/shared/physics';
 
 export interface NetEvents {
   onWelcome(id: PlayerId, serverTimeMs: number, map: MapHandshake, spawn: SpawnHandshake, build: VehicleBuild): void;
@@ -26,6 +27,11 @@ export interface NetEvents {
   onWorkshopAck(msg: Extract<Net.ServerMessage, { t: 'workshop-ack' }>): void;
   onWinchAck(msg: Extract<Net.ServerMessage, { t: 'winch-ack' }>): void;
   onWinchEvent(msg: Extract<Net.ServerMessage, { t: 'winch-event' }>): void;
+  onRutSyncStart(msg: Extract<Net.ServerMessage, { t: 'rut-sync-start' }>): void;
+  onRutTile(msg: Extract<Net.ServerMessage, { t: 'rut-tile' }>): void;
+  onRutSyncEnd(msg: Extract<Net.ServerMessage, { t: 'rut-sync-end' }>): void;
+  onRutBatch(msg: Extract<Net.ServerMessage, { t: 'rut-batch' }>): void;
+  onRutResult(msg: Extract<Net.ServerMessage, { t: 'rut-result' }>): void;
 }
 
 export class NetClient {
@@ -94,6 +100,21 @@ export class NetClient {
         case 'winch-event':
           this.events.onWinchEvent(msg);
           break;
+        case 'rut-sync-start':
+          this.events.onRutSyncStart(msg);
+          break;
+        case 'rut-tile':
+          this.events.onRutTile(msg);
+          break;
+        case 'rut-sync-end':
+          this.events.onRutSyncEnd(msg);
+          break;
+        case 'rut-batch':
+          this.events.onRutBatch(msg);
+          break;
+        case 'rut-result':
+          this.events.onRutResult(msg);
+          break;
       }
     });
     // Ignore events from superseded sockets: connect() may be called again
@@ -129,6 +150,11 @@ export class NetClient {
   sendChat(text: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(Net.encode({ t: 'chat', text }));
+  }
+
+  sendRutStamp(stamp: PredictedRutStamp): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(Net.encode({ t: 'rut-stamp', stamp }));
   }
 
   enterWorkshop(bayId: string): void {

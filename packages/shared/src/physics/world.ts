@@ -14,6 +14,7 @@ import { generateTerrain, type TerrainData, type TerrainOptions } from './terrai
 import { generateObstacles, spawnObstacleColliders, type Obstacle } from './obstacles.js';
 import { landmarksFor, spawnLandmarkColliders, type Landmarks } from './landmarks.js';
 import { COLLISION_GROUP_WORLD } from './collisionGroups.js';
+import { SparseRutField, type RutDepthField } from './ruts.js';
 // Type-only: the map layer composes terrain from physics, so a value
 // import here would close the cycle.
 import type { MapWorld } from '../map/applyMapDoc.js';
@@ -39,6 +40,9 @@ export interface WorldOptions {
   /** Explicit procedural-world obstacle override. Tests use an empty list
    *  when they need to isolate terrain behaviour from object collisions. */
   obstacles?: Obstacle[];
+  /** Owner clients install a prediction-aware replica; tests and offline
+   * worlds use a plain authoritative field. */
+  ruts?: RutDepthField;
 }
 
 export class World {
@@ -46,6 +50,7 @@ export class World {
   readonly world: RAPIER.World;
   readonly vehicles = new Map<string, VehicleLike>();
   readonly terrain: TerrainData;
+  readonly ruts: RutDepthField;
   readonly obstacles: Obstacle[];
   readonly landmarks: Landmarks;
   /** The static heightfield. Readonly now that ruts are gone - the
@@ -60,6 +65,7 @@ export class World {
     this.rapier = RAPIER;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y, z: 0 });
     this.terrain = opts.map?.terrain ?? opts.terrain ?? generateTerrain(opts.generate);
+    this.ruts = opts.ruts ?? new SparseRutField(this.terrain.size);
     const built = this.buildTerrain(this.terrain);
     this.terrainBody = built.body;
     this.terrainCollider = built.collider;

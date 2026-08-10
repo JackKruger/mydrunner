@@ -19,7 +19,11 @@ export class TerrainMesh {
   private geometry: THREE.PlaneGeometry;
   private material: THREE.ShaderMaterial;
 
-  constructor(terrain: Physics.TerrainData, quality: QualitySettings = activeQuality()) {
+  constructor(
+    terrain: Physics.TerrainData,
+    quality: QualitySettings = activeQuality(),
+    stencilRuts = true,
+  ) {
     // Shares the TerrainData instance generated once in main.ts. The game
     // never mutates it after generation, so the HUD surface lookup, the
     // minimap and the owner-physics world can all read the same copy for the
@@ -48,6 +52,15 @@ export class TerrainMesh {
 
     this.material = makeTerrainMaterial(this.terrain, quality);
     this.mesh = new THREE.Mesh(geo, this.material);
+    this.mesh.renderOrder = -1;
+    if (stencilRuts) {
+      this.material.stencilWrite = true;
+      this.material.stencilRef = 1;
+      this.material.stencilFunc = THREE.NotEqualStencilFunc;
+      this.material.stencilFail = THREE.KeepStencilOp;
+      this.material.stencilZFail = THREE.KeepStencilOp;
+      this.material.stencilZPass = THREE.KeepStencilOp;
+    }
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = false;
   }

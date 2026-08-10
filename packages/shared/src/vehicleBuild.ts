@@ -1,6 +1,7 @@
 import { normalizeVehicleBaseId } from './types.js';
 import type { PaintFinish, VehicleBaseId, VehicleBuild } from './types.js';
 import type { TireCarcassSpec } from './physics/tireCarcass.js';
+import type { DifferentialSpec } from './physics/differential.js';
 
 export const VEHICLE_BUILD_VERSION = 1 as const;
 export const VEHICLE_BASE_IDS: readonly VehicleBaseId[] = [
@@ -38,10 +39,11 @@ export interface VehiclePartOption {
 const ROAD_CARCASS: TireCarcassSpec = {
   staticDeflectionRatio: 0.04, radialDampingRatio: 0.7,
   sidewallDampingRatio: 0.5, sidewallFrictionRatio: 0.35,
+  nominalPressurePsi: 34, minPressurePsi: 20, maxPressurePsi: 42,
 };
-const GRAVEL_CARCASS: TireCarcassSpec = { ...ROAD_CARCASS, staticDeflectionRatio: 0.06 };
-const MUD_CARCASS: TireCarcassSpec = { ...ROAD_CARCASS, staticDeflectionRatio: 0.08 };
-const EXTREME_CARCASS: TireCarcassSpec = { ...ROAD_CARCASS, staticDeflectionRatio: 0.10 };
+const GRAVEL_CARCASS: TireCarcassSpec = { ...ROAD_CARCASS, staticDeflectionRatio: 0.06, nominalPressurePsi: 28, minPressurePsi: 14, maxPressurePsi: 38 };
+const MUD_CARCASS: TireCarcassSpec = { ...ROAD_CARCASS, staticDeflectionRatio: 0.08, nominalPressurePsi: 24, minPressurePsi: 10, maxPressurePsi: 34 };
+const EXTREME_CARCASS: TireCarcassSpec = { ...ROAD_CARCASS, staticDeflectionRatio: 0.10, nominalPressurePsi: 18, minPressurePsi: 6, maxPressurePsi: 28 };
 
 export interface VehiclePartCatalog {
   baseId: VehicleBaseId;
@@ -74,7 +76,6 @@ interface BaseTune {
   stockWheelRadius?: number;
   stockWheelWidth?: number;
   lowRangeRatio?: number;
-  lowRangeMaxSpeed?: number;
   suspensionRestLength?: number;
   groundClearance?: number;
   drivetrain?: 'selectable-4wd' | 'fixed-rwd';
@@ -193,7 +194,6 @@ const BASE_TUNING: Record<VehicleBaseId, BaseTune> = {
     stockWheelRadius: 0.43,
     stockWheelWidth: 0.36,
     lowRangeRatio: 3.35,
-    lowRangeMaxSpeed: 7.2,
     rearNames: ['Rear recovery hoop', 'Crawler spare carrier'],
     rearMasses: [24, 58],
   },
@@ -559,6 +559,8 @@ export interface ResolvedVehicleSpec {
   wheelRadius: number;
   wheelWidth: number;
   tireCarcass: TireCarcassSpec;
+  wheelAssemblyMassKg: number;
+  wheelInertiaKgM2: number;
   massKg: number;
   powerMult: number;
   frontSpring: number;
@@ -579,10 +581,8 @@ export interface ResolvedVehicleSpec {
   wadingDepth: number;
   grip: GripMultipliers;
   lowRangeRatio: number;
-  lowRangeMaxSpeed: number;
   drivetrain: 'selectable-4wd' | 'fixed-rwd';
-  /** Continuous wheel-speed coupling for a fitted rear limited-slip diff. */
-  rearDiffCoupling: number;
+  differentials: { front: DifferentialSpec; rear: DifferentialSpec };
   collisionRoofY: number;
   finalDriveMult: number;
 }
@@ -612,6 +612,7 @@ export function resolveVehicleSpec(value: VehicleBuild | unknown): ResolvedVehic
   const build = normalizeVehicleBuild(value);
   const base = BASE_TUNING[build.baseId];
   const selectedTire = VEHICLE_PART_CATALOGS[build.baseId].tires.find((part) => part.id === build.tireId);
+  const selectedWheel = VEHICLE_PART_CATALOGS[build.baseId].wheels.find((part) => part.id === build.wheelId);
   const tireCarcass = selectedTire?.tireCarcass ?? ROAD_CARCASS;
   const rally = build.baseId === 'dustback-rs';
   const rallyGravelSuspension = build.suspensionId.endsWith('.gravel-rally');
@@ -659,13 +660,18 @@ export function resolveVehicleSpec(value: VehicleBuild | unknown): ResolvedVehic
     wet: rallyTarmacTire ? 1.04 : rallyGravelTire ? 0.92 : 0.98,
   } : {
     road: mud ? (tire40 ? 0.78 : tire37 ? 0.82 : tire35 ? 0.86 : 0.89) : allTerrain ? (wideTire ? 0.93 : 0.95) : 1,
-    dirt: mud ? 1.08 : allTerrain ? 1.06 : 1,
+    dirt: mud ? (tire40 ? 1.70 : tire37 ? 1.35 : tire35 ? 1.20 : 1.08) : allTerrain ? 1.06 : 1,
     gravel: mud ? 1.04 : allTerrain ? 1.09 : 1,
     mud: mud ? (tire40 ? 1.58 : tire37 ? 1.46 : tire35 ? (wideTire ? 1.43 : 1.35) : 1.24) : allTerrain ? (wideTire ? 1.18 : 1.12) : 1,
     deepMud: mud ? (tire40 ? 1.74 : tire37 ? 1.59 : tire35 ? (wideTire ? 1.56 : 1.46) : 1.30) : allTerrain ? (wideTire ? 1.20 : 1.12) : 1,
     wet: mud ? 0.93 : allTerrain ? 1.06 : 1,
   };
   const snorkel = build.snorkelId.endsWith('.fitted');
+  const baseWheelAssemblyMassKg = rally ? 24 : 36;
+  const wheelAssemblyMassKg = Math.max(
+    12,
+    baseWheelAssemblyMassKg + ((selectedTire?.massKg ?? 0) + (selectedWheel?.massKg ?? 0)) * 0.25,
+  );
   return {
     build,
     displayName: base.name,
@@ -676,6 +682,8 @@ export function resolveVehicleSpec(value: VehicleBuild | unknown): ResolvedVehic
     wheelRadius,
     wheelWidth,
     tireCarcass,
+    wheelAssemblyMassKg,
+    wheelInertiaKgM2: 0.72 * wheelAssemblyMassKg * wheelRadius * wheelRadius,
     massKg: base.massKg + extraMass,
     powerMult: base.powerMult,
     frontSpring: base.frontSpring * (rallyGravelSuspension ? 0.88 : rallyTarmacSuspension ? 1.22 : flex ? 0.9 : touring ? 0.96 : 1),
@@ -704,9 +712,17 @@ export function resolveVehicleSpec(value: VehicleBuild | unknown): ResolvedVehic
     wadingDepth: base.half.y + base.intakeHeight + (snorkel ? 0.86 : 0),
     grip,
     lowRangeRatio: base.lowRangeRatio ?? 2.65,
-    lowRangeMaxSpeed: base.lowRangeMaxSpeed ?? 9.5,
     drivetrain: base.drivetrain ?? 'selectable-4wd',
-    rearDiffCoupling: rally && build.rearLocker ? 0.36 : 0,
+    differentials: {
+      front: rally
+        ? { mode: 'open', torqueBiasRatio: 1, preloadNm: 0 }
+        : { mode: 'selectable-locker', torqueBiasRatio: 1, preloadNm: 0 },
+      rear: rally && build.rearLocker
+        ? { mode: 'lsd', torqueBiasRatio: 2.5, preloadNm: 40 }
+        : rally
+          ? { mode: 'open', torqueBiasRatio: 1, preloadNm: 0 }
+          : { mode: 'selectable-locker', torqueBiasRatio: 1, preloadNm: 0 },
+    },
     collisionRoofY: base.collisionRoofY ?? 1.2,
     finalDriveMult: base.finalDriveMult ?? 1,
   };

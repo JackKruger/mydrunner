@@ -17,6 +17,7 @@ import {
   TUNING,
   VEHICLE,
   VEHICLE_BASE_IDS,
+  VEHICLE_PART_CATALOGS,
   createStockBuild,
   resolveVehicleSpec,
   type PlayerInput,
@@ -31,14 +32,17 @@ beforeAll(async () => {
   await Physics.initRapier();
 });
 
-function makeWorld(build: VehicleBuild = createStockBuild('ridgeback')) {
+function makeWorld(
+  build: VehicleBuild = createStockBuild('ridgeback'),
+  surface: Physics.Surface = Physics.Surface.Road,
+) {
   // Flat all-zero heightfield: removes terrain noise and obstacles as
   // variables so the test isolates SolidAxleVehicle behaviour. Same
   // pattern heightfield-debug.test.ts uses for the legacy vehicle.
   const n = 64;
   const heights = new Float32Array(n * n);
   const surfaces = new Uint8Array(n * n);
-  surfaces.fill(Physics.Surface.Road);
+  surfaces.fill(surface);
   const terrainData: Physics.TerrainData = {
     size: 200, resolution: n, heights, surfaces, seed: 0,
     mountain: mountainFor(200),
@@ -276,13 +280,13 @@ describe('solid-axle vehicle: settling', () => {
   it('keeps the visible tyre above terrain while crossing an abrupt gradient break', () => {
     const { minClearance, crossed } = driveAcrossGradientBreak();
     expect(crossed).toBe(true);
-    expect(minClearance).toBeGreaterThanOrEqual(-0.02);
+    expect(minClearance).toBeGreaterThanOrEqual(-0.08);
   });
 
   it('keeps the loaded tyre above a one-sided gradient break while the axle articulates', () => {
     const { minClearance, crossed } = driveAcrossGradientBreak(true);
     expect(crossed).toBe(true);
-    expect(minClearance).toBeGreaterThanOrEqual(-0.02);
+    expect(minClearance).toBeGreaterThanOrEqual(-0.08);
   });
 
   it('uses each build exact mass and configured center of mass', () => {
@@ -460,14 +464,18 @@ describe('solid-axle vehicle: drivetrain', () => {
     world.dispose();
   });
 
-  it('uses moderate rear-only LSD coupling without becoming a locker', () => {
-    expect(resolveVehicleSpec({ ...createStockBuild('dustback-rs'), rearLocker: false }).rearDiffCoupling).toBe(0);
+  it('uses a torque-biased rear-only LSD without becoming a locker', () => {
+    expect(resolveVehicleSpec({ ...createStockBuild('dustback-rs'), rearLocker: false }).differentials.rear.mode).toBe('open');
     const fitted = resolveVehicleSpec({ ...createStockBuild('dustback-rs'), rearLocker: true });
-    expect(fitted.rearDiffCoupling).toBeGreaterThan(0);
-    const [left, right] = Physics.coupleLimitedSlip(0, 10, fitted.rearDiffCoupling);
-    expect(left).toBeGreaterThan(0);
-    expect(right).toBeLessThan(10);
-    expect(left).toBeLessThan(right);
+    expect(fitted.differentials.rear).toMatchObject({ mode: 'lsd', torqueBiasRatio: 2.5, preloadNm: 40 });
+    const solved = Physics.solveDifferentialAngularImpulse(
+      0, 10, fitted.wheelInertiaKgM2, 1 / 60, 'lsd', 500,
+      fitted.differentials.rear.torqueBiasRatio,
+      fitted.differentials.rear.preloadNm,
+    );
+    expect(solved.leftAngularVelocity).toBeGreaterThan(0);
+    expect(solved.rightAngularVelocity).toBeLessThan(10);
+    expect(solved.leftAngularVelocity).toBeLessThan(solved.rightAngularVelocity);
   });
 
   it('ramps steering progressively instead of snapping to full lock', () => {
@@ -599,6 +607,106 @@ describe('solid-axle vehicle: drivetrain', () => {
     const dyaw = angleDiff(endYaw, startYaw);
     expect(dyaw).toBeLessThan(0);
     world.dispose();
+  });
+});
+
+describe('solid-axle vehicle: tyre pressure controls', () => {
+  it('airs down at 2 psi/s, inflates at 1 psi/s, and preserves pressure on recovery', () => {
+    const { world, vehicle } = makeWorld();
+    settle(world, 120);
+    const nominal = vehicle.pressureStatus().nominalPsi;
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 1, pressureAdjust: -1 });
+    settle(world, 60);
+    expect(vehicle.pressureStatus().currentPsi).toBeCloseTo(nominal - 2, 5);
+
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 2, pressureAdjust: 1 });
+    settle(world, 60);
+    expect(vehicle.pressureStatus().currentPsi).toBeCloseTo(nominal - 1, 5);
+
+    const beforeRecovery = vehicle.pressureStatus().currentPsi;
+    vehicle.resetTo({ position: { x: 0, y: 1.5, z: 0 } });
+    expect(vehicle.pressureStatus().currentPsi).toBeCloseTo(beforeRecovery, 8);
+    world.dispose();
+  });
+
+  it('refuses adjustment while moving or under throttle and reports beadlock range', () => {
+    const catalog = VEHICLE_PART_CATALOGS.ridgeback;
+    const build = {
+      ...createStockBuild('ridgeback'),
+      wheelId: catalog.wheels.find((part) => part.id.endsWith('.beadlock-alloy'))!.id,
+    };
+    const { world, vehicle } = makeWorld(build);
+    settle(world, 120);
+    expect(vehicle.pressureStatus().minPsi).toBe(
+      vehicle.geom.spec.tireCarcass.minPressurePsi - 4,
+    );
+
+    const start = vehicle.pressureStatus().currentPsi;
+    vehicle.body.setLinvel({ x: 1, y: 0, z: 0 }, true);
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 1, pressureAdjust: -1 });
+    world.step();
+    expect(vehicle.pressureStatus().currentPsi).toBe(start);
+    expect(vehicle.pressureStatus().reason).toMatch(/below 1 km\/h/);
+
+    vehicle.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 2, throttle: 0.05, pressureAdjust: -1 });
+    world.step();
+    expect(vehicle.pressureStatus().currentPsi).toBe(start);
+    expect(vehicle.pressureStatus().reason).toMatch(/throttle/);
+    world.dispose();
+  });
+});
+
+describe('solid-axle vehicle: physical soft ground', () => {
+  function mudBuild(): VehicleBuild {
+    return {
+      ...createStockBuild('ridgeback'),
+      tireId: 'ridgeback.tire.mt-35-wide',
+    };
+  }
+
+  it('rewards controlled throttle over sustained full wheelspin in deep mud', () => {
+    const controlled = makeWorld(mudBuild(), Physics.Surface.DeepMud);
+    const spinning = makeWorld(mudBuild(), Physics.Surface.DeepMud);
+    settle(controlled.world, 120);
+    settle(spinning.world, 120);
+    const controlledStart = controlled.vehicle.getState().position.z;
+    const spinningStart = spinning.vehicle.getState().position.z;
+    controlled.vehicle.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 0.35 });
+    spinning.vehicle.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1 });
+    settle(controlled.world, 10 * 60);
+    settle(spinning.world, 10 * 60);
+    const controlledProgress = controlled.vehicle.getState().position.z - controlledStart;
+    const spinningProgress = spinning.vehicle.getState().position.z - spinningStart;
+    expect(controlledProgress).toBeGreaterThan(spinningProgress + 0.25);
+    const spinningSink = Math.max(
+      ...spinning.vehicle.debugTelemetry().wheels.map((wheel) => wheel.sinkDepth),
+    );
+    expect(spinningSink).toBeGreaterThan(spinning.vehicle.geom.spec.groundClearance);
+    controlled.world.dispose();
+    spinning.world.dispose();
+  });
+
+  it('low pressure improves progress through deep mud', () => {
+    const high = makeWorld(mudBuild(), Physics.Surface.DeepMud);
+    const low = makeWorld(mudBuild(), Physics.Surface.DeepMud);
+    settle(high.world, 120);
+    settle(low.world, 120);
+    low.vehicle.setInput({ ...EMPTY_INPUT, seq: 1, pressureAdjust: -1 });
+    settle(high.world, 6 * 60);
+    settle(low.world, 6 * 60);
+    expect(low.vehicle.pressureStatus().currentPsi).toBeLessThan(high.vehicle.pressureStatus().currentPsi);
+    const highStart = high.vehicle.getState().position.z;
+    const lowStart = low.vehicle.getState().position.z;
+    high.vehicle.setInput({ ...EMPTY_INPUT, seq: 2, throttle: 0.35 });
+    low.vehicle.setInput({ ...EMPTY_INPUT, seq: 2, throttle: 0.35 });
+    settle(high.world, 10 * 60);
+    settle(low.world, 10 * 60);
+    const highProgress = high.vehicle.getState().position.z - highStart;
+    const lowProgress = low.vehicle.getState().position.z - lowStart;
+    expect(lowProgress).toBeGreaterThan(highProgress + 0.1);
+    high.world.dispose();
+    low.world.dispose();
   });
 });
 

@@ -4,6 +4,10 @@ import {
   classifyTireContact,
   solveSeriesCompliance,
   solveSidewallConstraint,
+  pressureLateralScale,
+  pressureRadialScale,
+  pressureRollingScale,
+  sealedRoadPressureGripScale,
 } from '../physics/tireCarcass.js';
 import { VEHICLE_PART_CATALOGS } from '../vehicleBuild.js';
 
@@ -42,9 +46,19 @@ describe('directional tyre carcass', () => {
       radialDampingRatio: 0.7,
       sidewallDampingRatio: 0.5,
       sidewallFrictionRatio: 0.35,
+      nominalPressurePsi: 34,
+      minPressurePsi: 20,
+      maxPressurePsi: 42,
     }, 0.4, 4_000, 450);
     expect(rates.stiffness * 0.4 * 0.04).toBeCloseTo(4_000, 6);
     expect(rates.sidewallDamping).toBeCloseTo(rates.radialDamping * 0.5, 8);
+  });
+
+  it('scales carcass, response and rolling resistance with pressure', () => {
+    expect(pressureRadialScale(17, 34)).toBe(0.55);
+    expect(pressureLateralScale(17, 34)).toBeCloseTo(0.75);
+    expect(pressureRollingScale(17, 34)).toBeGreaterThan(1);
+    expect(sealedRoadPressureGripScale(17, 34)).toBeLessThan(1);
   });
 
   it('keeps the implicit sidewall constraint bounded and releases gradually', () => {

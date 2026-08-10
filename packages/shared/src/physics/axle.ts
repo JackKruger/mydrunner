@@ -45,6 +45,10 @@ export interface AxleState {
   /** Was the left wheel in contact with anything this tick? */
   leftContact: boolean;
   rightContact: boolean;
+  /** Allocation-free integrator scratch, owned by this axle. */
+  rideDof: [number, number];
+  rollDof: [number, number];
+  stepResult: StepAxleResult;
 }
 
 export function createAxleState(geom: AxleGeom): AxleState {
@@ -60,6 +64,9 @@ export function createAxleState(geom: AxleGeom): AxleState {
     rightDepth: 0,
     leftContact: false,
     rightContact: false,
+    rideDof: [0, 0],
+    rollDof: [0, 0],
+    stepResult: { chassisRideForce: 0, chassisRollTorque: 0 },
   };
 }
 
@@ -74,6 +81,12 @@ export function resetAxleState(s: AxleState): void {
   s.rightDepth = 0;
   s.leftContact = false;
   s.rightContact = false;
+  s.rideDof[0] = 0;
+  s.rideDof[1] = 0;
+  s.rollDof[0] = 0;
+  s.rollDof[1] = 0;
+  s.stepResult.chassisRideForce = 0;
+  s.stepResult.chassisRollTorque = 0;
 }
 
 export interface StepAxleResult {
@@ -128,6 +141,33 @@ export interface AntiRollLoadTransfer {
   rightForce: number;
 }
 
+export interface TravelStopForce {
+  bumpForce: number;
+  reboundForce: number;
+  totalForce: number;
+}
+
+/** Progressive bump/rebound stops expressed as wheel-end forces. */
+export function progressiveTravelStopForce(
+  travel: number,
+  bumpMax: number,
+  droopMax: number,
+  mainSpringRate: number,
+): TravelStopForce {
+  const bumpStart = Math.max(0, bumpMax) * 0.80;
+  const bumpRange = Math.max(1e-6, Math.max(0, bumpMax) - bumpStart);
+  const bumpT = clamp01((travel - bumpStart) / bumpRange);
+  const bumpForce = 4 * Math.max(0, mainSpringRate) * bumpRange * bumpT * bumpT;
+
+  const reboundStart = -Math.max(0, droopMax) * 0.85;
+  const reboundRange = Math.max(1e-6, Math.max(0, droopMax) * 0.15);
+  const reboundT = clamp01((reboundStart - travel) / reboundRange);
+  const reboundForce = reboundT > 0
+    ? -1.5 * Math.max(0, mainSpringRate) * reboundRange * reboundT * reboundT
+    : 0;
+  return { bumpForce, reboundForce, totalForce: bumpForce + reboundForce };
+}
+
 /** Convert relative axle articulation into paired wheel-end load transfer.
  * There is deliberately no chassis/world orientation in this calculation:
  * a sway bar reacts suspension displacement, not gravity. Unsupported ends
@@ -162,7 +202,11 @@ export function computeAntiRollLoadTransfer(input: AntiRollLoadInput): AntiRollL
  *  unsprung mass/inertia instead of snapping straight to that target.
  *  Returns the per-tick reaction force on the chassis (ride spring +
  *  damper) and roll torque (only non-zero past the articulation cap). */
-export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
+export function stepAxle(
+  s: AxleState,
+  input: StepAxleInputs,
+  out: StepAxleResult = { chassisRideForce: 0, chassisRollTorque: 0 },
+): StepAxleResult {
   const g = s.geom;
 
   const lc = input.leftContact ? input.leftDepth : 0;
@@ -204,7 +248,7 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   }
   s.targetRideY = targetY;
   if (input.dt > 0) {
-    [s.rideY, s.rideVelY] = stepDampedDof(
+    stepDampedDof(
       s.rideY,
       s.rideVelY,
       targetY,
@@ -212,13 +256,17 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
       g.rideDamping * (input.rideDampingMult ?? 1),
       g.axleMass,
       input.dt,
+      s.rideDof,
     );
-    [s.rideY, s.rideVelY] = clampDof(
-      s.rideY,
-      s.rideVelY,
+    clampDof(
+      s.rideDof[0],
+      s.rideDof[1],
       -g.droopMax,
       visualMax,
+      s.rideDof,
     );
+    s.rideY = s.rideDof[0];
+    s.rideVelY = s.rideDof[1];
   }
 
   // rollAngle targets terrain slope across the wheels. The beam's roll
@@ -235,7 +283,7 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
   else if (clampedRoll < -maxArticulation) clampedRoll = -maxArticulation;
   s.targetRollAngle = clampedRoll;
   if (input.dt > 0) {
-    [s.rollAngle, s.rollVel] = stepDampedDof(
+    stepDampedDof(
       s.rollAngle,
       s.rollVel,
       clampedRoll,
@@ -243,13 +291,17 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
       g.rollDamping,
       g.axleRollInertia,
       input.dt,
+      s.rollDof,
     );
-    [s.rollAngle, s.rollVel] = clampDof(
-      s.rollAngle,
-      s.rollVel,
+    clampDof(
+      s.rollDof[0],
+      s.rollDof[1],
       -maxArticulation,
       maxArticulation,
+      s.rollDof,
     );
+    s.rollAngle = s.rollDof[0];
+    s.rollVel = s.rollDof[1];
   }
 
   // A tyre cannot visually lag *through* rising ground. Keep the damped axle
@@ -269,7 +321,11 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
     supportCorrection = Math.max(supportCorrection, rightPoseDepth - visualRightDepth);
   }
   if (supportCorrection > 0) {
-    s.rideY = Math.min(visualMax, s.rideY + supportCorrection);
+    // Contact/beam correction is a one-sided positional constraint, not an
+    // impulse. Bound it to 3 m/s of beam travel so a discontinuous support
+    // query cannot teleport the axle through its chassis in one tick.
+    const boundedCorrection = Math.min(supportCorrection, 0.025);
+    s.rideY = Math.min(visualMax, s.rideY + boundedCorrection);
     s.rideVelY = 0;
   }
 
@@ -297,7 +353,9 @@ export function stepAxle(s: AxleState, input: StepAxleInputs): StepAxleResult {
     chassisRollTorque = g.rollStiffness * (input.rollStiffnessMult ?? 1) * surplus;
   }
 
-  return { chassisRideForce, chassisRollTorque };
+  out.chassisRideForce = chassisRideForce;
+  out.chassisRollTorque = chassisRollTorque;
+  return out;
 }
 
 /** Implicit Euler step for a damped spring following a moving target.
@@ -311,6 +369,7 @@ function stepDampedDof(
   damping: number,
   mass: number,
   dt: number,
+  out: [number, number] = [0, 0],
 ): [number, number] {
   const safeMass = Math.max(1e-6, mass);
   const stiffnessPerMass = Math.max(0, stiffness) / safeMass;
@@ -320,7 +379,9 @@ function stepDampedDof(
   ) / (
     1 + dt * dampingPerMass + dt * dt * stiffnessPerMass
   );
-  return [position + dt * nextVelocity, nextVelocity];
+  out[0] = position + dt * nextVelocity;
+  out[1] = nextVelocity;
+  return out;
 }
 
 /** Stop a DOF cleanly at a mechanical limit without retaining velocity
@@ -330,10 +391,17 @@ function clampDof(
   velocity: number,
   min: number,
   max: number,
+  out: [number, number] = [0, 0],
 ): [number, number] {
-  if (position < min) return [min, velocity < 0 ? 0 : velocity];
-  if (position > max) return [max, velocity > 0 ? 0 : velocity];
-  return [position, velocity];
+  out[0] = position < min ? min : position > max ? max : position;
+  out[1] = position < min && velocity < 0
+    ? 0
+    : position > max && velocity > 0 ? 0 : velocity;
+  return out;
+}
+
+function clamp01(value: number): number {
+  return value < 0 ? 0 : value > 1 ? 1 : value;
 }
 
 export interface AxleSnap {

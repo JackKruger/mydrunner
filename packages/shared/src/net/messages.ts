@@ -18,6 +18,7 @@ import type {
   WheelState,
   WorldSnapshot,
 } from '../types.js';
+import type { PredictedRutStamp, RutStamp, RutTilePayload } from '../physics/ruts.js';
 
 export type WinchAttachTarget =
   | { kind: 'obstacle'; obstacleId: string }
@@ -37,7 +38,8 @@ export type ClientMessage =
   | { t: 'workshop-exit'; leaseId: string }
   | { t: 'build-update'; leaseId: string; build: VehicleBuild; normalizationIssues?: string[] }
   | { t: 'winch-command'; seq: number; action: 'attach'; target: WinchAttachTarget }
-  | { t: 'winch-command'; seq: number; action: 'detach' | 'break' };
+  | { t: 'winch-command'; seq: number; action: 'detach' | 'break' }
+  | { t: 'rut-stamp'; stamp: PredictedRutStamp };
 
 /** Which world to build. Both sides compile the map registry in, so the
  *  wire carries an identity rather than the map: a baked document is
@@ -92,6 +94,11 @@ export type ServerMessage =
     }
   | { t: 'winch-ack'; seq: number; ok: boolean; link?: WinchLinkSnapshot; reason?: string }
   | { t: 'winch-event'; linkId: string; reason: 'broken' | 'target-lost' | 'invalid' }
+  | { t: 'rut-sync-start'; globalSequence: number; tileCount: number }
+  | { t: 'rut-tile'; tile: RutTilePayload }
+  | { t: 'rut-sync-end'; globalSequence: number }
+  | { t: 'rut-batch'; stamps: RutStamp[] }
+  | { t: 'rut-result'; ownerSequence: number; accepted: boolean; globalSequence?: number }
   | { t: 'bye'; reason: string };
 
 // Wire format: MessagePack binary plus snapshot quantization. The naive
@@ -626,6 +633,19 @@ export function decodeClient(raw: Wire): ClientMessage {
       }
       return { t: 'winch-command', seq: m.seq as number, action: m.action };
     }
+    case 'rut-stamp': {
+      const stamp = m.stamp as Record<string, unknown> | null;
+      if (!stamp || typeof stamp !== 'object'
+        || !Number.isSafeInteger(stamp.ownerSequence) || (stamp.ownerSequence as number) <= 0
+        || !isFiniteNum(stamp.x) || !isFiniteNum(stamp.z) || !isFiniteNum(stamp.heading)
+        || !isFiniteNum(stamp.radiusLong) || !isFiniteNum(stamp.radiusLat) || !isFiniteNum(stamp.depth)
+        || stamp.radiusLong < 0.25 || stamp.radiusLong > 1.5
+        || stamp.radiusLat < 0.125 || stamp.radiusLat > 0.8
+        || stamp.depth <= 0 || stamp.depth > 0.04) {
+        throw new Error('rut-stamp: malformed or out of range');
+      }
+      return { t: 'rut-stamp', stamp: stamp as unknown as PredictedRutStamp };
+    }
     default:
       throw new Error('client message: unknown type');
   }
@@ -642,6 +662,47 @@ export function decodeServer(raw: Wire): ServerMessage {
       throw new Error(`snapshot: unsupported schema ${String(decoded.s)}`);
     }
     return { t: 'snapshot', snap: unpackSnapshot(decoded as unknown as { T: number; M: number; P: unknown[][]; W?: unknown[] }) };
+  }
+  if (decoded.t === 'rut-tile') {
+    const tile = decoded.tile as Record<string, unknown> | null;
+    if (!tile || !Number.isSafeInteger(tile.tileX) || !Number.isSafeInteger(tile.tileZ)
+      || Math.abs(tile.tileX as number) > 32_767 || Math.abs(tile.tileZ as number) > 32_767
+      || !(tile.depths instanceof Uint8Array) || tile.depths.length !== 256) {
+      throw new Error('rut-tile: malformed');
+    }
+  } else if (decoded.t === 'rut-sync-start') {
+    if (!Number.isSafeInteger(decoded.globalSequence) || !Number.isSafeInteger(decoded.tileCount)
+      || (decoded.globalSequence as number) < 0
+      || (decoded.tileCount as number) < 0 || (decoded.tileCount as number) > 65_536) {
+      throw new Error('rut-sync-start: malformed');
+    }
+  } else if (decoded.t === 'rut-sync-end') {
+    if (!Number.isSafeInteger(decoded.globalSequence)
+      || (decoded.globalSequence as number) < 0) throw new Error('rut-sync-end: malformed');
+  } else if (decoded.t === 'rut-batch') {
+    if (!Array.isArray(decoded.stamps) || decoded.stamps.length > 16) throw new Error('rut-batch: malformed');
+    for (const value of decoded.stamps) {
+      const stamp = value as Record<string, unknown>;
+      if (typeof stamp.ownerId !== 'string' || stamp.ownerId.length < 1 || stamp.ownerId.length > 128
+        || !Number.isSafeInteger(stamp.ownerSequence) || (stamp.ownerSequence as number) <= 0
+        || !Number.isSafeInteger(stamp.globalSequence) || !isFiniteNum(stamp.x)
+        || !isFiniteNum(stamp.z) || !isFiniteNum(stamp.heading)
+        || !isFiniteNum(stamp.radiusLong) || !isFiniteNum(stamp.radiusLat)
+        || !isFiniteNum(stamp.depth) || (stamp.globalSequence as number) <= 0
+        || (stamp.radiusLong as number) < 0.25 || (stamp.radiusLong as number) > 1.5
+        || (stamp.radiusLat as number) < 0.125 || (stamp.radiusLat as number) > 0.8
+        || (stamp.depth as number) <= 0 || (stamp.depth as number) > 0.04) {
+        throw new Error('rut-batch: invalid stamp');
+      }
+    }
+  } else if (decoded.t === 'rut-result') {
+    if (!Number.isSafeInteger(decoded.ownerSequence) || (decoded.ownerSequence as number) <= 0
+      || typeof decoded.accepted !== 'boolean'
+      || (decoded.accepted
+        ? !Number.isSafeInteger(decoded.globalSequence) || (decoded.globalSequence as number) <= 0
+        : decoded.globalSequence !== undefined)) {
+      throw new Error('rut-result: malformed');
+    }
   }
   return decoded as unknown as ServerMessage;
 }

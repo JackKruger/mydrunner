@@ -18,6 +18,7 @@
     "test:e2e": "pnpm --filter @mydrunner/e2e exec playwright test --grep-invert '@screenshot|@trail-shots|@editor-shots|@map-review'",
     "test:e2e:screenshots": "pnpm --filter @mydrunner/e2e exec playwright test --grep '@screenshot|@trail-shots|@editor-shots|@map-review'",
     "lint": "pnpm -r --filter '@mydrunner/*' run lint",
+    "benchmark:physics": "pnpm --filter @mydrunner/shared run benchmark:physics",
     "clean": "pnpm -r exec rm -rf dist node_modules/.vite .turbo"
   },
   "devDependencies": {

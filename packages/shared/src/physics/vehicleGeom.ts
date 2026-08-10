@@ -31,6 +31,15 @@ export interface AxleGeom {
   hasDrive: boolean;
   hasSteering: boolean;
   diffLocked: boolean;
+  /** Low-friction beam collision probes resolved from the selected axle. */
+  probe: {
+    friction: number;
+    tubeRadius: number;
+    tubeHalfLength: number;
+    housingHalfExtents: { x: number; y: number; z: number };
+    verticalOffset: number;
+    portal: boolean;
+  };
 }
 
 export interface VehicleGeom {
@@ -67,6 +76,9 @@ function buildGeom(value: CarKind | VehicleBuild): VehicleGeom {
   const frontMass = spec.massKg * 0.52;
   const rearMass = spec.massKg * 0.48;
   const rollBase = 24_000 + spec.stability * 16_000;
+  const portal = spec.build.axleId.endsWith('.portal-240');
+  const probeScale = portal ? 0.75 : 1;
+  const portalClearance = portal ? 0.08 : 0;
   const common = {
     centerLocalY: -half.y,
     trackHalf: spec.track * 0.5,
@@ -75,6 +87,18 @@ function buildGeom(value: CarKind | VehicleBuild): VehicleGeom {
     bumpMax: 0.21,
     maxArticulation: spec.articulation,
     diffLocked: false,
+    probe: {
+      friction: 0.08,
+      tubeRadius: 0.07 * probeScale,
+      tubeHalfLength: Math.max(0.1, (spec.track * 0.5 - 0.20 * probeScale) * 0.5),
+      housingHalfExtents: {
+        x: 0.20 * probeScale,
+        y: 0.15 * probeScale,
+        z: 0.16 * probeScale,
+      },
+      verticalOffset: portalClearance,
+      portal,
+    },
   };
   return {
     chassisHalfExtents: { ...half },

@@ -81,7 +81,7 @@ export function initInput(): void {
     if (
       e.code === 'Space' ||
       e.code.startsWith('Arrow') ||
-      ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyV', 'KeyZ', 'KeyX'].includes(e.code)
+      ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyV', 'KeyZ', 'KeyX', 'BracketLeft', 'BracketRight'].includes(e.code)
     ) {
       e.preventDefault();
     }
@@ -141,6 +141,9 @@ export function sampleInput(): PlayerInput {
   const rearLocker = drivetrainControlsEnabled && (KEYS.has('KeyZ') || t.rearLocker > 0);
   const frontLocker = drivetrainControlsEnabled && (KEYS.has('KeyX') || t.frontLocker > 0);
   const transferCase = drivetrainControlsEnabled ? pendingTransferCase : null;
+  const pressureAdjust = (KEYS.has('BracketLeft') || t.airDown > 0)
+    ? -1
+    : (KEYS.has('BracketRight') || t.inflate > 0) ? 1 : 0;
   pendingTransferCase = null;
   return {
     seq,
@@ -150,6 +153,7 @@ export function sampleInput(): PlayerInput {
     handbrake: Math.max(kbHandbrake, t.handbrake),
     manualGear,
     transferCase,
+    pressureAdjust,
     buttons: (reset ? BUTTON_RESET : 0)
       | (starter ? BUTTON_STARTER : 0)
       | (range ? BUTTON_RANGE : 0)

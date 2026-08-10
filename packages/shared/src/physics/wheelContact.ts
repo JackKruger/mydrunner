@@ -219,7 +219,7 @@ export function findSteepWheelContact(
  *  direction from the current hub to a point slightly over that edge. This
  *  approximates deformable tread wrapping a square corner. It deliberately
  *  requires an upward-facing hit on the same collider, so vertical walls and
- *  the back/side of an obstacle cannot trigger crawler assist. */
+ *  the back/side of an obstacle cannot produce a false top transition. */
 interface ClimbTarget {
   direction: ContactVec3;
   topY: number;

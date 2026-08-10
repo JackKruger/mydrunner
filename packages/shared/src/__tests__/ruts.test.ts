@@ -1,91 +1,74 @@
-// RutBuffer accumulation + cap.
-//
-// These exist mainly to pin the ORDER OF MAGNITUDE of RUT_RATE. The
-// constant shipped as 0.3035 with the intended 0.0035 stranded in its
-// trailing comment — ~87x too fast, which at 60 Hz is 18 m of erosion
-// per second. Nothing caught it because RUTS_ENABLED is false, so the
-// whole subsystem is unreachable from the room loop. These tests drive
-// RutBuffer directly, so they hold regardless of the feature flag.
-
 import { describe, expect, it } from 'vitest';
-import { RutBuffer } from '../physics/ruts.js';
-import { Surface, mountainFor, petrolStationPadFor, type TerrainData,
-  dryWater,
-} from '../physics/terrain.js';
+import { RUT_TILE_DEPTH_BYTES, RutSessionReplica, SparseRutField } from '../physics/ruts.js';
 import { RUT_MAX_DEPTH } from '../constants.js';
 
-/** Ticks per flush batch. Room used to flush the buffer every 30 ticks
- *  (0.5 s at 60 Hz) and RUT_RATE was tuned against that cadence, so the
- *  rate-vs-cap assertion below is only meaningful in those units. It
- *  lives here rather than in constants.ts because nothing schedules a
- *  flush any more - whoever re-wires ruts picks the cadence, and will
- *  need to re-check this test against it. */
-const FLUSH_INTERVAL_TICKS = 30;
+describe('SparseRutField', () => {
+  it('quantizes elliptical stamps into sparse 16x16 tiles', () => {
+    const field = new SparseRutField(100);
+    field.applyStamp({ x: 0, z: 0, heading: 0, radiusLong: 0.8, radiusLat: 0.25, depth: 0.03 });
+    expect(field.sampleDepth(0, 0)).toBeGreaterThan(0);
+    const tiles = field.exportTiles();
+    expect(tiles.length).toBeGreaterThan(0);
+    expect(tiles.every((tile) => tile.depths.length === RUT_TILE_DEPTH_BYTES)).toBe(true);
+  });
 
-function makeMudTerrain(): TerrainData {
-  const n = 32;
-  const size = 200;
-  const surfaces = new Uint8Array(n * n);
-  surfaces.fill(Surface.Mud);
-  return {
-    size,
-    resolution: n,
-    heights: new Float32Array(n * n),
-    surfaces,
-    seed: 0,
-    mountain: mountainFor(size),
-    petrolStation: petrolStationPadFor(size),
-    ...dryWater(n),
-    bogs: [],
-    roads: [],
+  it('round-trips late-join tiles with bilinear support depth', () => {
+    const owner = new SparseRutField(100);
+    owner.applyStamp({ x: 1, z: -2, heading: 0.4, radiusLong: 1, radiusLat: 0.3, depth: 0.02 });
+    const joiner = new SparseRutField(100);
+    for (const tile of owner.exportTiles()) joiner.applyTile(tile);
+    expect(joiner.sampleDepth(1, -2)).toBeCloseTo(owner.sampleDepth(1, -2), 8);
+  });
+
+  it('saturates accumulated stamps at the 8-bit depth limit', () => {
+    const field = new SparseRutField(100);
+    const stamp = { x: 0, z: 0, heading: 0, radiusLong: 0.8, radiusLat: 0.25, depth: 0.04 };
+    for (let i = 0; i < 100; i++) field.applyStamp(stamp);
+    expect(field.sampleDepth(0, 0)).toBeCloseTo(RUT_MAX_DEPTH, 8);
+  });
+
+  it('reports deterministic dirty tiles for incremental consumers', () => {
+    const field = new SparseRutField(100);
+    const dirty = field.applyStamp({
+      x: 0, z: 0, heading: 0, radiusLong: 0.8, radiusLat: 0.25, depth: 0.03,
+    });
+    expect(dirty).toEqual([...dirty].sort((a, b) => a.tileZ - b.tileZ || a.tileX - b.tileX));
+    expect(dirty.length).toBeGreaterThan(0);
+  });
+});
+
+describe('RutSessionReplica', () => {
+  const proposal = {
+    ownerSequence: 1, x: 0, z: 0, heading: 0,
+    radiusLong: 0.8, radiusLat: 0.25, depth: 0.03,
   };
-}
 
-describe('RutBuffer', () => {
-  it('carves a fraction of the depth cap over one flush interval at full slip', () => {
-    const terrain = makeMudTerrain();
-    const buf = new RutBuffer(terrain);
-    for (let i = 0; i < FLUSH_INTERVAL_TICKS; i++) {
-      buf.recordWheel(0, 0, 1, true);
-    }
-    const deltas = buf.flush();
-    expect(deltas).toHaveLength(1);
-    // Rate-vs-cap is the invariant that matters: one flush interval
-    // (~0.5 s of a wheel sitting still at full slip) should be a bite out
-    // of the rut, not the whole thing. At the bad constant a single flush
-    // was 9.1 m — 15x the cap — so the "gradual erosion" the buffer is
-    // built around collapsed into one instant trench.
-    expect(deltas[0]!.dy).toBeGreaterThan(0);
-    expect(deltas[0]!.dy).toBeLessThan(RUT_MAX_DEPTH / 4);
+  it('samples prediction immediately and removes it on rejection', () => {
+    const replica = new RutSessionReplica(100, 'owner');
+    replica.predict(proposal);
+    expect(replica.sampleDepth(0, 0)).toBeGreaterThan(0);
+    expect(replica.exportAuthoritativeTiles()).toEqual([]);
+    replica.resolve(1, false);
+    expect(replica.sampleDepth(0, 0)).toBe(0);
+    expect(replica.pendingCount).toBe(0);
   });
 
-  it('caps total erosion per cell at RUT_MAX_DEPTH', () => {
-    const terrain = makeMudTerrain();
-    const buf = new RutBuffer(terrain);
-    const startH = 0; // makeMudTerrain starts flat
-    // Hammer one cell far past the cap.
-    for (let batch = 0; batch < 400; batch++) {
-      for (let i = 0; i < FLUSH_INTERVAL_TICKS; i++) {
-        buf.recordWheel(0, 0, 1, true);
-      }
-      buf.flush();
-    }
-    const idx = terrain.heights.findIndex((h) => h < startH - 1e-6);
-    expect(idx).toBeGreaterThanOrEqual(0);
-    const sunk = startH - terrain.heights[idx]!;
-    expect(sunk).toBeLessThanOrEqual(RUT_MAX_DEPTH + 1e-6);
-    expect(sunk).toBeCloseTo(RUT_MAX_DEPTH, 3);
+  it('deduplicates an accepted prediction against its authoritative batch', () => {
+    const replica = new RutSessionReplica(100, 'owner');
+    replica.predict(proposal);
+    const predictedDepth = replica.sampleDepth(0, 0);
+    replica.resolve(1, true, 7);
+    replica.applyAuthoritative([{ ...proposal, ownerId: 'owner', globalSequence: 7 }]);
+    expect(replica.sampleDepth(0, 0)).toBe(predictedDepth);
+    expect(replica.pendingCount).toBe(0);
   });
 
-  it('ignores wheels that are not in contact and non-mud cells', () => {
-    const terrain = makeMudTerrain();
-    terrain.surfaces.fill(Surface.Road);
-    const buf = new RutBuffer(terrain);
-    buf.recordWheel(0, 0, 1, true);
-    expect(buf.flush()).toHaveLength(0);
-
-    terrain.surfaces.fill(Surface.Mud);
-    buf.recordWheel(0, 0, 1, false);
-    expect(buf.flush()).toHaveLength(0);
+  it('rolls back one pending stamp without altering authoritative bytes', () => {
+    const replica = new RutSessionReplica(100, 'owner');
+    replica.applyAuthoritative([{ ...proposal, ownerId: 'peer', globalSequence: 1 }]);
+    const before = replica.exportAuthoritativeTiles();
+    replica.predict({ ...proposal, ownerSequence: 2, x: 0.25 });
+    replica.resolve(2, false);
+    expect(replica.exportAuthoritativeTiles()).toEqual(before);
   });
 });

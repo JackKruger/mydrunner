@@ -20,6 +20,8 @@ const state = {
   range: 0,
   rearLocker: 0,
   frontLocker: 0,
+  airDown: 0,
+  inflate: 0,
   winchIn: 0,
   winchOut: 0,
 };
@@ -56,7 +58,7 @@ function isTouchDevice(): boolean {
 /** Bind a button so it sets `state[key]` to 1 while held, 0 on release. */
 function bindHoldButton(
   el: HTMLElement,
-  key: 'throttle' | 'brake' | 'handbrake' | 'reset' | 'starter' | 'range' | 'rearLocker' | 'frontLocker' | 'winchIn' | 'winchOut',
+  key: 'throttle' | 'brake' | 'handbrake' | 'reset' | 'starter' | 'range' | 'rearLocker' | 'frontLocker' | 'airDown' | 'inflate' | 'winchIn' | 'winchOut',
 ): void {
   const press = (e: Event): void => {
     e.preventDefault();
@@ -168,6 +170,8 @@ export function initTouchInput(): void {
   const winch = document.getElementById('winch-btn');
   const winchIn = document.getElementById('winch-in-btn');
   const winchOut = document.getElementById('winch-out-btn');
+  const airDown = document.getElementById('air-down-btn');
+  const inflate = document.getElementById('inflate-btn');
 
   if (pad && knob) bindSteerPad(pad, knob);
   if (throttle) bindHoldButton(throttle, 'throttle');
@@ -180,6 +184,8 @@ export function initTouchInput(): void {
   if (range) bindHoldButton(range, 'range');
   if (rearLocker) bindHoldButton(rearLocker, 'rearLocker');
   if (frontLocker) bindHoldButton(frontLocker, 'frontLocker');
+  if (airDown) bindHoldButton(airDown, 'airDown');
+  if (inflate) bindHoldButton(inflate, 'inflate');
   if (cam) bindEdgeButton(cam, 'cam');
   if (mute) bindEdgeButton(mute, 'mute');
   if (chat) bindEdgeButton(chat, 'chat');

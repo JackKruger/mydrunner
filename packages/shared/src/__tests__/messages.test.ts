@@ -19,6 +19,26 @@ import type { VehicleState } from '../types.js';
 
 const raw = (obj: unknown): Uint8Array => msgpackEncode(obj);
 
+describe('rut result wire validation', () => {
+  it('round-trips accepted and rejected proposal results', () => {
+    expect(decodeServer(encode({
+      t: 'rut-result', ownerSequence: 4, accepted: true, globalSequence: 9,
+    }))).toEqual({ t: 'rut-result', ownerSequence: 4, accepted: true, globalSequence: 9 });
+    expect(decodeServer(encode({
+      t: 'rut-result', ownerSequence: 5, accepted: false,
+    }))).toEqual({ t: 'rut-result', ownerSequence: 5, accepted: false });
+  });
+
+  it('rejects contradictory result shapes', () => {
+    expect(() => decodeServer(raw({
+      t: 'rut-result', ownerSequence: 1, accepted: true,
+    }))).toThrow(/rut-result/);
+    expect(() => decodeServer(raw({
+      t: 'rut-result', ownerSequence: 1, accepted: false, globalSequence: 2,
+    }))).toThrow(/rut-result/);
+  });
+});
+
 const vehicle: VehicleState = {
   position: { x: 1.234, y: 2, z: -3 },
   rotation: { x: 0, y: 0, z: 0, w: 1 },
@@ -165,6 +185,17 @@ describe('decodeClient validation', () => {
     expect(() => decodeClient(raw({ t: 'nope' }))).toThrow();
     expect(() => decodeClient(raw('just a string'))).toThrow();
   });
+
+  it('strictly validates predicted rut stamps', () => {
+    const stamp = {
+      ownerSequence: 7, x: 12.5, z: -4, heading: 0.3,
+      radiusLong: 0.8, radiusLat: 0.24, depth: 0.018,
+    };
+    expect(decodeClient(encode({ t: 'rut-stamp', stamp }))).toEqual({ t: 'rut-stamp', stamp });
+    expect(() => decodeClient(raw({ t: 'rut-stamp', stamp: { ...stamp, depth: 0.041 } }))).toThrow();
+    expect(() => decodeClient(raw({ t: 'rut-stamp', stamp: { ...stamp, x: NaN } }))).toThrow();
+    expect(() => decodeClient(raw({ t: 'rut-stamp', stamp: { ...stamp, ownerSequence: 0 } }))).toThrow();
+  });
 });
 
 // The per-player snapshot tuple is decoded BY POSITION, so a decoder that
@@ -277,6 +308,36 @@ describe('decodeServer schema guard', () => {
     expect(() => decodeServer(packed)).toThrow(/schema/);
     const legacy = msgpackEncode({ t: 'snapshot', T: 1, M: 1, P: [[]] });
     expect(() => decodeServer(legacy)).toThrow(/schema/);
+  });
+});
+
+describe('rut session messages', () => {
+  it('round-trips a bounded authoritative batch and a 16x16 tile under 4 KiB', () => {
+    const stamp = {
+      ownerId: 'p1', ownerSequence: 3, globalSequence: 9,
+      x: 1, z: 2, heading: -0.2, radiusLong: 0.9, radiusLat: 0.3, depth: 0.02,
+    };
+    const batchBytes = encode({ t: 'rut-batch', stamps: [stamp] });
+    expect(decodeServer(batchBytes)).toEqual({ t: 'rut-batch', stamps: [stamp] });
+    expect(batchBytes.byteLength).toBeLessThan(4096);
+
+    const tile = { tileX: -2, tileZ: 5, depths: new Uint8Array(256).fill(17) };
+    const tileBytes = encode({ t: 'rut-tile', tile });
+    const decoded = decodeServer(tileBytes);
+    expect(decoded).toEqual({ t: 'rut-tile', tile });
+    expect(tileBytes.byteLength).toBeLessThan(4096);
+  });
+
+  it('rejects malformed authoritative rut data', () => {
+    const stamp = {
+      ownerId: 'p1', ownerSequence: 1, globalSequence: 1,
+      x: 0, z: 0, heading: 0, radiusLong: 0.8, radiusLat: 0.3, depth: 0.02,
+    };
+    expect(() => decodeServer(raw({ t: 'rut-batch', stamps: [{ ...stamp, depth: 1 }] }))).toThrow();
+    expect(() => decodeServer(raw({ t: 'rut-tile', tile: {
+      tileX: 0, tileZ: 0, depths: new Uint8Array(255),
+    } }))).toThrow();
+    expect(() => decodeServer(raw({ t: 'rut-sync-start', globalSequence: -1, tileCount: 0 }))).toThrow();
   });
 });
 
