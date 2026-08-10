@@ -2370,6 +2370,7 @@ body.touch #help {
 .workshop-nav h2 { margin:2px 0 22px; font-size:28px; }
 .workshop-kicker { color:#e89b43; font-size:10px; letter-spacing:.18em; }
 .workshop-category { width:100%; display:block; padding:10px 12px; border:0; border-left:3px solid transparent; background:transparent; color:#bbb; text-align:left; cursor:pointer; }
+.workshop-category[hidden] { display:none; }
 .workshop-category:hover,.workshop-category.active { color:white; border-left-color:#ee9c40; background:#ffffff0c; }
 .workshop-main { min-width:0; display:grid; grid-template-columns:minmax(360px,1.2fr) minmax(340px,.8fr); grid-template-rows:auto minmax(260px,45vh) minmax(180px,1fr) auto; column-gap:20px; padding:20px 26px; overflow:hidden; }
 .workshop-main>header { grid-column:1/3; display:flex; justify-content:space-between; align-items:center; min-height:45px; }

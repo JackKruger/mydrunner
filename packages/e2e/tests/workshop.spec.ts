@@ -31,8 +31,8 @@ test('repairs, switches and fits a vehicle while another client observes the ato
   const owner = await ownerContext.newPage();
   const observer = await observerContext.newPage();
   await Promise.all([
-    owner.goto('/?auto=1&name=workshop-owner'),
-    observer.goto('/?auto=1&name=workshop-observer'),
+    owner.goto('/?auto=1&name=workshop-owner&q=low'),
+    observer.goto('/?auto=1&name=workshop-observer&q=low'),
   ]);
   await Promise.all([waitForVehicle(owner), waitForVehicle(observer)]);
   const ownerId = await owner.evaluate(() => (window as unknown as { __scene: { localId: string } }).__scene.localId);
@@ -114,7 +114,7 @@ test('repairs, switches and fits a vehicle while another client observes the ato
 
 test('Dustback workshop choices fit an LSD and leave its driving controls fixed-RWD', async ({ page }) => {
   test.setTimeout(120_000);
-  await page.goto('/?auto=1&name=dustback-workshop');
+  await page.goto('/?auto=1&name=dustback-workshop&q=low');
   await waitForVehicle(page);
   await parkInWorkshop(page);
   await page.keyboard.press('KeyF');

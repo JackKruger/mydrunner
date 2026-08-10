@@ -16,7 +16,7 @@ async function boxesOverlap(a: Locator, b: Locator): Promise<boolean> {
 
 test('start screen, join briefing, connected instruments, and radio retain their behavior', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto('/');
+  await page.goto('/?q=low');
 
   const start = page.locator('#start-overlay');
   // Rapier initialises before the menu; cold CI can spend most of a minute
@@ -99,7 +99,7 @@ test('start screen, join briefing, connected instruments, and radio retain their
 test('desktop and touch layouts keep instruments and controls separated', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto('/?auto=1&name=layout-check');
+  await page.goto('/?auto=1&name=layout-check&q=low');
   await waitConnected(page);
 
   const menuButton = page.locator('#game-menu-button');
