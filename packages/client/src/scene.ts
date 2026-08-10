@@ -25,6 +25,7 @@ import { Minimap, type MinimapPlayer } from './minimap.js';
 import { WorldView } from './worldView.js';
 import { disposeObject3D } from './three/dispose.js';
 import { WinchView } from './winchView.js';
+import { VehicleDebugView } from './vehicleDebugView.js';
 
 const TWO_PI = Math.PI * 2;
 
@@ -147,6 +148,7 @@ export class Scene {
   private readonly _winchTargetVec = new THREE.Vector3();
   private lastMinimapMs = 0;
   private readonly winchView = new WinchView();
+  private vehicleDebugView: VehicleDebugView | null = null;
   private readonly winchRaycaster = new THREE.Raycaster();
   private mapWorld: Maps.MapWorld | null = null;
   private localWinches: WinchLinkSnapshot[] = [];
@@ -185,6 +187,18 @@ export class Scene {
     this.localId = id;
     this.localBuild = build;
     this.localBuildRevision = buildRevision;
+  }
+
+  setVehicleDebugEnabled(enabled: boolean): void {
+    if (enabled && !this.vehicleDebugView) {
+      this.vehicleDebugView = new VehicleDebugView();
+      this.scene.add(this.vehicleDebugView.group);
+    }
+    if (this.vehicleDebugView) this.vehicleDebugView.group.visible = enabled;
+  }
+
+  updateVehicleDebug(telemetry: Physics.VehicleDebugTelemetry): void {
+    this.vehicleDebugView?.update(telemetry);
   }
 
   /** Install the world visuals from the map composed once in main.ts.

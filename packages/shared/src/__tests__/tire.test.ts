@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { gripFromSlip, slipRatio, slipAngle, lateralGripFromSlipAngle } from '../physics/tire.js';
 import { TIRE, TIRE_LATERAL } from '../constants.js';
+import { TUNING } from '../tuning.js';
 
 describe('slipRatio', () => {
   it('is zero when wheel and ground move at the same speed', () => {
@@ -116,5 +117,26 @@ describe('lateralGripFromSlipAngle', () => {
     const c = lateralGripFromSlipAngle(TIRE_LATERAL.slipAnglePeak + 0.6);
     expect(a).toBeGreaterThanOrEqual(b);
     expect(b).toBeGreaterThanOrEqual(c);
+  });
+
+  it('reads the live peak, falloff, and floor tuning', () => {
+    const saved = {
+      peak: TUNING.tireSlipAnglePeak,
+      falloff: TUNING.tireSlipAngleFalloff,
+      floor: TUNING.tireSlipAngleFloor,
+    };
+    try {
+      TUNING.tireSlipAnglePeak = 0.25;
+      TUNING.tireSlipAngleFalloff = 12;
+      TUNING.tireSlipAngleFloor = 0.7;
+      expect(lateralGripFromSlipAngle(0.2)).toBe(1);
+      const sliding = lateralGripFromSlipAngle(1.5);
+      expect(sliding).toBeGreaterThanOrEqual(0.7);
+      expect(sliding).toBeLessThan(0.71);
+    } finally {
+      TUNING.tireSlipAnglePeak = saved.peak;
+      TUNING.tireSlipAngleFalloff = saved.falloff;
+      TUNING.tireSlipAngleFloor = saved.floor;
+    }
   });
 });

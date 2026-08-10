@@ -32,7 +32,12 @@ import {
   updateGameSave,
 } from './startScreen.js';
 import { initChat } from './chat.js';
-import { isDebugUser, initDebugPanel, updateAxleDebug } from './debugPanel.js';
+import {
+  isDebugUser,
+  initDebugPanel,
+  updateAxleDebug,
+  updateVehicleDebug,
+} from './debugPanel.js';
 
 import {
   initInput,
@@ -454,6 +459,11 @@ async function start(): Promise<void> {
   // screen and before any NetClient exists: there is no server in this
   // mode, so there is nothing to join and no name to pick.
   if (params.get('preview') === '1') {
+    isDebug = params.has('dev');
+    if (isDebug) {
+      initDebugPanel();
+      scene.setVehicleDebugEnabled(true);
+    }
     await Physics.initRapier();
     startPreview(params, saved?.build);
     return;
@@ -544,11 +554,13 @@ async function start(): Promise<void> {
     driverName: choice.name,
   });
 
-  // Debug panel: only for the player named "jack" (case-insensitive).
-  // Lets them twist physics tunables in flight and copy the result to
-  // clipboard so the values can be baked as new defaults.
-  isDebug = isDebugUser(choice.name);
-  if (isDebug) initDebugPanel();
+  // `?dev` is the explicit physics-lab switch. Keep the old saved-name
+  // shortcut so existing local tuning saves still behave as before.
+  isDebug = params.has('dev') || isDebugUser(choice.name);
+  if (isDebug) {
+    initDebugPanel();
+    scene.setVehicleDebugEnabled(true);
+  }
 
   // Auto-reconnect with exponential backoff. The welcome handshake
   // rebuilds everything session-scoped (id, terrain, local physics world),
@@ -768,6 +780,13 @@ function frame(): void {
     if (previewMode) scene.setLocalVehicleState(localSimulation.vehicleState());
     updateAxleDebug(ps.axles[0], ps.axles[1]);
     const telemetry = localSimulation.telemetry();
+    if (isDebug) {
+      const debugTelemetry = localSimulation.debugTelemetry();
+      if (debugTelemetry) {
+        updateVehicleDebug(debugTelemetry);
+        scene.updateVehicleDebug(debugTelemetry);
+      }
+    }
     lastSpeed = telemetry.speed;
     lastRpm = telemetry.rpm;
     lastGear = telemetry.gear;

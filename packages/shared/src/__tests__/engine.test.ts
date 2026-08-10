@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { createEngineState, stepEngine, torqueAtRpm } from '../physics/engine.js';
 import { ENGINE } from '../constants.js';
+import { TUNING } from '../tuning.js';
 
 const dt = 1 / 60;
 
@@ -18,6 +19,30 @@ describe('engine torque curve', () => {
     const ok = torqueAtRpm(ENGINE.redlineRpm);
     const limited = torqueAtRpm(ENGINE.redlineRpm + ENGINE.rpmLimiterFalloff);
     expect(limited).toBeLessThan(ok * 0.05);
+  });
+});
+
+describe('live engine tuning', () => {
+  it('scales drive torque and engine braking independently', () => {
+    const savedTorque = TUNING.engineTorqueMult;
+    const savedBrake = TUNING.engineBrakeMult;
+    try {
+      const drive = (mult: number): number => {
+        TUNING.engineTorqueMult = mult;
+        const state = createEngineState();
+        state.gearIndex = ENGINE.firstGear;
+        return stepEngine(state, 4, 4, 1, dt).wheelForce;
+      };
+      expect(drive(1.5)).toBeCloseTo(drive(1) * 1.5, 5);
+
+      TUNING.engineBrakeMult = 0;
+      const coast = createEngineState();
+      coast.gearIndex = ENGINE.firstGear + 1;
+      expect(stepEngine(coast, 20, 20, 0, dt).wheelForce).toBe(0);
+    } finally {
+      TUNING.engineTorqueMult = savedTorque;
+      TUNING.engineBrakeMult = savedBrake;
+    }
   });
 });
 

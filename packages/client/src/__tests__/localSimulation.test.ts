@@ -121,4 +121,31 @@ describe('LocalSimulation', () => {
     expect(sim.vehicleState().linVel.y).toBe(35);
     sim.dispose();
   });
+
+  it('exposes finite owner-only tire and tipping telemetry', () => {
+    const { sim } = makeSimulation();
+    for (let seq = 1; seq <= 90; seq++) sim.step({ ...EMPTY_INPUT, seq });
+
+    const debug = sim.debugTelemetry();
+    expect(debug).not.toBeNull();
+    expect(debug!.massKg).toBeGreaterThan(500);
+    expect(debug!.centerOfMassWorld.y).toBeLessThan(debug!.position.y + 1);
+    expect(debug!.staticRollLimit).toBeGreaterThan(0);
+    expect(Number.isFinite(debug!.lateralG)).toBe(true);
+    expect(Number.isFinite(debug!.yawRate)).toBe(true);
+    expect(debug!.driveline.rpm).toBeGreaterThanOrEqual(0);
+    expect(debug!.water.buoyancyForce.y).toBeGreaterThanOrEqual(0);
+    expect(debug!.wheels).toHaveLength(4);
+    expect(debug!.wheels.some((wheel) => wheel.contact)).toBe(true);
+    for (const wheel of debug!.wheels) {
+      expect(Number.isFinite(wheel.normalLoad)).toBe(true);
+      expect(wheel.utilization).toBeGreaterThanOrEqual(0);
+      expect(wheel.utilization).toBeLessThanOrEqual(1);
+      expect(wheel.suspensionRestLength).toBeGreaterThan(0);
+      expect(Number.isFinite(wheel.suspensionOrigin.y)).toBe(true);
+      expect(Number.isFinite(wheel.driveTorque)).toBe(true);
+      expect(Number.isFinite(wheel.groundTorque)).toBe(true);
+    }
+    sim.dispose();
+  });
 });

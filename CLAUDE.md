@@ -183,7 +183,7 @@ Authored maps are committed as `.ts` modules and added to `AUTHORED` in `map/reg
 - `packages/client/src/vehicleVisualLayout.ts` — build-resolved placement of body fittings, shared by `carMesh.ts` and the asset editor.
 - `packages/client/src/chat.ts` — text chat UI (T to open); server relays with rate-limiting + sanitisation in `Room.broadcastChat`.
 - `packages/client/src/engineAudio.ts` — RPM-driven engine sound via `AudioContext`.
-- `packages/client/src/debugPanel.ts` — live TUNING sliders for the player named "jack"; copy-to-clipboard serialiser for baking values into constants.
+- `packages/client/src/debugPanel.ts` / `vehicleDebugView.ts` — `?dev` physics lab (the legacy "jack" shortcut remains): live TUNING sliders; owner-only CoG, support polygon, suspension-cast, tire-force and water-force world visuals; tire friction/load/slip, driveline torque, tipping reserve and scrolling G/yaw telemetry; plus multi-run CSV recording with the active tuning values and the copy-to-clipboard serialiser for baking values into constants. The high-rate values come from `VehicleLike.debugTelemetry()` and never enter `VehicleState` or the network snapshot.
 
 ### Determinism note
 

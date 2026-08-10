@@ -389,6 +389,11 @@ export class LocalSimulation {
     };
   }
 
+  /** High-rate owner-only values consumed by the `?dev` tuning UI. */
+  debugTelemetry(): Physics.VehicleDebugTelemetry | null {
+    return this.vehicle.debugTelemetry?.() ?? null;
+  }
+
   /** Smooth render state between the two completed physics ticks. */
   state(alpha = 1): LocalSimulationState {
     const t = Math.max(0, Math.min(1, alpha));

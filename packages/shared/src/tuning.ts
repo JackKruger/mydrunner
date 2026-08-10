@@ -9,11 +9,13 @@
 // new defaults for every client build.
 
 import {
+  ANTI_ROLL,
   AXLE,
   INCLINE_ASSIST_MAX,
   SURFACE_FRICTION,
   TIRE_LATERAL,
   VEHICLE,
+  WHEEL,
 } from './constants.js';
 
 /** Runtime scalars on an axle's compile-time spring rates.
@@ -47,8 +49,16 @@ export interface Tuning {
   brakeForce: number;
   maxSteer: number;
   steerSpeed: number;
+  maxSteerLateralAccel: number;
   frontGripMult: number;
   rearGripMult: number;
+  /** Multiplier on the base longitudinal friction coefficient. */
+  tireLongGripMult: number;
+  /** Lateral friction capacity relative to longitudinal capacity. */
+  tireLateralGripRatio: number;
+  tireSlipAnglePeak: number;
+  tireSlipAngleFalloff: number;
+  tireSlipAngleFloor: number;
   // Solid-axle vehicle knobs. Per-axle scaling so the front and rear can
   // diverge (front stiffer for nose-up climbs, rear softer for cargo
   // articulation). diffLock* toggles the per-axle differential lock
@@ -61,6 +71,19 @@ export interface Tuning {
   // Lateral grip stiffness for the new model (N per m/s of lateral
   // velocity, before friction-circle clamp).
   tireLatStiffness: number;
+  // Dedicated anti-roll bar controls. Keeping these separate from the axle
+  // roll constraint lets cornering balance change without also changing the
+  // axle's mechanical articulation response.
+  antiRollStiffnessMult: number;
+  antiRollDampingMult: number;
+  antiRollFrontShare: number;
+  // Road is the base multiplier; mud values replace the compile-time surface
+  // multipliers while still preserving each vehicle build's resistance.
+  rollingResistanceMult: number;
+  rollingResistanceMudMult: number;
+  rollingResistanceDeepMudMult: number;
+  engineTorqueMult: number;
+  engineBrakeMult: number;
   // Water, as multipliers on the WATER block. All three interact
   // strongly - more buoyancy means less tyre load means the current
   // moves you further - so they are the three knobs a crossing gets
@@ -76,8 +99,14 @@ export const TUNING: Tuning = {
   brakeForce: VEHICLE.brakeForce,
   maxSteer: VEHICLE.maxSteer,
   steerSpeed: VEHICLE.steerSpeed,
+  maxSteerLateralAccel: VEHICLE.maxSteerLateralAccel,
   frontGripMult: VEHICLE.frontGripMult,
   rearGripMult: VEHICLE.rearGripMult,
+  tireLongGripMult: 1,
+  tireLateralGripRatio: TIRE_LATERAL.longRatio,
+  tireSlipAnglePeak: TIRE_LATERAL.slipAnglePeak,
+  tireSlipAngleFalloff: TIRE_LATERAL.slipAngleFalloff,
+  tireSlipAngleFloor: TIRE_LATERAL.slipAngleFloor,
   axleFront: {
     rideStiffnessMult: 1,
     rideDampingMult: 1,
@@ -93,6 +122,14 @@ export const TUNING: Tuning = {
   diffLockFront: AXLE.front.diffLocked,
   diffLockRear: AXLE.rear.diffLocked,
   tireLatStiffness: TIRE_LATERAL.stiffness,
+  antiRollStiffnessMult: 1,
+  antiRollDampingMult: 1,
+  antiRollFrontShare: ANTI_ROLL.frontShare,
+  rollingResistanceMult: 1,
+  rollingResistanceMudMult: WHEEL.rollingMultMud,
+  rollingResistanceDeepMudMult: WHEEL.rollingMultDeepMud,
+  engineTorqueMult: 1,
+  engineBrakeMult: 1,
   waterBuoyancy: 1,
   waterDrag: 1,
   waterFlowScale: 1,

@@ -82,7 +82,14 @@ import {
   resetWheelKinematic,
   type WheelKinematic,
 } from './wheelDynamics.js';
-import type { ExternalPointLoad, VehicleLike, VehicleSpawn, WaterStatus } from './vehicleTypes.js';
+import type {
+  ExternalPointLoad,
+  VehicleDebugTelemetry,
+  VehicleLike,
+  VehicleSpawn,
+  WaterStatus,
+  WheelDebugTelemetry,
+} from './vehicleTypes.js';
 import type { World } from './world.js';
 import { COLLISION_GROUP_OWNED_VEHICLE, COLLISION_GROUP_WHEEL_RAY } from './collisionGroups.js';
 import {
@@ -96,6 +103,54 @@ import {
 import { applyCollisionDamage, createDamageState, repairDamage } from './damage.js';
 
 type Vec3 = { x: number; y: number; z: number };
+
+function createWheelDebugTelemetry(): WheelDebugTelemetry {
+  return {
+    contact: false,
+    contactPoint: { x: 0, y: 0, z: 0 },
+    contactNormal: { x: 0, y: 1, z: 0 },
+    surface: Surface.Dirt,
+    waterDepth: 0,
+    normalLoad: 0,
+    gripCoefficient: 0,
+    gripLimit: 0,
+    longitudinalForce: 0,
+    lateralForce: 0,
+    force: { x: 0, y: 0, z: 0 },
+    slipRatio: 0,
+    slipAngle: 0,
+    utilization: 0,
+    suspensionCompression: 0,
+    suspensionOrigin: { x: 0, y: 0, z: 0 },
+    suspensionEnd: { x: 0, y: 0, z: 0 },
+    wheelCenter: { x: 0, y: 0, z: 0 },
+    suspensionRestLength: 0,
+    droopMax: 0,
+    bumpMax: 0,
+    angularVelocity: 0,
+    driveTorque: 0,
+    brakeTorque: 0,
+    groundTorque: 0,
+  };
+}
+
+function setSuspensionDebug(
+  debug: WheelDebugTelemetry,
+  origin: Vec3,
+  direction: Vec3,
+  length: number,
+  geom: { suspensionRestLength: number; droopMax: number; bumpMax: number },
+): void {
+  debug.suspensionOrigin.x = origin.x;
+  debug.suspensionOrigin.y = origin.y;
+  debug.suspensionOrigin.z = origin.z;
+  debug.suspensionEnd.x = origin.x + direction.x * length;
+  debug.suspensionEnd.y = origin.y + direction.y * length;
+  debug.suspensionEnd.z = origin.z + direction.z * length;
+  debug.suspensionRestLength = geom.suspensionRestLength;
+  debug.droopMax = geom.droopMax;
+  debug.bumpMax = geom.bumpMax;
+}
 
 /** Transfer-case and locker changes are safe at trail speeds up to 20 km/h. */
 const DRIVETRAIN_CHANGE_MAX_SPEED = 20 / 3.6;
@@ -125,7 +180,7 @@ export function steeringLimitForSpeed(
   if (mechanicalLimit <= 0 || wheelbase <= 0) return 0;
   const v = Math.max(0, Math.abs(speed));
   if (v < 1e-3) return mechanicalLimit;
-  const dynamicLimit = Math.atan(wheelbase * VEHICLE.maxSteerLateralAccel / (v * v));
+  const dynamicLimit = Math.atan(wheelbase * TUNING.maxSteerLateralAccel / (v * v));
   return Math.min(mechanicalLimit, dynamicLimit);
 }
 
@@ -152,11 +207,19 @@ export class SolidAxleVehicle implements VehicleLike {
 
   private readonly axles: [AxleState, AxleState];
   private readonly wheels: [WheelKinematic, WheelKinematic, WheelKinematic, WheelKinematic];
+  private readonly wheelDebug: [WheelDebugTelemetry, WheelDebugTelemetry, WheelDebugTelemetry, WheelDebugTelemetry] = [
+    createWheelDebugTelemetry(), createWheelDebugTelemetry(),
+    createWheelDebugTelemetry(), createWheelDebugTelemetry(),
+  ];
 
   private engine: EngineState = createEngineState();
   private lastRpm = 0;
   private lastGear = 0;
   private ledgeCrawlTicks = 0;
+  private debugDriveTorque = 0;
+  private debugVelocityInitialized = false;
+  private readonly debugPreviousLinVel: Vec3 = { x: 0, y: 0, z: 0 };
+  private readonly debugAcceleration: Vec3 = { x: 0, y: 0, z: 0 };
 
   private readonly water: WaterState = createWaterState();
   private readonly waterLoad: WaterLoad = createWaterLoad();
@@ -300,6 +363,11 @@ export class SolidAxleVehicle implements VehicleLike {
     this.lastRpm = 0;
     this.lastGear = 0;
     this.ledgeCrawlTicks = 0;
+    this.debugDriveTorque = 0;
+    this.debugVelocityInitialized = false;
+    this.debugAcceleration.x = 0;
+    this.debugAcceleration.y = 0;
+    this.debugAcceleration.z = 0;
     resetWaterState(this.water);
     this.externalPointLoads.length = 0;
   }
@@ -326,6 +394,19 @@ export class SolidAxleVehicle implements VehicleLike {
     const fwd = rotateVecByQuat({ x: 0, y: 0, z: 1 }, r);
     const right = rotateVecByQuat({ x: 1, y: 0, z: 0 }, r);
     const up = rotateVecByQuat({ x: 0, y: 1, z: 0 }, r);
+    if (this.debugVelocityInitialized) {
+      this.debugAcceleration.x = (lv.x - this.debugPreviousLinVel.x) / dt;
+      this.debugAcceleration.y = (lv.y - this.debugPreviousLinVel.y) / dt;
+      this.debugAcceleration.z = (lv.z - this.debugPreviousLinVel.z) / dt;
+    } else {
+      this.debugAcceleration.x = 0;
+      this.debugAcceleration.y = 0;
+      this.debugAcceleration.z = 0;
+      this.debugVelocityInitialized = true;
+    }
+    this.debugPreviousLinVel.x = lv.x;
+    this.debugPreviousLinVel.y = lv.y;
+    this.debugPreviousLinVel.z = lv.z;
     const groundSpeed = Math.hypot(lv.x, lv.z);
     this.impactSpeed = groundSpeed;
     this.updateDrivetrainControls(groundSpeed);
@@ -420,6 +501,11 @@ export class SolidAxleVehicle implements VehicleLike {
       // droop. (The old point ray needed one extra radius to reach the patch.)
       const maxToi = rayLift + ag.suspensionRestLength + ag.droopMax;
 
+      const debugLeft = this.wheelDebug[wIdxL]!;
+      const debugRight = this.wheelDebug[wIdxR]!;
+      setSuspensionDebug(debugLeft, leftSupportWorld, rayDir, maxToi, ag);
+      setSuspensionDebug(debugRight, rightSupportWorld, rayDir, maxToi, ag);
+
       castWheelSupport(
         this.world,
         this.body,
@@ -481,6 +567,10 @@ export class SolidAxleVehicle implements VehicleLike {
       for (const volumeSide of volumeSides) {
         const w = volumeSide.wheel;
         const center = wheelCenterWorld(t, r, axle, volumeSide.localX);
+        const debug = this.wheelDebug[volumeSide.index]!;
+        debug.wheelCenter.x = center.x;
+        debug.wheelCenter.y = center.y;
+        debug.wheelCenter.z = center.z;
         // Exact upward terrain support already accounts for the tyre volume.
         // Running the steep-face path as well would replace its raw depth with
         // the intentionally slow ledge-climb handoff, leaving the visible axle
@@ -664,7 +754,8 @@ export class SolidAxleVehicle implements VehicleLike {
       // driven by their relative travel/rate, not the chassis's angle to
       // world-up. Unsupported ends sit at full droop for bar deflection,
       // while forces can only enter the chassis through supported ends.
-      const barShare = aIdx === 0 ? ANTI_ROLL.frontShare : ANTI_ROLL.rearShare;
+      const frontBarShare = clamp(TUNING.antiRollFrontShare, 0, 1);
+      const barShare = aIdx === 0 ? frontBarShare : 1 - frontBarShare;
       const axleMassShare = aIdx === 0 ? 0.52 : 0.48;
       const bar = computeAntiRollLoadTransfer({
         leftDepth: sides[0]!.supported ? sides[0]!.comp : -ag.droopMax,
@@ -674,8 +765,8 @@ export class SolidAxleVehicle implements VehicleLike {
         leftSupported: sides[0]!.supported,
         rightSupported: sides[1]!.supported,
         trackHalf: ag.trackHalf,
-        torqueStiffness: ANTI_ROLL.torqueStiffness * barShare * at.rollStiffnessMult,
-        torqueDamping: ANTI_ROLL.torqueDamping * barShare * at.rollStiffnessMult,
+        torqueStiffness: ANTI_ROLL.torqueStiffness * barShare * TUNING.antiRollStiffnessMult,
+        torqueDamping: ANTI_ROLL.torqueDamping * barShare * TUNING.antiRollDampingMult,
         maxTransferForce: this.geom.spec.massKg * Math.abs(GRAVITY_Y)
           * axleMassShare * ANTI_ROLL.maxStaticLoadTransfer,
       });
@@ -818,6 +909,7 @@ export class SolidAxleVehicle implements VehicleLike {
     // approved acceleration after removing the collider's accidental mass.
     const drivePerWheelTorque = engineOut.wheelForce * this.geom.powerMult
       * engineHealthMult * rangeMult * VEHICLE.massPropertyDriveScale;
+    this.debugDriveTorque = drivePerWheelTorque;
 
     // Incline assist (matches legacy semantics).
     const climb = Math.min(0.5, Math.max(0, fwd.y));
@@ -932,6 +1024,7 @@ export class SolidAxleVehicle implements VehicleLike {
 
     for (let wIdx = 0; wIdx < 4; wIdx++) {
       const w = this.wheels[wIdx]!;
+      const debug = this.wheelDebug[wIdx]!;
       const isFront = wIdx < 2;
       const axle = isFront ? this.axles[0]! : this.axles[1]!;
       const ag = axle.geom;
@@ -948,14 +1041,14 @@ export class SolidAxleVehicle implements VehicleLike {
       // Surface-dependent rolling resistance. Mud and deep mud provide
       // significantly more drag than hard surfaces.
       let rollingMult = 1.0;
-      if (w.surface === Surface.Mud) rollingMult = WHEEL.rollingMultMud;
-      else if (w.surface === Surface.DeepMud) rollingMult = WHEEL.rollingMultDeepMud;
+      if (w.surface === Surface.Mud) rollingMult = TUNING.rollingResistanceMudMult;
+      else if (w.surface === Surface.DeepMud) rollingMult = TUNING.rollingResistanceDeepMudMult;
       // Wading is heavy. Additive on top of the bed's own resistance, so
       // a submerged mud bog is worse than either alone.
       if (w.waterDepth > 0) {
         rollingMult += (WATER.wheelDragMult - 1) * wheelSubmersion(w.waterDepth, this.geom.wheelRadius);
       }
-      const rollingResistance = WHEEL.rollingResistance * rollingMult
+      const rollingResistance = WHEEL.rollingResistance * TUNING.rollingResistanceMult * rollingMult
         * this.geom.spec.rollingResistanceMult;
 
       // Pick one torque-transmitting patch. A steep tyre-volume contact
@@ -970,6 +1063,9 @@ export class SolidAxleVehicle implements VehicleLike {
       let normalLoad: number;
       let contactInclineMult: number;
       const appliedDriveTq = driveTq * crawlRatio;
+      debug.driveTorque = appliedDriveTq;
+      debug.brakeTorque = brakeTq;
+      debug.groundTorque = 0;
       const ledge = ledgeContacts[wIdx];
       const ledgeFrame = ledge
         ? contactFrame(ledge.normal, basis.axle, basis.forward)
@@ -993,7 +1089,23 @@ export class SolidAxleVehicle implements VehicleLike {
         contactInclineMult = inclineMult;
       } else {
         // No torque-transmitting patch on a free wheel.
+        debug.contact = false;
+        debug.surface = w.surface;
+        debug.waterDepth = w.waterDepth;
+        debug.normalLoad = 0;
+        debug.gripCoefficient = 0;
+        debug.gripLimit = 0;
+        debug.longitudinalForce = 0;
+        debug.lateralForce = 0;
+        debug.force.x = 0;
+        debug.force.y = 0;
+        debug.force.z = 0;
+        debug.slipRatio = 0;
+        debug.slipAngle = 0;
+        debug.utilization = 0;
+        debug.suspensionCompression = Math.max(0, w.resolvedDepth);
         integrateWheelSpin(w, appliedDriveTq, brakeTq, 0, dt);
+        debug.angularVelocity = w.angVel;
         continue;
       }
 
@@ -1009,7 +1121,8 @@ export class SolidAxleVehicle implements VehicleLike {
 
       const axleGripMult = isFront ? TUNING.frontGripMult : TUNING.rearGripMult;
       const longGripCap =
-        TIRE_LONG_FRICTION * surfMult * axleGripMult * contactInclineMult * normalLoad;
+        TIRE_LONG_FRICTION * TUNING.tireLongGripMult
+        * surfMult * axleGripMult * contactInclineMult * normalLoad;
 
       // Friction circle (elliptical) coupling. We compute the forces
       // needed for zero longitudinal slip and zero lateral velocity,
@@ -1044,7 +1157,21 @@ export class SolidAxleVehicle implements VehicleLike {
       // the "throttle oversteer in mud" feel.
       const alpha = slipAngle(latV, longV);
       const latGripMult = lateralGripFromSlipAngle(alpha);
-      const dynamicLatForce = -TUNING.tireLatStiffness * latV * latGripMult;
+      // A force directly proportional to patch velocity is a discrete
+      // damper. At walking pace the full cornering stiffness can reverse the
+      // patch velocity before the next 60 Hz sample; all four tyres then ask
+      // for the opposite full-grip correction and settle into a left/right
+      // limit cycle. Ramp the dynamic branch in with road speed, retaining a
+      // quarter-stiffness floor so slow steering still has useful authority.
+      // The static constraint below owns the near-rest range, while normal
+      // trail/road speeds reach the exact configured stiffness.
+      const dynamicStiffnessScale = Math.max(0.25, smoothstep(
+        TIRE_LATERAL.staticHoldSpeed,
+        TIRE_LATERAL.slipAngleVelFloor,
+        groundSpeed,
+      ));
+      const dynamicLatForce = -TUNING.tireLatStiffness * dynamicStiffnessScale
+        * latV * latGripMult;
 
       // Dynamic lateral stiffness cannot hold a true rest state: its force is
       // zero at latV=0, so gravity first creates sideways velocity and the
@@ -1077,7 +1204,7 @@ export class SolidAxleVehicle implements VehicleLike {
 
       if (longGripCap > 1e-6) {
         const longMax = longGripCap;
-        const latMax = longGripCap * TIRE_LATERAL.longRatio;
+        const latMax = longGripCap * TUNING.tireLateralGripRatio;
         const longNorm = rawLongForce / longMax;
         const latNorm = rawLatForce / latMax;
         const combined = Math.sqrt(longNorm * longNorm + latNorm * latNorm);
@@ -1128,10 +1255,45 @@ export class SolidAxleVehicle implements VehicleLike {
         );
       }
 
+      const wheelSurfaceSpeed = w.angVel * this.geom.wheelRadius;
+      const slipDenom = Math.max(0.5, Math.abs(longV), Math.abs(wheelSurfaceSpeed));
+      const longMax = longGripCap;
+      const latMax = longGripCap * TUNING.tireLateralGripRatio;
+      const utilization = longMax > 1e-6 && latMax > 1e-6
+        ? Math.min(1, Math.hypot(finalLongForce / longMax, finalLatForce / latMax))
+        : 0;
+      debug.contact = true;
+      debug.contactPoint.x = cp.x;
+      debug.contactPoint.y = cp.y;
+      debug.contactPoint.z = cp.z;
+      const contactNormal = ledge?.normal ?? w.contactNormal;
+      debug.contactNormal.x = contactNormal.x;
+      debug.contactNormal.y = contactNormal.y;
+      debug.contactNormal.z = contactNormal.z;
+      debug.surface = w.surface;
+      debug.waterDepth = w.waterDepth;
+      debug.normalLoad = normalLoad;
+      debug.gripCoefficient = normalLoad > 1e-6 ? longGripCap / normalLoad : 0;
+      debug.gripLimit = longGripCap;
+      debug.longitudinalForce = finalLongForce;
+      debug.lateralForce = finalLatForce;
+      // This is the force applied at the patch. The low-speed static holding
+      // share is applied centrally below, so it is intentionally absent from
+      // the world arrow even though it still consumes the tire budget above.
+      debug.force.x = tireLong.x * finalLongForce + tireLat.x * contactLatForce;
+      debug.force.y = tireLong.y * finalLongForce + tireLat.y * contactLatForce;
+      debug.force.z = tireLong.z * finalLongForce + tireLat.z * contactLatForce;
+      debug.slipRatio = (wheelSurfaceSpeed - longV) / slipDenom;
+      debug.slipAngle = alpha;
+      debug.utilization = utilization;
+      debug.suspensionCompression = Math.max(0, w.resolvedDepth);
+
       // Update wheel angular velocity using the force actually transmitted
       // through the contact patch (impulse-clamped integration).
       const finalGroundTq = -finalLongForce * this.geom.wheelRadius;
+      debug.groundTorque = finalGroundTq;
       integrateWheelSpin(w, appliedDriveTq, brakeTq, finalGroundTq, dt, rollingResistance);
+      debug.angularVelocity = w.angVel;
       if (ledge && ledgeFrame) {
         w.ledgeLongForce = finalLongForce;
       }
@@ -1259,6 +1421,100 @@ export class SolidAxleVehicle implements VehicleLike {
       // a drowned truck as healthy the moment it was towed out.
       drowned: this.engine.drowned,
       flood: this.water.floodFrac,
+    };
+  }
+
+  debugTelemetry(): VehicleDebugTelemetry {
+    const t = this.body.translation();
+    const r = this.body.rotation();
+    const comLocal = this.geom.spec.centerOfMass;
+    const comOffset = rotateVecByQuat(comLocal, r);
+    const comWorld = {
+      x: t.x + comOffset.x,
+      y: t.y + comOffset.y,
+      z: t.z + comOffset.z,
+    };
+    const up = rotateVecByQuat({ x: 0, y: 1, z: 0 }, r);
+    const fwd = rotateVecByQuat({ x: 0, y: 0, z: 1 }, r);
+    const right = rotateVecByQuat({ x: 1, y: 0, z: 0 }, r);
+    const lv = this.body.linvel();
+    const av = this.body.angvel();
+    let supportY = 0;
+    let supportCount = 0;
+    for (const wheel of this.wheelDebug) {
+      if (!wheel.contact) continue;
+      supportY += wheel.contactPoint.y;
+      supportCount++;
+    }
+    supportY = supportCount > 0
+      ? supportY / supportCount
+      : t.y - this.geom.chassisHalfExtents.y - this.geom.wheelRadius;
+    const comHeight = Math.max(0.1, comWorld.y - supportY);
+    const halfTrack = Math.min(this.geom.front.trackHalf, this.geom.rear.trackHalf);
+    const pitchLever = Math.max(0.1, this.geom.spec.wheelbase * 0.5 - Math.abs(comLocal.z));
+    let buoyancyY = 0;
+    let buoyancyPointX = 0;
+    let buoyancyPointY = 0;
+    let buoyancyPointZ = 0;
+    for (const sample of this.waterLoad.samples) {
+      const weight = Math.max(0, sample.force.y);
+      buoyancyY += weight;
+      buoyancyPointX += sample.point.x * weight;
+      buoyancyPointY += sample.point.y * weight;
+      buoyancyPointZ += sample.point.z * weight;
+    }
+    const buoyancyPoint = buoyancyY > 1e-6 ? {
+      x: buoyancyPointX / buoyancyY,
+      y: buoyancyPointY / buoyancyY,
+      z: buoyancyPointZ / buoyancyY,
+    } : { ...this.waterLoad.dragPoint };
+    const gravity = Math.abs(GRAVITY_Y);
+
+    return {
+      position: { x: t.x, y: t.y, z: t.z },
+      rotation: { x: r.x, y: r.y, z: r.z, w: r.w },
+      centerOfMassLocal: { ...comLocal },
+      centerOfMassWorld: comWorld,
+      massKg: this.geom.spec.massKg,
+      wheelbase: this.geom.spec.wheelbase,
+      track: halfTrack * 2,
+      wheelRadius: this.geom.wheelRadius,
+      rollAngle: Math.atan2(-right.y, Math.max(1e-6, up.y)),
+      pitchAngle: Math.atan2(fwd.y, Math.hypot(fwd.x, fwd.z)),
+      staticRollLimit: Math.atan2(halfTrack, comHeight),
+      staticPitchLimit: Math.atan2(pitchLever, comHeight),
+      linearVelocity: { x: lv.x, y: lv.y, z: lv.z },
+      angularVelocity: { x: av.x, y: av.y, z: av.z },
+      accelerationWorld: { ...this.debugAcceleration },
+      longitudinalG: (this.debugAcceleration.x * fwd.x + this.debugAcceleration.y * fwd.y + this.debugAcceleration.z * fwd.z) / gravity,
+      lateralG: (this.debugAcceleration.x * right.x + this.debugAcceleration.y * right.y + this.debugAcceleration.z * right.z) / gravity,
+      yawRate: av.x * up.x + av.y * up.y + av.z * up.z,
+      driveline: {
+        rpm: this.lastRpm,
+        gear: this.lastGear,
+        throttle: this.input.throttle,
+        transferCase: this.drivetrain.transferCase,
+        frontLocked: this.drivetrain.frontLocked,
+        rearLocked: this.drivetrain.rearLocked,
+        outputTorque: this.debugDriveTorque,
+      },
+      water: {
+        submerged: this.waterLoad.submergedFrac,
+        buoyancyForce: { x: 0, y: buoyancyY, z: 0 },
+        buoyancyPoint,
+        dragForce: { ...this.waterLoad.drag },
+        dragPoint: { ...this.waterLoad.dragPoint },
+        dragTorque: { ...this.waterLoad.dragTorque },
+      },
+      wheels: this.wheelDebug.map((wheel) => ({
+        ...wheel,
+        contactPoint: { ...wheel.contactPoint },
+        contactNormal: { ...wheel.contactNormal },
+        force: { ...wheel.force },
+        suspensionOrigin: { ...wheel.suspensionOrigin },
+        suspensionEnd: { ...wheel.suspensionEnd },
+        wheelCenter: { ...wheel.wheelCenter },
+      })) as VehicleDebugTelemetry['wheels'],
     };
   }
 

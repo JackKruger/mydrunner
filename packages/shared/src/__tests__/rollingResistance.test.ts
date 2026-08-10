@@ -12,7 +12,7 @@
 // through a bog must bleed speed faster than coasting on tarmac.
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { Physics, EMPTY_INPUT } from '../index.js';
+import { Physics, EMPTY_INPUT, TUNING } from '../index.js';
 import { mountainFor, petrolStationPadFor,
   dryWater,
 } from '../physics/terrain.js';
@@ -101,5 +101,18 @@ describe('rolling resistance by surface', () => {
     // should still be rolling after 3 s.
     const road = coastFrom(Physics.Surface.Road, 10, 3);
     expect(road).toBeGreaterThan(3);
+  });
+
+  it('reads the live global rolling-resistance multiplier', () => {
+    const saved = TUNING.rollingResistanceMult;
+    try {
+      TUNING.rollingResistanceMult = 0.25;
+      const free = coastFrom(Physics.Surface.Road, 10, 3);
+      TUNING.rollingResistanceMult = 3;
+      const draggy = coastFrom(Physics.Surface.Road, 10, 3);
+      expect(draggy).toBeLessThan(free);
+    } finally {
+      TUNING.rollingResistanceMult = saved;
+    }
   });
 });

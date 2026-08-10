@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { createStockBuild, EMPTY_INPUT, Physics, VEHICLE } from '../index.js';
+import { createStockBuild, EMPTY_INPUT, Physics, TUNING, VEHICLE } from '../index.js';
 
 beforeAll(async () => {
   await Physics.initRapier();
@@ -46,6 +46,19 @@ describe('speed-sensitive steering', () => {
       .toBe(mechanicalLimit);
     expect(Physics.steeringLimitForSpeed(mechanicalLimit, wheelbase, 20))
       .toBeLessThan(0.04);
+  });
+
+  it('reads the live lateral-acceleration limit', () => {
+    const saved = TUNING.maxSteerLateralAccel;
+    try {
+      TUNING.maxSteerLateralAccel = 3;
+      const conservative = Physics.steeringLimitForSpeed(VEHICLE.maxSteer, 2.42, 20);
+      TUNING.maxSteerLateralAccel = 9;
+      const aggressive = Physics.steeringLimitForSpeed(VEHICLE.maxSteer, 2.42, 20);
+      expect(aggressive).toBeGreaterThan(conservative * 2.9);
+    } finally {
+      TUNING.maxSteerLateralAccel = saved;
+    }
   });
 
   it('keeps a fast uphill keyboard-steer tap below the rollover threshold', () => {

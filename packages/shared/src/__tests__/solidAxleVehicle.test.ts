@@ -659,6 +659,52 @@ describe('SolidAxleVehicle: TUNING axle multipliers', () => {
   });
 });
 
+describe('SolidAxleVehicle: live tire budget tuning', () => {
+  it('scales the transmitted grip coefficient', () => {
+    const saved = TUNING.tireLongGripMult;
+    const coefficientAt = (mult: number): number => {
+      TUNING.tireLongGripMult = mult;
+      const { world, vehicle } = makeWorld();
+      settle(world, 90);
+      const wheel = vehicle.debugTelemetry().wheels.find((entry) => entry.contact);
+      world.dispose();
+      if (!wheel) throw new Error('settled vehicle had no tire contact');
+      return wheel.gripCoefficient;
+    };
+    try {
+      const baseline = coefficientAt(1);
+      expect(coefficientAt(0.5)).toBeCloseTo(baseline * 0.5, 5);
+    } finally {
+      TUNING.tireLongGripMult = saved;
+    }
+  });
+});
+
+describe('SolidAxleVehicle: low-speed lateral settling', () => {
+  it('damps a sideways creep without entering a full-grip force limit cycle', () => {
+    const { world, vehicle } = makeWorld();
+    settle(world, 90);
+    vehicle.body.setLinvel({ x: 0.45, y: 0, z: 0.5 }, true);
+
+    const tailLateralG: number[] = [];
+    const tailGrip: number[] = [];
+    for (let tick = 0; tick < 180; tick++) {
+      world.step();
+      if (tick < 60) continue;
+      const debug = vehicle.debugTelemetry();
+      tailLateralG.push(Math.abs(debug.lateralG));
+      tailGrip.push(Math.max(...debug.wheels.map((wheel) => wheel.utilization)));
+    }
+
+    const peakTailG = Math.max(...tailLateralG);
+    const saturatedTailTicks = tailGrip.filter((grip) => grip > 0.99).length;
+    expect(peakTailG).toBeLessThan(0.15);
+    expect(saturatedTailTicks).toBe(0);
+    expect(Math.abs(vehicle.getState().linVel.x)).toBeLessThan(0.05);
+    world.dispose();
+  });
+});
+
 function quatYaw(q: { x: number; y: number; z: number; w: number }): number {
   return Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x));
 }

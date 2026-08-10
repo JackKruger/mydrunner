@@ -8,11 +8,12 @@
 // Slip ratio = (wheelSurfaceSpeed - groundSpeed) / max(|wheelSurfaceSpeed|, |groundSpeed|, eps)
 // where wheelSurfaceSpeed = wheelAngVel * wheelRadius.
 
-// NOTE: this module is not used by the live solid-axle model (which uses
-// an impulse-clamped friction-circle instead of a slip curve). It is kept
-// as a tested building block for a future tire model. Reads the TIRE
-// constants directly — there is no runtime-tunable surface for it.
+// NOTE: The longitudinal slip curve in this module is not used by the live
+// solid-axle model (which uses an impulse-clamped friction circle). It is kept
+// as a tested building block for a future tire model and still reads TIRE
+// directly. The lateral slip-angle functions below are live and read TUNING.
 import { TIRE, TIRE_LATERAL } from '../constants.js';
+import { TUNING } from '../tuning.js';
 
 // Velocity floor for the slip-ratio denominator. Below this, slip is
 // computed against a fixed reference rather than the actual (tiny) max
@@ -68,10 +69,10 @@ export function slipAngle(latV: number, longV: number): number {
  *  recover). Symmetric in sign. */
 export function lateralGripFromSlipAngle(alpha: number): number {
   const a = Math.abs(alpha);
-  const peak = TIRE_LATERAL.slipAnglePeak;
-  const floor = TIRE_LATERAL.slipAngleFloor;
+  const peak = TUNING.tireSlipAnglePeak;
+  const floor = TUNING.tireSlipAngleFloor;
   if (a <= peak) return 1.0;
   const over = a - peak;
-  const decay = Math.exp(-over * TIRE_LATERAL.slipAngleFalloff);
+  const decay = Math.exp(-over * TUNING.tireSlipAngleFalloff);
   return floor + (1 - floor) * decay;
 }

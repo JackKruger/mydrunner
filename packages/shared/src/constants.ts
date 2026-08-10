@@ -295,6 +295,8 @@ export const TIRE_LATERAL = {
   // angle is computed against a fixed reference rather than the actual
   // (tiny) forward speed, so low-speed manoeuvres don't register as full
   // slip and kill slow-speed steering. Mirrors tire.ts SLIP_VEL_FLOOR.
+  // The live vehicle also reaches full dynamic lateral stiffness at this
+  // speed; below it a bounded ramp prevents 60 Hz left/right force chatter.
   slipAngleVelFloor: 2.5,
 } as const;
 

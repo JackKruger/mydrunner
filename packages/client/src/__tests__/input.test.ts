@@ -169,3 +169,37 @@ describe('keys targeting a text field', () => {
     clearKeys();
   });
 });
+
+describe('keys targeting non-text controls', () => {
+  it('keeps driving after a live-tuning range slider receives focus', () => {
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    document.body.appendChild(slider);
+    slider.focus();
+
+    expect(press('KeyW', slider)).toBe(true);
+    expect(press('KeyD', slider)).toBe(true);
+    const input = sampleInput();
+    expect(input.throttle).toBe(1);
+    expect(input.steer).toBe(1);
+
+    release('KeyW', slider);
+    release('KeyD', slider);
+    slider.remove();
+    clearKeys();
+  });
+
+  it('does not let a focused checkbox suppress game keys either', () => {
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    document.body.appendChild(checkbox);
+    checkbox.focus();
+
+    expect(press('KeyW', checkbox)).toBe(true);
+    expect(sampleInput().throttle).toBe(1);
+
+    release('KeyW', checkbox);
+    checkbox.remove();
+    clearKeys();
+  });
+});

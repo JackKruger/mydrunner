@@ -54,13 +54,22 @@ export function requestTransferCase(mode: TransferCaseMode): void {
  *
  *  Checks tagName rather than `instanceof HTMLInputElement` so it still
  *  works for targets from another realm (iframe / portal), where
- *  instanceof against this window's constructors is false. */
+ *  instanceof against this window's constructors is false. Range,
+ *  checkbox and other non-typing inputs deliberately do not count: they
+ *  retain focus after a click, and treating a focused tuning slider as a
+ *  text field would disable driving until the player clicked the world. */
 function isTextEntry(target: EventTarget | null): boolean {
-  const el = target as (HTMLElement & { tagName?: unknown }) | null;
+  const el = target as (HTMLElement & { tagName?: unknown; type?: unknown }) | null;
   if (!el || typeof el.tagName !== 'string') return false;
   if (el.isContentEditable) return true;
   const tag = el.tagName.toUpperCase();
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (tag !== 'INPUT') return false;
+  const type = typeof el.type === 'string' ? el.type.toLowerCase() : 'text';
+  return ![
+    'button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio',
+    'range', 'reset', 'submit',
+  ].includes(type);
 }
 
 export function initInput(): void {

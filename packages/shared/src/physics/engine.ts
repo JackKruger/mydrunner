@@ -15,6 +15,7 @@
 // simulator.
 
 import { ENGINE, WATER } from '../constants.js';
+import { TUNING } from '../tuning.js';
 import type { ManualGear } from '../types.js';
 
 export interface EngineState {
@@ -222,7 +223,7 @@ export function stepEngine(
   }
 
   // Engine torque this tick.
-  const engineT = torqueAtRpm(rpm) * Math.abs(throttle);
+  const engineT = torqueAtRpm(rpm) * Math.abs(throttle) * TUNING.engineTorqueMult;
   // Negative throttle in reverse gear translates to positive torque
   // through the negative ratio - both signs cancel.
   const torqueAtWheels = engineT * activeRatio * finalDrive;
@@ -252,7 +253,7 @@ export function stepEngine(
     const speedBrake = Math.abs(vehicleAngVel) * ENGINE.engineBrakeSpeedCoef;
     const travelDir =
       Math.abs(wheelAngVel) > 1e-3 ? Math.sign(wheelAngVel) : Math.sign(activeRatio);
-    brakeT = (rpmBrake + speedBrake) * travelDir;
+    brakeT = (rpmBrake + speedBrake) * TUNING.engineBrakeMult * travelDir;
   }
 
   return {

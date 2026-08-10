@@ -33,6 +33,79 @@ export interface WaterStatus {
   flood: number;
 }
 
+/** Owner-only physics instrumentation used by the `?dev` visualiser.
+ *
+ * This deliberately stays outside VehicleState: it is high-frequency tuning
+ * data for the vehicle's owning browser, not gameplay state that remote
+ * players need over the wire. */
+export interface WheelDebugTelemetry {
+  contact: boolean;
+  contactPoint: { x: number; y: number; z: number };
+  contactNormal: { x: number; y: number; z: number };
+  surface: number;
+  waterDepth: number;
+  normalLoad: number;
+  gripCoefficient: number;
+  gripLimit: number;
+  longitudinalForce: number;
+  lateralForce: number;
+  force: { x: number; y: number; z: number };
+  slipRatio: number;
+  slipAngle: number;
+  /** 0..1 fraction of the tire's elliptical friction budget in use. */
+  utilization: number;
+  suspensionCompression: number;
+  suspensionOrigin: { x: number; y: number; z: number };
+  suspensionEnd: { x: number; y: number; z: number };
+  wheelCenter: { x: number; y: number; z: number };
+  suspensionRestLength: number;
+  droopMax: number;
+  bumpMax: number;
+  angularVelocity: number;
+  driveTorque: number;
+  brakeTorque: number;
+  groundTorque: number;
+}
+
+export interface VehicleDebugTelemetry {
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number; w: number };
+  centerOfMassLocal: { x: number; y: number; z: number };
+  centerOfMassWorld: { x: number; y: number; z: number };
+  massKg: number;
+  wheelbase: number;
+  track: number;
+  wheelRadius: number;
+  rollAngle: number;
+  pitchAngle: number;
+  staticRollLimit: number;
+  staticPitchLimit: number;
+  linearVelocity: { x: number; y: number; z: number };
+  angularVelocity: { x: number; y: number; z: number };
+  accelerationWorld: { x: number; y: number; z: number };
+  longitudinalG: number;
+  lateralG: number;
+  yawRate: number;
+  driveline: {
+    rpm: number;
+    gear: number;
+    throttle: number;
+    transferCase: DrivetrainState['transferCase'];
+    frontLocked: boolean;
+    rearLocked: boolean;
+    outputTorque: number;
+  };
+  water: {
+    submerged: number;
+    buoyancyForce: { x: number; y: number; z: number };
+    buoyancyPoint: { x: number; y: number; z: number };
+    dragForce: { x: number; y: number; z: number };
+    dragPoint: { x: number; y: number; z: number };
+    dragTorque: { x: number; y: number; z: number };
+  };
+  wheels: [WheelDebugTelemetry, WheelDebugTelemetry, WheelDebugTelemetry, WheelDebugTelemetry];
+}
+
 export interface VehicleLike {
   readonly id: string;
   readonly build: VehicleBuild;
@@ -48,6 +121,7 @@ export interface VehicleLike {
   axleSnaps?(): [AxleSnap, AxleSnap];
   applyAxleSnaps?(snaps: [AxleSnap, AxleSnap]): void;
   waterStatus?(): WaterStatus;
+  debugTelemetry?(): VehicleDebugTelemetry;
   repair?(): void;
   damageStatus?(): VehicleDamageState;
   drivetrainStatus?(): DrivetrainState;
