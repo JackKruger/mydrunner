@@ -144,7 +144,11 @@ interface RemoteProxy {
   angVel: { x: number; y: number; z: number };
 }
 
-const REMOTE_PROXY_STALE_MS = 500;
+// Snapshot timestamps are sampled by the render loop. On a software-rendered
+// or heavily loaded client a valid frame can be more than 500 ms apart, so a
+// sub-second cutoff made live players briefly non-collidable. Two seconds is
+// still short enough to shed a proxy promptly during a genuine network stall.
+const REMOTE_PROXY_STALE_MS = 2_000;
 
 export class LocalSimulation {
   private world: Physics.World;

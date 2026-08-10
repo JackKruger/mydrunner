@@ -58,11 +58,23 @@ describe('LocalSimulation', () => {
     const { sim, spawn } = makeSimulation();
     const now = performance.now();
     sim.syncRemoteVehicles(
-      [remoteAt('stale', { ...spawn.position, x: spawn.position.x + 2 }, now - 1000)],
+      [remoteAt('stale', { ...spawn.position, x: spawn.position.x + 2 }, now - 3000)],
       now,
     );
     sim.step({ ...EMPTY_INPUT, seq: 1 });
     expect(sim.activeRemoteProxyCount).toBe(0);
+    sim.dispose();
+  });
+
+  it('keeps a remote proxy active across a slow render frame', () => {
+    const { sim, spawn } = makeSimulation();
+    const now = performance.now();
+    sim.syncRemoteVehicles(
+      [remoteAt('slow-frame', { ...spawn.position, x: spawn.position.x + 2 }, now - 1000)],
+      now,
+    );
+    sim.step({ ...EMPTY_INPUT, seq: 1 });
+    expect(sim.activeRemoteProxyCount).toBe(1);
     sim.dispose();
   });
 

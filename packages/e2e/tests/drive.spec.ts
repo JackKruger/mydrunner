@@ -27,7 +27,7 @@ async function waitConnected(page: Page): Promise<void> {
 
 test.describe('driving', () => {
   test('rendered front wheels follow the progressive steering rack', async ({ page }) => {
-    await page.goto('/?auto=1');
+    await page.goto('/?auto=1&q=low');
     await waitConnected(page);
     await page.waitForTimeout(800);
 
@@ -70,7 +70,7 @@ test.describe('driving', () => {
   });
 
   test('rendered wheel rotations are stable while driving + turning', async ({ page }) => {
-    await page.goto('/?auto=1');
+    await page.goto('/?auto=1&q=low');
     await waitConnected(page);
     await page.waitForTimeout(800);
 
@@ -108,7 +108,7 @@ test.describe('driving', () => {
   });
 
   test('holding A produces a stable left steer angle (no flicker)', async ({ page }) => {
-    await page.goto('/?auto=1');
+    await page.goto('/?auto=1&q=low');
     await waitConnected(page);
     await page.waitForTimeout(800);
 

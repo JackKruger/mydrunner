@@ -339,8 +339,11 @@ export class Scene {
   /** Add or update the nameplate above a vehicle. Local player gets none -
    *  no point labeling yourself. */
   private setNameplate(v: VehicleVisual, name: string, isLocal: boolean): void {
-    if (isLocal) return;
     if (v.nameplateText === name) return;
+    // The local truck intentionally has no sprite, but the game-menu roster
+    // still needs its real call sign rather than the generic "Driver" label.
+    v.nameplateText = name;
+    if (isLocal) return;
     if (v.nameplate) {
       v.group.remove(v.nameplate);
       disposeNameplate(v.nameplate);
@@ -350,7 +353,6 @@ export class Scene {
     sprite.position.set(0, Physics.geomFor(v.build).chassisHalfExtents.y * 2 + 1.4, 0);
     v.group.add(sprite);
     v.nameplate = sprite;
-    v.nameplateText = name;
   }
 
   private removeMissing(snapPlayers: Set<PlayerId>): void {

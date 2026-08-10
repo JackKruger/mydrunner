@@ -30,8 +30,8 @@ test('two clients relay state and maintain collision proxies', async ({ browser 
   const b = await ctxB.newPage();
 
   await Promise.all([
-    a.goto('/?auto=1&name=alice'),
-    b.goto('/?auto=1&name=bob&car=hilux'),
+    a.goto('/?auto=1&name=alice&q=low'),
+    b.goto('/?auto=1&name=bob&car=hilux&q=low'),
   ]);
 
   await expect(a.locator('#hud')).toContainText('connected', { timeout: 10_000 });

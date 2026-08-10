@@ -27,7 +27,7 @@ interface LatencyResult {
 
 test.describe('latency', () => {
   test('steer input reaches owner physics and visible chassis yaw locally', async ({ page }) => {
-    await page.goto('/?auto=1');
+    await page.goto('/?auto=1&q=low');
     await waitConnected(page);
 
     // Steering needs forward velocity before tire force can rotate the chassis.
