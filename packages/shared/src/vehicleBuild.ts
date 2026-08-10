@@ -364,7 +364,12 @@ export function createStockBuild(base: VehicleBaseId = 'ridgeback'): VehicleBuil
 
 export const DEFAULT_VEHICLE_BUILD: VehicleBuild = createStockBuild();
 
-const SLOT_OPTIONS: Record<VehiclePartSlot, keyof VehiclePartCatalog> = {
+/** The one mapping from a build's slot field to the catalog list that fills
+ *  it. Everything that walks the slots - normalisation, mass, the workshop
+ *  panel and the wire codec - iterates this rather than restating the nine
+ *  names, so a new slot is a compile error in the Record instead of a silent
+ *  omission somewhere downstream. */
+export const SLOT_OPTIONS: Record<VehiclePartSlot, keyof VehiclePartCatalog> = {
   suspensionId: 'suspension',
   axleId: 'axles',
   tireId: 'tires',
@@ -375,6 +380,19 @@ const SLOT_OPTIONS: Record<VehiclePartSlot, keyof VehiclePartCatalog> = {
   roofId: 'roofs',
   rearBodyId: 'rearBodies',
 };
+
+/** Slot order for anything positional - above all the snapshot tuple, where
+ *  pack and unpack disagreeing by one index would hand every remote truck
+ *  somebody else's parts with nothing throwing. Frozen from the Record's own
+ *  key order so the two sides cannot drift apart. */
+export const VEHICLE_PART_SLOTS: readonly VehiclePartSlot[] =
+  Object.freeze(Object.keys(SLOT_OPTIONS) as VehiclePartSlot[]);
+
+/** The catalog lists for a base, in VEHICLE_PART_SLOTS order. */
+export function partListsFor(baseId: VehicleBaseId): readonly (readonly VehiclePartOption[])[] {
+  const catalog = VEHICLE_PART_CATALOGS[baseId];
+  return VEHICLE_PART_SLOTS.map((slot) => catalog[SLOT_OPTIONS[slot]] as readonly VehiclePartOption[]);
+}
 
 function asObject(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
@@ -418,7 +436,7 @@ export function normalizeVehicleBuildDetailed(value: unknown): BuildNormalizatio
     frontLocker: raw.frontLocker === true,
     rearLocker: raw.rearLocker === true,
   };
-  for (const slot of Object.keys(SLOT_OPTIONS) as VehiclePartSlot[]) {
+  for (const slot of VEHICLE_PART_SLOTS) {
     const selected = optionFor(baseId, slot, raw[slot]);
     if (selected) build[slot] = selected.id;
     else if (raw[slot] !== undefined) issues.push(`Unknown ${slot}: ${String(raw[slot])}`);
@@ -442,8 +460,35 @@ export function normalizeVehicleBuildDetailed(value: unknown): BuildNormalizatio
   return { build, issues };
 }
 
+/** Stable identity string for a build: same parts -> same key, always.
+ *
+ *  Field order is spelled out here rather than delegated to
+ *  JSON.stringify, whose output follows insertion order - two builds with
+ *  identical parts assembled by different code paths would stringify
+ *  differently and compare unequal. Callers use this both to compare
+ *  builds and to key caches of build-derived data. */
+export function vehicleBuildKey(build: VehicleBuild): string {
+  return [
+    build.version,
+    build.baseId,
+    build.paintColor,
+    build.paintFinish,
+    build.suspensionId,
+    build.axleId,
+    build.tireId,
+    build.wheelId,
+    build.frontBarId,
+    build.winchId,
+    build.snorkelId,
+    build.roofId,
+    build.rearBodyId,
+    build.frontLocker ? 1 : 0,
+    build.rearLocker ? 1 : 0,
+  ].join('|');
+}
+
 export function buildsEqual(a: VehicleBuild, b: VehicleBuild): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return vehicleBuildKey(a) === vehicleBuildKey(b);
 }
 
 export function isNormalizedVehicleBuild(value: unknown): value is VehicleBuild {
@@ -522,7 +567,7 @@ export interface ResolvedVehicleSpec {
 function selectedMass(build: VehicleBuild): number {
   const catalog = VEHICLE_PART_CATALOGS[build.baseId];
   let total = 0;
-  for (const slot of Object.keys(SLOT_OPTIONS) as VehiclePartSlot[]) {
+  for (const slot of VEHICLE_PART_SLOTS) {
     const item = (catalog[SLOT_OPTIONS[slot]] as readonly VehiclePartOption[]).find((p) => p.id === build[slot]);
     total += item?.massKg ?? 0;
   }

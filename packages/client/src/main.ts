@@ -196,6 +196,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyM') engineAudio.toggleMute();
 });
 onTouchEdge('mute', () => engineAudio.toggleMute());
+window.addEventListener('game-menu-mute', () => engineAudio.toggleMute());
 
 // Diagnostic hooks for E2E / browser debugging. Only exposed in dev (Vite
 // sets DEV; production builds skip this) so production bundles do not ship

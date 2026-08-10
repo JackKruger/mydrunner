@@ -7,6 +7,7 @@ import {
   createStockBuild,
   normalizeVehicleBuild,
   resolveVehicleSpec,
+  vehicleBuildKey,
   type ResolvedVehicleSpec,
 } from '../vehicleBuild.js';
 import { normalizeVehicleBaseId } from '../types.js';
@@ -128,8 +129,55 @@ const STOCK_GEOM = {
 /** Stock base geometry table retained for diagnostics and tuning tools. */
 export const VEHICLE_GEOM = STOCK_GEOM;
 
+/** Resolving a build is pure but not cheap - normalisation walks nine part
+ *  lists and resolveVehicleSpec runs ~40 suffix tests and allocates a dozen
+ *  objects, ~3 us a call. Render, effects and tyre-track code all ask for the
+ *  geometry of the same handful of builds every frame, so the uncached cost
+ *  was per-frame garbage for a value that changes only when someone applies a
+ *  new build.
+ *
+ *  Two layers, because the callers arrive two ways: the render path holds one
+ *  long-lived build object per vehicle (WeakMap hits on identity, no hashing),
+ *  while the snapshot path decodes a fresh object every 30 Hz tick (falls
+ *  through to the key map). The key map is bounded because paint colour is
+ *  24-bit and player-chosen: an unbounded Map keyed on it is a slow leak a
+ *  room full of repainting players could drive. */
+const GEOM_BY_IDENTITY = new WeakMap<VehicleBuild, VehicleGeom>();
+const GEOM_BY_KEY = new Map<string, VehicleGeom>();
+const GEOM_CACHE_MAX = 256;
+
+function cachedGeom(value: VehicleBuild): VehicleGeom {
+  // Keyed on the caller's own object, not the normalised copy: normalising
+  // allocates a fresh object every call, so caching against that would never
+  // hit. Safe because builds are immutable by convention - every mutation in
+  // the codebase spreads into a new object.
+  const usable = value !== null && typeof value === 'object';
+  if (usable) {
+    const seen = GEOM_BY_IDENTITY.get(value);
+    if (seen) return seen;
+  }
+  // Read the key straight off the incoming object first. Cached keys only
+  // ever come from normalised builds, so a hit proves all fifteen fields
+  // already match one - and an object whose fields match a normalised build
+  // normalises to that same build. This is the path the snapshot decoder
+  // takes: it hands over an already-normalised build in a fresh object every
+  // tick, which the WeakMap above cannot help with.
+  let geom = usable ? GEOM_BY_KEY.get(vehicleBuildKey(value)) : undefined;
+  if (!geom) {
+    const key = vehicleBuildKey(normalizeVehicleBuild(value));
+    geom = GEOM_BY_KEY.get(key);
+    if (!geom) {
+      geom = buildGeom(value);
+      if (GEOM_BY_KEY.size >= GEOM_CACHE_MAX) GEOM_BY_KEY.clear();
+      GEOM_BY_KEY.set(key, geom);
+    }
+  }
+  if (usable) GEOM_BY_IDENTITY.set(value, geom);
+  return geom;
+}
+
 export function geomFor(value: CarKind | VehicleBuild): VehicleGeom {
-  if (typeof value !== 'string') return buildGeom(value);
+  if (typeof value !== 'string') return cachedGeom(value);
   return STOCK_GEOM[normalizeVehicleBaseId(value)];
 }
 
@@ -149,8 +197,21 @@ type WheelRest = readonly [
   { readonly x: number; readonly y: number; readonly z: number },
 ];
 
+/** Derived from the geometry and read every snapshot tick by the effects and
+ *  tyre-track paths, so it hangs off the (now cached) geom rather than
+ *  allocating five objects per call. The tuple is readonly all the way down. */
+const WHEEL_REST_BY_GEOM = new WeakMap<VehicleGeom, WheelRest>();
+
 export function restWheelPositions(value: CarKind | VehicleBuild): WheelRest {
   const g = geomFor(value);
+  const seen = WHEEL_REST_BY_GEOM.get(g);
+  if (seen) return seen;
+  const rest = computeRestWheelPositions(g);
+  WHEEL_REST_BY_GEOM.set(g, rest);
+  return rest;
+}
+
+function computeRestWheelPositions(g: VehicleGeom): WheelRest {
   return [
     { x: -g.front.trackHalf, y: g.front.centerLocalY, z: g.front.centerLocalZ },
     { x: +g.front.trackHalf, y: g.front.centerLocalY, z: g.front.centerLocalZ },
