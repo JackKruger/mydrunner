@@ -21,6 +21,7 @@
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
+import { activeQuality, buildWaterFragment, type QualitySettings } from './quality.js';
 
 const VERT = /* glsl */ `
 attribute float aWet;
@@ -77,7 +78,8 @@ float vnoise(vec2 p) {
 float fbm(vec2 p) {
   float v = 0.0;
   float a = 0.5;
-  for (int i = 0; i < 3; i++) {
+  // WATER_OCTAVES comes from the quality prelude.
+  for (int i = 0; i < WATER_OCTAVES; i++) {
     v += a * vnoise(p);
     p *= 2.07;
     a *= 0.5;
@@ -111,22 +113,40 @@ void main() {
   vec2 p = vWorldPos.xz;
   vec2 q = p - flow * uTime;
   float r1 = fbm(q * 1.7);
+#ifdef WATER_RIPPLE_NORMAL
   float r2 = fbm(q * 4.3 + 17.0);
   float ripple = r1 * 0.6 + r2 * 0.4;
+#else
+  // The fine ripple only modulates the albedo and the foam band; the coarse
+  // layer already carries the motion. Dropped with the gradient taps below,
+  // since both are decoration on top of the flow the player actually reads.
+  float ripple = r1;
+#endif
 
   // Build the normal from the advected ripple field. The mesh stays flat
   // (its 2.5 m vertex spacing is too coarse for wave geometry), while the
   // fragment-resolution normal catches broad ripples and coherent wave
   // fronts. The sine's gradient is analytic, saving six extra noise
   // samples per pixel compared with differencing the whole height field.
+  float currentMix = smoothstep(0.08, 0.9, flowSpeed);
+#ifdef WATER_RIPPLE_NORMAL
   float e = 0.07;
   float r1x = fbm((q + vec2(e, 0.0)) * 1.7);
   float r1z = fbm((q + vec2(0.0, e)) * 1.7);
-  float currentMix = smoothstep(0.08, 0.9, flowSpeed);
   float frontPhase = dot(q, flowDir) * 4.8 + fbm(q * 0.31 + 57.0) * 5.0;
   float frontSlope = cos(frontPhase) * 4.8 * 0.012 * currentMix;
   float slopeX = (r1x - r1) * 0.10 / e + flowDir.x * frontSlope;
   float slopeZ = (r1z - r1) * 0.10 / e + flowDir.y * frontSlope;
+#else
+  // Three fbm taps gone: two for the ripple gradient, one for the wave-front
+  // phase jitter. The wave fronts themselves stay, driven by the analytic
+  // cosine along the flow direction -- so a river still visibly moves and a
+  // pond still visibly does not, which is the part that is gameplay.
+  float frontPhase = dot(q, flowDir) * 4.8 + r1 * 5.0;
+  float frontSlope = cos(frontPhase) * 4.8 * 0.012 * currentMix;
+  float slopeX = flowDir.x * frontSlope;
+  float slopeZ = flowDir.y * frontSlope;
+#endif
   vec3 n = normalize(vec3(-slopeX, 1.0, -slopeZ));
 
   // Depth tint: this is the readout the player steers by.
@@ -159,6 +179,7 @@ void main() {
   // Long, broken filaments give the eye a feature it can actually track
   // downstream. They align to the local flow field, move at its real
   // speed, and fade completely out on still water.
+#ifdef WATER_FILAMENTS
   vec2 streamUv = vec2(dot(q, flowDir) * 0.16, dot(q, flowAcross) * 1.35);
   float filaments = smoothstep(0.68, 0.88, fbm(streamUv + 73.0));
   float breakup = smoothstep(0.32, 0.72, fbm(q * 0.48 + 113.0));
@@ -166,6 +187,11 @@ void main() {
   currentInk *= smoothstep(0.04, 0.28, vDepth);
   base = mix(base, vec3(0.72, 0.82, 0.84), currentInk * 0.24);
   alpha = clamp(alpha + currentInk * 0.05, 0.0, 1.0);
+#else
+  // Two more fbm taps. Purely decorative surface streaking -- the specular
+  // and the wave fronts already show which way the current runs.
+  float currentInk = 0.0;
+#endif
 
   float diff = max(dot(n, normalize(uSunDir)), 0.0);
   vec3 lit = base * (uAmbient + uSunColor * (0.35 + 0.65 * diff));
@@ -195,7 +221,10 @@ const DEEP_AT = 1.4;
 /** Depth below which the foam band draws, m. */
 const FOAM_DEPTH = 0.22;
 
-export function makeWaterMaterial(terrain: Physics.TerrainData): THREE.ShaderMaterial {
+export function makeWaterMaterial(
+  terrain: Physics.TerrainData,
+  quality: QualitySettings = activeQuality(),
+): THREE.ShaderMaterial {
   const n = terrain.resolution;
   const flowData = new Uint8Array(n * n * 4);
   packFlow(terrain, flowData, { r0: 0, c0: 0, rows: n, cols: n });
@@ -224,7 +253,7 @@ export function makeWaterMaterial(terrain: Physics.TerrainData): THREE.ShaderMat
       uFoamDepth: { value: FOAM_DEPTH },
     },
     vertexShader: VERT,
-    fragmentShader: FRAG,
+    fragmentShader: buildWaterFragment(quality, FRAG),
     transparent: true,
     // Water must not occlude what is under it in the depth buffer, or the
     // bed it is meant to be see-through to stops drawing.

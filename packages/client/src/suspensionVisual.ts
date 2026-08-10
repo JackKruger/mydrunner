@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { Physics, type VehicleBuild } from '@mydrunner/shared';
+import { activeQuality, type QualitySettings } from './quality.js';
 
 type Point = { x: number; y: number; z: number };
 
@@ -53,12 +54,20 @@ function materialsFor(build: VehicleBuild): SuspensionMaterials {
   };
 }
 
-/** A unit-height coil around local +Y. Scaling Y extends it between mounts. */
-function springGeometry(radius: number): THREE.TubeGeometry {
+/** A unit-height coil around local +Y. Scaling Y extends it between mounts.
+ *
+ *  At full detail this is ~640 triangles, four per truck, and they cast
+ *  shadows — a lot of geometry for a spring that is mostly hidden behind a
+ *  wheel. The reduced form halves the path samples and drops the tube to a
+ *  triangular cross-section, which still reads as a coil at the distance the
+ *  chase camera actually sits. */
+function springGeometry(radius: number, detailed: boolean): THREE.TubeGeometry {
   const turns = 8;
+  const perTurn = detailed ? 8 : 4;
+  const samples = turns * perTurn;
   const points: THREE.Vector3[] = [];
-  for (let i = 0; i <= turns * 8; i++) {
-    const t = i / (turns * 8);
+  for (let i = 0; i <= samples; i++) {
+    const t = i / samples;
     const angle = t * turns * Math.PI * 2;
     points.push(new THREE.Vector3(
       Math.cos(angle) * radius,
@@ -66,7 +75,7 @@ function springGeometry(radius: number): THREE.TubeGeometry {
       Math.sin(angle) * radius,
     ));
   }
-  return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), turns * 8, 0.016, 5, false);
+  return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), samples, 0.016, detailed ? 5 : 3, false);
 }
 
 function addAnchor(
@@ -97,6 +106,7 @@ export function buildSuspensionVisual(
   chassis: THREE.Group,
   axles: [THREE.Group, THREE.Group],
   build: VehicleBuild,
+  quality: QualitySettings = activeQuality(),
 ): SuspensionVisual {
   const geom = Physics.geomFor(build);
   const mats = materialsFor(build);
@@ -106,7 +116,7 @@ export function buildSuspensionVisual(
   const armGeometry = new THREE.CylinderGeometry(armRadius, armRadius, 1, 10);
   const rodGeometry = new THREE.CylinderGeometry(0.032, 0.032, 1, 9);
   const damperGeometry = new THREE.CylinderGeometry(flex ? 0.052 : 0.046, flex ? 0.052 : 0.046, 1, 10);
-  const springGeo = springGeometry(flex ? 0.105 : touring ? 0.098 : 0.09);
+  const springGeo = springGeometry(flex ? 0.105 : touring ? 0.098 : 0.09, quality.detailedSuspension);
   const connectors: SuspensionConnectorVisual[] = [];
 
   function connector(
@@ -121,7 +131,9 @@ export function buildSuspensionVisual(
     const axleAnchor = addAnchor(axle, `${name}.anchor.axle`, axlePoint, mats.bracket);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = name;
-    mesh.castShadow = true;
+    // 16 links per truck, all in the shadow depth pass. Tied to the tier's
+    // shadow flag so it costs nothing extra to reason about.
+    mesh.castShadow = quality.shadows;
     chassis.add(mesh);
     connectors.push({ mesh, chassisAnchor, axleAnchor });
   }

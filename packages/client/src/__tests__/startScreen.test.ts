@@ -55,11 +55,20 @@ describe('local game saves', () => {
   });
 
   it('uses safe defaults when stored options are missing or malformed', () => {
-    expect(loadStartOptions()).toEqual({ engineAudio: false, showControlGuide: true });
+    const defaults = { engineAudio: false, showControlGuide: true, graphics: 'auto' };
+    expect(loadStartOptions()).toEqual(defaults);
     localStorage.setItem('mydrunner.options.v1', '{broken');
-    expect(loadStartOptions()).toEqual({ engineAudio: false, showControlGuide: true });
-    saveStartOptions({ engineAudio: true, showControlGuide: false });
-    expect(loadStartOptions()).toEqual({ engineAudio: true, showControlGuide: false });
+    expect(loadStartOptions()).toEqual(defaults);
+    saveStartOptions({ engineAudio: true, showControlGuide: false, graphics: 'low' });
+    expect(loadStartOptions()).toEqual({ engineAudio: true, showControlGuide: false, graphics: 'low' });
+  });
+
+  it('falls back to auto for an unrecognised graphics tier', () => {
+    // The stored value reaches quality.ts, which indexes QUALITY with it —
+    // an unknown string there would resolve to undefined settings and take
+    // the renderer down at construction.
+    localStorage.setItem('mydrunner.options.v1', JSON.stringify({ graphics: 'ultra' }));
+    expect(loadStartOptions().graphics).toBe('auto');
   });
 });
 
@@ -114,6 +123,6 @@ describe('start screen', () => {
     audio.dispatchEvent(new Event('change', { bubbles: true }));
 
     expect(loadStartOptions().engineAudio).toBe(true);
-    expect(changed).toHaveBeenLastCalledWith({ engineAudio: true, showControlGuide: true });
+    expect(changed).toHaveBeenLastCalledWith({ engineAudio: true, showControlGuide: true, graphics: 'auto' });
   });
 });

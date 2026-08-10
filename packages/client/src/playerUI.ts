@@ -54,6 +54,26 @@ interface PlayerUIOptions {
 
 const RPM_DISPLAY_MAX = 6000;
 
+// Write-if-changed DOM helpers.
+//
+// renderTelemetry runs every frame and most of what it writes is unchanged
+// between frames — the gear, the surface name, the drivetrain string, every
+// aria attribute. Assigning textContent replaces the text node whether or not
+// the string differs, so each redundant write dirtied layout for nothing. On
+// desktop that was invisible; on mobile a style recalc per frame competes
+// with the render for the same budget.
+function setText(el: HTMLElement, value: string): void {
+  if (el.textContent !== value) el.textContent = value;
+}
+
+function setAttr(el: HTMLElement, name: string, value: string): void {
+  if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+}
+
+function setStyleVar(el: HTMLElement, name: string, value: string): void {
+  if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value);
+}
+
 export function formatGear(gear: number): string {
   if (gear === -1) return 'R';
   if (gear === 0) return 'N';
@@ -101,6 +121,7 @@ export class PlayerUI {
   private readonly transmissionModeButton: HTMLButtonElement;
   private readonly transferGate: HTMLElement;
   private readonly transferKnob: HTMLElement;
+  private readonly transferSlots: readonly HTMLButtonElement[];
   private manualGear: ManualGear | null = null;
   private displayedGear: ManualGear = 0;
   private activePointer: number | null = null;
@@ -242,6 +263,9 @@ export class PlayerUI {
     this.transmissionModeButton = root.querySelector('#transmission-mode')!;
     this.transferGate = root.querySelector('#transfer-gate')!;
     this.transferKnob = root.querySelector('#transfer-knob')!;
+    // Resolved once. These slots are static markup, and renderTelemetry runs
+    // every frame — a querySelectorAll in there walked the subtree 60x/s.
+    this.transferSlots = [...this.transferGate.querySelectorAll<HTMLButtonElement>('[data-transfer]')];
 
     this.bindShifter();
     this.bindTransferCase();
@@ -259,7 +283,10 @@ export class PlayerUI {
   }
 
   updateTelemetry(next: Partial<PlayerTelemetry>): void {
-    this.state = { ...this.state, ...next };
+    // Assign in place rather than re-spreading: this runs every frame, and
+    // `state` is already treated as mutable (setConnectionState writes into
+    // it). Same key semantics as the spread it replaces.
+    Object.assign(this.state, next);
     this.renderTelemetry();
   }
 
@@ -291,46 +318,50 @@ export class PlayerUI {
     const rpm = Math.max(0, this.state.rpm);
     const rpmRatio = Math.min(1, rpm / RPM_DISPLAY_MAX);
 
-    this.speedText.textContent = speedKmh.toFixed(0);
-    this.rpmText.textContent = rpm.toFixed(0);
-    this.rpmMeter.setAttribute('aria-valuenow', rpm.toFixed(0));
-    this.rpmMeter.style.setProperty('--rpm-ratio', String(rpmRatio));
-    this.gearText.textContent = formatGear(this.state.gear);
+    setText(this.speedText, speedKmh.toFixed(0));
+    setText(this.rpmText, rpm.toFixed(0));
+    setAttr(this.rpmMeter, 'aria-valuenow', rpm.toFixed(0));
+    setStyleVar(this.rpmMeter, '--rpm-ratio', String(rpmRatio));
+    setText(this.gearText, formatGear(this.state.gear));
     this.displayedGear = normaliseGear(this.state.gear);
     if (this.manualGear === null) this.positionGearKnob(this.displayedGear);
-    this.surfaceText.textContent = this.state.surface || '—';
+    setText(this.surfaceText, this.state.surface || '—');
 
     const engineStatus = this.state.engineStatus || '';
     this.engineStatusText.classList.toggle('active', engineStatus !== '');
-    this.engineStatusText.textContent = engineStatus;
-    this.engineStatusText.setAttribute('aria-hidden', String(engineStatus === ''));
+    setText(this.engineStatusText, engineStatus);
+    setAttr(this.engineStatusText, 'aria-hidden', String(engineStatus === ''));
 
     this.handbrakeText.classList.toggle('active', this.state.handbrake);
-    this.handbrakeText.textContent = this.state.handbrake ? 'HANDBRAKE' : '';
-    this.handbrakeText.setAttribute('aria-hidden', String(!this.state.handbrake));
+    setText(this.handbrakeText, this.state.handbrake ? 'HANDBRAKE' : '');
+    setAttr(this.handbrakeText, 'aria-hidden', String(!this.state.handbrake));
 
     const fixedRwd = this.state.fixedRwd === true;
     const transferCase = fixedRwd ? '2h' : this.state.transferCase ?? '4h';
-    this.transferGate.dataset.fixed = String(fixedRwd);
-    this.transferGate.setAttribute('aria-disabled', String(fixedRwd));
-    this.transferGate.setAttribute('aria-label', fixedRwd ? 'Rear-wheel drive, fixed high range' : 'Transfer-case selector');
-    for (const slot of this.transferGate.querySelectorAll<HTMLButtonElement>('[data-transfer]')) slot.disabled = fixedRwd;
+    if (this.transferGate.dataset.fixed !== String(fixedRwd)) this.transferGate.dataset.fixed = String(fixedRwd);
+    setAttr(this.transferGate, 'aria-disabled', String(fixedRwd));
+    setAttr(this.transferGate, 'aria-label', fixedRwd ? 'Rear-wheel drive, fixed high range' : 'Transfer-case selector');
+    for (const slot of this.transferSlots) {
+      if (slot.disabled !== fixedRwd) slot.disabled = fixedRwd;
+    }
     this.positionTransferKnob(transferCase);
     const locks = [this.state.rearLocked ? 'R LOCK' : '', this.state.frontLocked ? 'F LOCK' : ''].filter(Boolean).join(' · ');
-    this.drivetrainText.textContent = fixedRwd ? 'RWD · FIXED HIGH' : `${transferCase.toUpperCase()} · ${locks || 'LOCKERS OPEN'}`;
-    if (this.state.drivetrainNotice) this.drivetrainText.textContent = this.state.drivetrainNotice;
+    const drivetrain = this.state.drivetrainNotice
+      ? this.state.drivetrainNotice
+      : fixedRwd ? 'RWD · FIXED HIGH' : `${transferCase.toUpperCase()} · ${locks || 'LOCKERS OPEN'}`;
+    setText(this.drivetrainText, drivetrain);
     const body = Math.round((this.state.bodyCondition ?? 1) * 100);
     const engine = Math.round((this.state.engineCondition ?? 1) * 100);
     const steering = Math.round((this.state.steeringCondition ?? 1) * 100);
     const damaged = body < 98 || engine < 98 || steering < 98;
-    this.conditionText.textContent = damaged ? `BODY ${body} · ENGINE ${engine} · STEERING ${steering}` : '';
+    setText(this.conditionText, damaged ? `BODY ${body} · ENGINE ${engine} · STEERING ${steering}` : '');
     this.conditionText.classList.toggle('active', damaged);
-    this.winchText.textContent = this.state.winchStatus ?? '';
+    setText(this.winchText, this.state.winchStatus ?? '');
     this.winchText.classList.toggle('active', Boolean(this.state.winchStatus));
 
-    this.tickText.textContent = `tick=${this.state.tick ?? 0}`;
-    this.fpsText.textContent = `${this.state.fps ?? 0} FPS`;
-    this.previewDiagnosticText.textContent = this.state.previewDiagnostic ?? '';
+    setText(this.tickText, `tick=${this.state.tick ?? 0}`);
+    setText(this.fpsText, `${this.state.fps ?? 0} FPS`);
+    setText(this.previewDiagnosticText, this.state.previewDiagnostic ?? '');
   }
 
   private bindShifter(): void {

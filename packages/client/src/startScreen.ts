@@ -15,6 +15,11 @@ export interface GameSave {
 export interface StartOptions {
   engineAudio: boolean;
   showControlGuide: boolean;
+  /** Graphics tier. 'auto' lets quality.ts decide from the device.
+   *
+   *  Typed here rather than importing QualityTier because quality.ts imports
+   *  loadStartOptions from this file — keeping the dependency one-way. */
+  graphics: 'auto' | 'high' | 'low';
 }
 
 export type StartChoice =
@@ -25,7 +30,12 @@ const DEFAULT_OPTIONS: StartOptions = {
   // The procedural engine synth has historically started muted.
   engineAudio: false,
   showControlGuide: true,
+  graphics: 'auto',
 };
+
+function decodeGraphics(value: unknown): StartOptions['graphics'] {
+  return value === 'high' || value === 'low' || value === 'auto' ? value : DEFAULT_OPTIONS.graphics;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -135,6 +145,7 @@ export function loadStartOptions(): StartOptions {
       showControlGuide: typeof parsed.showControlGuide === 'boolean'
         ? parsed.showControlGuide
         : DEFAULT_OPTIONS.showControlGuide,
+      graphics: decodeGraphics(parsed.graphics),
     };
   } catch {
     return { ...DEFAULT_OPTIONS };
@@ -297,6 +308,11 @@ export function showStartScreen(config: StartScreenConfig): Promise<StartChoice>
         <div class="start-settings">
           <label class="start-setting"><span><strong>Engine audio</strong><small>Procedural engine and drivetrain sound</small></span><input id="option-audio" type="checkbox" ${options.engineAudio ? 'checked' : ''}><i aria-hidden="true"></i></label>
           <label class="start-setting"><span><strong>Control guide</strong><small>Show keyboard controls while driving</small></span><input id="option-guide" type="checkbox" ${options.showControlGuide ? 'checked' : ''}><i aria-hidden="true"></i></label>
+          <label class="start-setting start-setting-select"><span><strong>Graphics</strong><small>Reduced detail lifts frame rate on phones. Applies next time you load the game.</small></span><select id="option-graphics">
+            <option value="auto" ${options.graphics === 'auto' ? 'selected' : ''}>Auto (match device)</option>
+            <option value="high" ${options.graphics === 'high' ? 'selected' : ''}>Full detail</option>
+            <option value="low" ${options.graphics === 'low' ? 'selected' : ''}>Reduced detail</option>
+          </select></label>
         </div>
         <p class="start-storage-note">Settings and saves use your browser's local storage. Clearing site data removes them.</p>
       `;
@@ -305,6 +321,7 @@ export function showStartScreen(config: StartScreenConfig): Promise<StartChoice>
         options = {
           engineAudio: panel.querySelector<HTMLInputElement>('#option-audio')!.checked,
           showControlGuide: panel.querySelector<HTMLInputElement>('#option-guide')!.checked,
+          graphics: decodeGraphics(panel.querySelector<HTMLSelectElement>('#option-graphics')!.value),
         };
         saveStartOptions(options);
         applyStartOptions(options);
@@ -312,6 +329,7 @@ export function showStartScreen(config: StartScreenConfig): Promise<StartChoice>
       };
       panel.querySelector<HTMLInputElement>('#option-audio')?.addEventListener('change', update);
       panel.querySelector<HTMLInputElement>('#option-guide')?.addEventListener('change', update);
+      panel.querySelector<HTMLSelectElement>('#option-graphics')?.addEventListener('change', update);
       panel.querySelector<HTMLButtonElement>('.start-back')?.focus();
     };
 

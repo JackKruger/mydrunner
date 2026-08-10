@@ -4,6 +4,7 @@
 // pair used by the terrain shader.
 
 import * as THREE from 'three';
+import { activeQuality, buildSkyFragment, type QualitySettings } from './quality.js';
 
 const VERT = /* glsl */ `
 varying vec3 vDir;
@@ -46,9 +47,10 @@ float vnoise(vec2 p) {
 }
 float fbm5(vec2 p) {
   // 5 octaves for puffier, more detailed clouds than the terrain shader.
+  // CLOUD_OCTAVES comes from the quality prelude.
   float v = 0.0;
   float a = 0.5;
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < CLOUD_OCTAVES; i++) {
     v += a * vnoise(p);
     p *= 2.03;
     a *= 0.48;
@@ -76,9 +78,17 @@ void main() {
     uv += vec2(uTime * 0.012, uTime * 0.005);
 
     // Two scales of FBM: large puffy masses + fine wispy detail.
+#ifdef CLOUD_FINE
     float nLarge = fbm5(uv * 1.2);
     float nFine  = fbm5(uv * 3.5 + 17.0);
     float n = nLarge * 0.72 + nFine * 0.28;
+#else
+    // The fine layer doubles the sky's noise cost on its own and only adds
+    // wisps at the edges of masses the large layer already places. Scale the
+    // large layer by the same 0.72 + 0.28 the blend used, so cloud coverage
+    // lands on the same side of uCloudCover and the sky keeps its shape.
+    float n = fbm5(uv * 1.2);
+#endif
 
     float coverage = smoothstep(uCloudCover, uCloudCover + uCloudSoftness, n);
 
@@ -120,7 +130,7 @@ export class Sky {
   private mat: THREE.ShaderMaterial;
   private startMs: number;
 
-  constructor() {
+  constructor(quality: QualitySettings = activeQuality()) {
     this.mat = new THREE.ShaderMaterial({
       uniforms: {
         uHorizon: { value: new THREE.Color(0xd6e2ec) },
@@ -134,7 +144,7 @@ export class Sky {
         uHorizonWarm: { value: new THREE.Color(0xf0c88a) },
       },
       vertexShader: VERT,
-      fragmentShader: FRAG,
+      fragmentShader: buildSkyFragment(quality, FRAG),
       side: THREE.BackSide,
       depthWrite: false,
     });
@@ -142,6 +152,19 @@ export class Sky {
     const geo = new THREE.SphereGeometry(450, 24, 12);
     this.mesh = new THREE.Mesh(geo, this.mat);
     this.mesh.frustumCulled = false;
+    // Draw the dome AFTER the opaque world, not before it.
+    //
+    // Three sorts the opaque list by groupOrder, then renderOrder, then
+    // *material.id*, and only then by depth. Sky's material is constructed
+    // before every other world material, so with everything at the default
+    // renderOrder 0 the dome sorted first and painted a 40-noise-tap shader
+    // across the whole screen, which the terrain then overdrew. It already
+    // has depthWrite off and depthTest on, so ordering it last instead lets
+    // the depth buffer reject every hidden sky fragment. No visual change.
+    //
+    // 1 clears the default-0 world. WinchView's marker sits at 10 and is
+    // depthTest:false, so it still draws over everything either way.
+    this.mesh.renderOrder = 1;
     this.startMs = performance.now();
   }
 

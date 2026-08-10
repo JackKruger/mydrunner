@@ -28,3 +28,26 @@ test('client loads, connects, and renders snapshots', async ({ page }) => {
   // No script errors.
   expect(consoleErrors, consoleErrors.join('\n')).toEqual([]);
 });
+
+test('the reduced graphics tier compiles and renders', async ({ page }) => {
+  // The low tier rewrites three fragment shaders through the preprocessor,
+  // and a bad #ifdef or a non-constant loop bound produces a shader that
+  // fails to link — which three reports through console.error with the
+  // driver's info log rather than by throwing. So this assertion is the
+  // whole GLSL check for the tier: without it, the low path could be broken
+  // on every device and nothing in CI would notice.
+  const consoleErrors: string[] = [];
+  page.on('pageerror', (err) => consoleErrors.push(err.message));
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') consoleErrors.push(msg.text());
+  });
+
+  await page.goto('/?auto=1&q=low');
+
+  const hud = page.locator('#hud');
+  await expect(hud).toContainText('connected', { timeout: 10_000 });
+  await expect(hud).toContainText(/tick=\d+/);
+  await expect(page.locator('canvas').first()).toBeVisible();
+
+  expect(consoleErrors, consoleErrors.join('\n')).toEqual([]);
+});

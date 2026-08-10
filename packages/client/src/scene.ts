@@ -28,6 +28,10 @@ import { WinchView } from './winchView.js';
 
 const TWO_PI = Math.PI * 2;
 
+/** Minimap redraw interval. Not in constants.ts: nothing outside this file
+ *  reads it and it tunes a HUD repaint, not physics or networking. */
+const MINIMAP_INTERVAL_MS = 100;
+
 interface SnapshotEntry {
   recvAtMs: number;
   snap: WorldSnapshot;
@@ -138,6 +142,10 @@ export class Scene {
   private _localState: VehicleState | null = null;
   private _present = new Set<PlayerId>();
   private _remoteCollisionStates: RemoteCollisionState[] = [];
+  private _winchBuf: WinchLinkSnapshot[] = [];
+  private readonly _winchSourceVec = new THREE.Vector3();
+  private readonly _winchTargetVec = new THREE.Vector3();
+  private lastMinimapMs = 0;
   private readonly winchView = new WinchView();
   private readonly winchRaycaster = new THREE.Raycaster();
   private mapWorld: Maps.MapWorld | null = null;
@@ -704,21 +712,37 @@ export class Scene {
       mi += 1;
     }
     this._minimapBuf.length = mi;
-    this.minimap.update(this._minimapBuf);
+    // The minimap is a filtered canvas-2D blit plus per-player path work, and
+    // the browser recomposites that layer every time it is touched. A dot
+    // moving at 15 m/s crosses one minimap pixel in ~120 ms, so redrawing at
+    // display rate bought nothing; MINIMAP_INTERVAL_MS keeps it well ahead of
+    // what the eye can resolve at a fraction of the cost.
+    if (nowMs - this.lastMinimapMs >= MINIMAP_INTERVAL_MS) {
+      this.lastMinimapMs = nowMs;
+      this.minimap.update(this._minimapBuf);
+    }
 
-    const renderedLinks = [...(pair?.b.snap.winches ?? [])];
+    const renderedLinks = this._winchBuf;
+    renderedLinks.length = 0;
+    for (const entry of pair?.b.snap.winches ?? []) renderedLinks.push(entry);
     for (const link of this.localWinches) {
       if (!renderedLinks.some((entry) => entry.id === link.id)) renderedLinks.push(link);
     }
-    this.winchView.update(renderedLinks, (link, end) => this.winchEndpoint(link, end));
+    this.winchView.update(renderedLinks, this._winchEndpoint);
     this.view.render(this.camera);
   }
 
-  private winchEndpoint(link: WinchLinkSnapshot, end: 'source' | 'target'): THREE.Vector3 | null {
-    if (end === 'source') return this.vehicles.get(link.ownerId)?.recovery.fairlead.getWorldPosition(new THREE.Vector3()) ?? null;
-    if (link.target.kind === 'obstacle') return new THREE.Vector3(link.target.anchor.x, link.target.anchor.y, link.target.anchor.z);
-    return this.vehicles.get(link.target.playerId)?.recovery[link.target.point].getWorldPosition(new THREE.Vector3()) ?? null;
-  }
+  /** Bound once rather than re-created per frame at the WinchView call site.
+   *
+   *  Writes into one of two scratch vectors chosen by `end`: WinchView holds
+   *  the source and target simultaneously to lay out the cable, so a single
+   *  shared vector would make both ends the same point. */
+  private readonly _winchEndpoint = (link: WinchLinkSnapshot, end: 'source' | 'target'): THREE.Vector3 | null => {
+    const out = end === 'source' ? this._winchSourceVec : this._winchTargetVec;
+    if (end === 'source') return this.vehicles.get(link.ownerId)?.recovery.fairlead.getWorldPosition(out) ?? null;
+    if (link.target.kind === 'obstacle') return out.set(link.target.anchor.x, link.target.anchor.y, link.target.anchor.z);
+    return this.vehicles.get(link.target.playerId)?.recovery[link.target.point].getWorldPosition(out) ?? null;
+  };
 
   /** The TerrainData the world was built from, or null before the
    *  handshake. */

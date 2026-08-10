@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { activeQuality } from './quality.js';
 import {
   MAX_SAVED_BUILDS,
   VEHICLE_BASE_IDS,
@@ -59,6 +60,8 @@ export class WorkshopUI {
   private orbitYaw = 0.65;
   private orbitPitch = 0.24;
   private animationToken = 0;
+  private previewWidth = 0;
+  private previewHeight = 0;
 
   get isOpen(): boolean { return this.root !== null; }
 
@@ -327,8 +330,12 @@ export class WorkshopUI {
 
   private initPreview(): void {
     const canvas = this.previewCanvas!;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-    this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+    // A SECOND WebGL context, live at the same time as the game's. Follow
+    // the same tier as the main renderer rather than its own cap of 2 —
+    // uncapped it was rendering at a higher pixel ratio than the game.
+    const quality = activeQuality();
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality.antialias, alpha: true });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatioCap));
     this.previewScene = new THREE.Scene();
     this.previewCamera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
     this.previewScene.add(new THREE.HemisphereLight(0xe7f0ff, 0x342d24, 2.2));
@@ -347,9 +354,14 @@ export class WorkshopUI {
     const token = ++this.animationToken;
     const draw = (): void => {
       if (token !== this.animationToken || !this.renderer || !this.previewCamera || !this.previewScene) return;
+      // Resize only when it actually changed. getBoundingClientRect forces a
+      // layout flush, and this ran every frame beside the game's own loop.
       const rect = canvas.getBoundingClientRect();
       const width = Math.max(1, Math.round(rect.width)); const height = Math.max(1, Math.round(rect.height));
-      this.renderer.setSize(width, height, false); this.previewCamera.aspect = width / height; this.previewCamera.updateProjectionMatrix();
+      if (width !== this.previewWidth || height !== this.previewHeight) {
+        this.previewWidth = width; this.previewHeight = height;
+        this.renderer.setSize(width, height, false); this.previewCamera.aspect = width / height; this.previewCamera.updateProjectionMatrix();
+      }
       const radius = 7.2; const flat = Math.cos(this.orbitPitch) * radius;
       this.previewCamera.position.set(Math.sin(this.orbitYaw) * flat, 1.2 + Math.sin(this.orbitPitch) * radius, Math.cos(this.orbitYaw) * flat);
       this.previewCamera.lookAt(0, 0.25, 0); this.renderer.render(this.previewScene, this.previewCamera);

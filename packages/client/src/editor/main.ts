@@ -30,11 +30,20 @@ import {
 import { EditorUi } from './ui.js';
 import { writePreview } from '../previewHandoff.js';
 import { loadSavedJoin } from '../joinScreen.js';
+import { QUALITY, setQualityTier } from '../quality.js';
 
 const app = document.getElementById('app')!;
 const panelHost = document.getElementById('panel')!;
 
-const view = new WorldView(app);
+// The editor never renders the reduced tier. It exists to show the world as
+// the game ships it, so sculpting against a lower-detail ground would be the
+// same class of bug WorldView itself was extracted to prevent.
+//
+// setQualityTier is belt as well as braces: ObjectGhost builds Obstacles
+// directly, with no WorldView in the path, and the ghost must come out of the
+// same code as the object it previews.
+setQualityTier('high');
+const view = new WorldView(app, QUALITY.high);
 const camera = new FlyCamera(window.innerWidth / window.innerHeight, { x: 0, y: 60, z: 120 });
 const picker = new Picker();
 const cursor = new BrushCursor();

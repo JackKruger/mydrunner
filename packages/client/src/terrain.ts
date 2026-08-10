@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 import { makeTerrainMaterial, packSurfaces, surfaceTextureOf } from './terrainShader.js';
+import { activeQuality, type QualitySettings } from './quality.js';
 
 export class TerrainMesh {
   readonly mesh: THREE.Mesh;
@@ -18,7 +19,7 @@ export class TerrainMesh {
   private geometry: THREE.PlaneGeometry;
   private material: THREE.ShaderMaterial;
 
-  constructor(terrain: Physics.TerrainData) {
+  constructor(terrain: Physics.TerrainData, quality: QualitySettings = activeQuality()) {
     // Shares the TerrainData instance generated once in main.ts. The game
     // never mutates it after generation, so the HUD surface lookup, the
     // minimap and the owner-physics world can all read the same copy for the
@@ -45,7 +46,7 @@ export class TerrainMesh {
     // that is luck, and raycasting against a sculpted mesh needs it right.
     geo.computeBoundingSphere();
 
-    this.material = makeTerrainMaterial(this.terrain);
+    this.material = makeTerrainMaterial(this.terrain, quality);
     this.mesh = new THREE.Mesh(geo, this.material);
     this.mesh.receiveShadow = true;
     this.mesh.castShadow = false;

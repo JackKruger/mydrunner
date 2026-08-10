@@ -52,6 +52,7 @@ import { LocalSimulation } from './localSimulation.js';
 import { readPreview } from './previewHandoff.js';
 import { WorkshopUI } from './workshop.js';
 import { WinchController } from './winchController.js';
+import { activeQuality } from './quality.js';
 
 function getServerUrl(): string {
   const explicit = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -103,6 +104,21 @@ const frameDiag = {
   simulationMsSum: 0,
   simulationMsMax: 0,
 };
+/** Draw-call and triangle counts for the frame just rendered.
+ *
+ *  These are the numbers the batching work is judged by — "fewer draw calls"
+ *  is otherwise an assertion rather than a measurement. `renderer.info` is a
+ *  live snapshot of the last render, not a window average, so this reads the
+ *  most recent frame rather than a mean; the counts are static enough between
+ *  frames for that to be the useful figure.
+ *
+ *  Dev-only, like `window.__scene`: production bundles do not carry it. */
+function drawStatsSuffix(): string {
+  if (!import.meta.env.DEV) return '';
+  const info = scene.renderer.info.render;
+  return ` | draws=${info.calls} tris=${info.triangles}`;
+}
+
 function netDiagOnSnapshot(recvAtMs: number): void {
   if (netDiag.windowStart === 0) netDiag.windowStart = recvAtMs;
   if (netDiag.prevRecvMs > 0) {
@@ -129,7 +145,8 @@ function netDiagOnSnapshot(recvAtMs: number): void {
         `| fps=${fps.toFixed(0)} ` +
         `frame mean=${meanFrameMs.toFixed(1)}ms max=${frameDiag.totalMsMax.toFixed(1)}ms ` +
         `sim mean=${meanSimulationMs.toFixed(2)}ms max=${frameDiag.simulationMsMax.toFixed(2)}ms ` +
-        `render mean=${meanRenderMs.toFixed(2)}ms max=${frameDiag.renderMsMax.toFixed(2)}ms`,
+        `render mean=${meanRenderMs.toFixed(2)}ms max=${frameDiag.renderMsMax.toFixed(2)}ms` +
+        drawStatsSuffix(),
     );
     frameDiag.frames = 0;
     frameDiag.totalMsSum = 0;
@@ -475,10 +492,21 @@ async function start(): Promise<void> {
         scene.setWorld(stagedMenuWorld);
         const startedAtMs = performance.now();
         const animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        // Capped at the low tier. This renders the whole world behind the
+        // start menu, which on a phone means thermal throttling sets in
+        // before the player has pressed anything. It is a slow camera pan
+        // along a spline, so it survives a lower rate with nothing visible
+        // lost. Skipped entirely while the tab is hidden — rAF usually
+        // stops there anyway, but not on every browser.
+        const panoramaIntervalMs = 1000 / activeQuality().menuPanoramaHz;
+        let lastPanoramaMs = 0;
         const drawMenuPanorama = (nowMs: number): void => {
           if (!menuPanoramaRunning) return;
-          scene.renderMenuPanorama(nowMs, startedAtMs, animate);
           menuPanoramaFrame = requestAnimationFrame(drawMenuPanorama);
+          if (document.visibilityState === 'hidden') return;
+          if (nowMs - lastPanoramaMs < panoramaIntervalMs) return;
+          lastPanoramaMs = nowMs;
+          scene.renderMenuPanorama(nowMs, startedAtMs, animate);
         };
         menuPanoramaFrame = requestAnimationFrame(drawMenuPanorama);
       }

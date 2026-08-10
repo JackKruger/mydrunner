@@ -18,6 +18,7 @@
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
+import { activeQuality, buildTerrainFragment, type QualitySettings } from './quality.js';
 
 const VERT = /* glsl */ `
 varying vec3 vWorldPos;
@@ -46,6 +47,11 @@ uniform float uFogFar;
 uniform sampler2D uSurfaceMap;
 uniform float uTerrainSize;       // world size in m (square)
 
+#ifdef TERRAIN_DETAIL_FADE
+uniform float uDetailNear;        // m: full grain closer than this
+uniform float uDetailFar;         // m: no grain past this
+#endif
+
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
   p += dot(p, p + 45.32);
@@ -64,7 +70,9 @@ float vnoise(vec2 p) {
 float fbm(vec2 p) {
   float v = 0.0;
   float a = 0.5;
-  for (int i = 0; i < 3; i++) {
+  // TERRAIN_OCTAVES comes from the quality prelude. GLSL ES 1.00 needs a
+  // constant loop bound, which is why it is a #define and not a uniform.
+  for (int i = 0; i < TERRAIN_OCTAVES; i++) {
     v += a * vnoise(p);
     p *= 2.07;
     a *= 0.5;
@@ -72,7 +80,28 @@ float fbm(vec2 p) {
   return v;
 }
 
-vec3 surfaceColor(int s, vec2 p) {
+// DETAIL(p, d) is the high-frequency grain tap, faded out with distance.
+//
+// Most screen pixels in a driving game are distant ground, where pebble and
+// blade noise is well below a pixel — so skipping it there is the cheapest
+// large saving in this shader. It fades toward 0.5 (vnoise's mean) rather
+// than 0, so the ground does not change brightness as the band is crossed.
+//
+// Without TERRAIN_DETAIL_FADE the macro expands to a bare vnoise call, so the
+// high tier compiles the exact expression it always did — no mix, no branch,
+// no uniform read, and therefore no chance of a one-ulp difference showing up
+// in the committed desktop screenshots.
+#ifdef TERRAIN_DETAIL_FADE
+float detailNoise(vec2 p, float d) {
+  if (d <= 0.0) return 0.5;
+  return mix(0.5, vnoise(p), d);
+}
+#define DETAIL(pp, d) detailNoise((pp), (d))
+#else
+#define DETAIL(pp, d) vnoise(pp)
+#endif
+
+vec3 surfaceColor(int s, vec2 p, float detail) {
   // Branch IDs are interpolated from Physics.Surface rather than written
   // as literals: this function is the one surface lookup that CAN'T fold
   // into SURFACE_INFO (each branch is a procedural texture, not a
@@ -85,21 +114,21 @@ vec3 surfaceColor(int s, vec2 p) {
   if (s == ${Physics.Surface.Road}) {
     // Road: compacted gravel-dirt with streaks along the +X axis.
     float n = fbm(vec2(p.x * 0.4, p.y * 1.6));
-    float pebble = step(0.78, vnoise(p * 9.0));
+    float pebble = step(0.78, DETAIL(p * 9.0, detail));
     vec3 base = mix(vec3(0.42, 0.40, 0.38), vec3(0.60, 0.56, 0.50), n);
     return mix(base, vec3(0.30, 0.28, 0.25), pebble * 0.5);
   }
   if (s == ${Physics.Surface.Dirt}) {
     // Dirt: tan with brown variation.
     float n = vnoise(p * 0.6);
-    float g = vnoise(p * 7.0);
+    float g = DETAIL(p * 7.0, detail);
     vec3 base = mix(vec3(0.42, 0.30, 0.16), vec3(0.66, 0.52, 0.32), n);
     return base * (0.85 + g * 0.30);
   }
   if (s == ${Physics.Surface.Mud}) {
     // Mud: dark wet brown with broad streaks.
     float n = vnoise(p * 0.45);
-    float wet = vnoise(p * 1.7 + 13.0);
+    float wet = DETAIL(p * 1.7 + 13.0, detail);
     vec3 base = mix(vec3(0.18, 0.12, 0.07), vec3(0.36, 0.24, 0.14), n);
     return base * (0.85 + wet * 0.40);
   }
@@ -111,7 +140,7 @@ vec3 surfaceColor(int s, vec2 p) {
   if (s == ${Physics.Surface.Grass}) {
     // Grass: green with darker patches and the occasional yellow blade.
     float macro = vnoise(p * 0.5);
-    float blade = vnoise(p * 14.0);
+    float blade = DETAIL(p * 14.0, detail);
     float yellow = step(0.80, vnoise(p * 0.25 + 3.0));
     vec3 base = mix(vec3(0.16, 0.30, 0.11), vec3(0.32, 0.50, 0.20), macro);
     base = mix(base, vec3(0.55, 0.50, 0.20), yellow * 0.35);
@@ -119,7 +148,7 @@ vec3 surfaceColor(int s, vec2 p) {
   }
   if (s == ${Physics.Surface.Gravel}) {
     // Gravel: cool gray-brown with high-contrast pebble noise.
-    float pebble = vnoise(p * 9.0);
+    float pebble = DETAIL(p * 9.0, detail);
     float macro = vnoise(p * 0.7);
     vec3 base = mix(vec3(0.34, 0.32, 0.30), vec3(0.58, 0.52, 0.48), macro);
     return base * (0.50 + pebble * 0.95);
@@ -128,7 +157,7 @@ vec3 surfaceColor(int s, vec2 p) {
     // Concrete: dark asphalt-ish grey with very fine grain + slight
     // patch variation and a thin "expansion joint" line every few
     // metres so the eye reads it as paving rather than flat colour.
-    float grain = vnoise(p * 18.0);
+    float grain = DETAIL(p * 18.0, detail);
     float patches = vnoise(p * 0.5);
     vec3 base = mix(vec3(0.22, 0.22, 0.22), vec3(0.32, 0.31, 0.30), patches);
     base *= (0.88 + grain * 0.18);
@@ -141,11 +170,30 @@ vec3 surfaceColor(int s, vec2 p) {
 }
 
 void main() {
+  vec2 wp = vWorldPos.xz;
+
+  // Distance first, because everything below is gated on it. Same values as
+  // when this lived at the bottom — only the statement order moved.
+  float dist = length(vWorldPos - cameraPosition);
+  float fogFactor = clamp((dist - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);
+
+#ifdef TERRAIN_DETAIL_FADE
+  // Fully fogged ground contributes under 1.5% of its own colour, and
+  // uFogColor is the same constant the sky's horizon uses, so there is
+  // nothing to compute out here.
+  if (fogFactor > 0.985) {
+    gl_FragColor = vec4(uFogColor, 1.0);
+    return;
+  }
+  float detail = 1.0 - smoothstep(uDetailNear, uDetailFar, dist);
+#else
+  float detail = 1.0;
+#endif
+
   // Jitter the surface lookup with low-frequency noise so cell-aligned
   // boundaries (the heightfield grid) become irregular instead of grid
   // lines. ~3m of displacement at a noise scale that produces 5-8m
   // wavelengths breaks up the seams without losing the broad layout.
-  vec2 wp = vWorldPos.xz;
   float jx = fbm(wp * 0.18) - 0.5;
   float jz = fbm(wp * 0.18 + 71.0) - 0.5;
   vec2 lookup = wp + vec2(jx, jz) * 4.5;
@@ -156,34 +204,43 @@ void main() {
   float surfRaw = texture2D(uSurfaceMap, uv).r * 255.0;
   int sid = int(surfRaw + 0.5);
 
-  vec3 albedo = surfaceColor(sid, wp);
+  vec3 albedo = surfaceColor(sid, wp, detail);
 
+#ifdef TERRAIN_BLEND2
   // Soften the boundary further with a fine secondary jitter.
+  //
+  // The most expensive lines in this shader: an unconditional vnoise, plus a
+  // second dependent texture fetch and a whole second surfaceColor() on the
+  // third or so of fragments that pass the threshold — all to smooth surface
+  // edges. Dropped at low tier; the edges stay where the primary jitter put
+  // them, just slightly crisper.
   float blend = vnoise(wp * 1.3);
   if (blend > 0.65) {
     vec2 lookup2 = wp + vec2(jx, jz) * 7.0;
     vec2 uv2 = lookup2 / uTerrainSize + 0.5;
     int sid2 = int(texture2D(uSurfaceMap, uv2).r * 255.0 + 0.5);
     if (sid != sid2) {
-      vec3 a2 = surfaceColor(sid2, wp);
+      vec3 a2 = surfaceColor(sid2, wp, detail);
       albedo = mix(albedo, a2, smoothstep(0.65, 0.8, blend));
     }
   }
+#endif
 
   // Lambert + ambient.
   float diff = max(dot(normalize(vNormal), normalize(uSunDir)), 0.0);
   vec3 lit = albedo * (uAmbient + uSunColor * diff);
 
   // Linear fog matching THREE.Fog.
-  float dist = length(vWorldPos - cameraPosition);
-  float fogFactor = clamp((dist - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);
   vec3 final = mix(lit, uFogColor, fogFactor);
 
   gl_FragColor = vec4(final, 1.0);
 }
 `;
 
-export function makeTerrainMaterial(terrain: Physics.TerrainData): THREE.ShaderMaterial {
+export function makeTerrainMaterial(
+  terrain: Physics.TerrainData,
+  quality: QualitySettings = activeQuality(),
+): THREE.ShaderMaterial {
   const sunDir = new THREE.Vector3(50, 80, 30).normalize();
 
   // Pack the surface map into an 8-bit single-channel texture. Three.js
@@ -210,9 +267,13 @@ export function makeTerrainMaterial(terrain: Physics.TerrainData): THREE.ShaderM
       uFogFar: { value: 480 },
       uSurfaceMap: { value: surfaceMap },
       uTerrainSize: { value: terrain.size },
+      // Unused (and undeclared in the GLSL) unless the tier asks for the
+      // fade. Three ignores uniforms the program does not declare.
+      uDetailNear: { value: quality.terrainDetailNear },
+      uDetailFar: { value: quality.terrainDetailFar },
     },
     vertexShader: VERT,
-    fragmentShader: FRAG,
+    fragmentShader: buildTerrainFragment(quality, FRAG),
   });
 }
 
