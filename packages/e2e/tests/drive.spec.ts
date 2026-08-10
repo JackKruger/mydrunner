@@ -1,6 +1,6 @@
 // Driving tests. Trimmed to the two checks that have caught real bugs and
 // don't break every time we tune gameplay feel:
-//   - Rendered wheel rotation stability (caught the YXZ rotation-order bug
+//   - Rendered wheel rotation composition (caught the YXZ rotation-order bug
 //     that made wheels tumble when driving + steering).
 //   - Steer angle stability (caught the reconcile double-step bug that made
 //     the wheel angle flicker on every snapshot).
@@ -69,7 +69,7 @@ test.describe('driving', () => {
     expect(result.finalAngle).toBeGreaterThan(0.6);
   });
 
-  test('rendered wheel rotations are stable while driving + turning', async ({ page }) => {
+  test('rendered wheels use turn-then-roll rotation while driving + turning', async ({ page }) => {
     await page.goto('/?auto=1&q=low');
     await waitConnected(page);
     await page.waitForTimeout(800);
@@ -87,32 +87,42 @@ test.describe('driving', () => {
       return Math.abs(scene?.vehicles.get(scene.localId)?.wheels[0]?.rotation.y ?? 0);
     }), { timeout: 10_000 }).toBeGreaterThan(0.6);
 
-    const samples: { y: number; x: number }[] = await page.evaluate(async () => {
-      const w = window as unknown as { __scene?: any };
-      const s = w.__scene!;
-      const v = s.vehicles.get(s.localId)!;
-      const wheel = v.wheels[0]!;
-      const out: { y: number; x: number }[] = [];
-      for (let i = 0; i < 30; i++) {
-        out.push({ x: wheel.rotation.x, y: wheel.rotation.y });
-        await new Promise<void>((r) => setTimeout(r, 25));
-      }
-      return out;
+    const initialSpin = await page.evaluate(() => {
+      const w = window as unknown as {
+        __scene: { localId: string; vehicles: Map<string, { wheels: { rotation: { x: number } }[] }> };
+      };
+      const scene = w.__scene;
+      return scene.vehicles.get(scene.localId)!.wheels[0]!.rotation.x;
+    });
+    await expect.poll(() => page.evaluate((start) => {
+      const w = window as unknown as {
+        __scene: { localId: string; vehicles: Map<string, { wheels: { rotation: { x: number } }[] }> };
+      };
+      const scene = w.__scene;
+      const spin = scene.vehicles.get(scene.localId)!.wheels[0]!.rotation.x;
+      return Math.abs(Math.atan2(Math.sin(spin - start), Math.cos(spin - start)));
+    }, initialSpin), { timeout: 10_000 }).toBeGreaterThan(0.1);
+
+    const renderedWheel = await page.evaluate(() => {
+      const w = window as unknown as {
+        __scene: {
+          localId: string;
+          vehicles: Map<string, { wheels: { rotation: { order: string; y: number } }[] }>;
+        };
+      };
+      const scene = w.__scene;
+      const wheel = scene.vehicles.get(scene.localId)!.wheels[0]!;
+      return { order: wheel.rotation.order, steer: Math.abs(wheel.rotation.y) };
     });
 
     await page.keyboard.up('KeyA');
     await page.keyboard.up('KeyW');
 
-    // wheel.rotation.y (steer) should be near constant once at lock.
-    // The original YXZ-order bug made the steered wheel's rendered y
-    // jitter wildly while spinning - this is the signal that test
-    // protects against. The x-reversal check that used to live here
-    // was too sensitive to brief angVel reversals from wheel slip /
-    // suspension unload and wasn't catching anything else.
-    const yMean = samples.reduce((a, b) => a + b.y, 0) / samples.length;
-    const yVar = samples.reduce((a, b) => a + (b.y - yMean) ** 2, 0) / samples.length;
-    const yStdev = Math.sqrt(yVar);
-    expect(yStdev, `wheel steer stdev was ${yStdev.toFixed(4)}`).toBeLessThan(0.03);
+    // YXZ composes the wheel's steering rotation after its axle spin. The
+    // previous default XYZ order made a spinning, steered wheel tumble around
+    // the chassis axis even though both scalar angles looked reasonable.
+    expect(renderedWheel.order).toBe('YXZ');
+    expect(renderedWheel.steer).toBeGreaterThan(0.6);
   });
 
   test('holding A produces a stable left steer angle (no flicker)', async ({ page }) => {
