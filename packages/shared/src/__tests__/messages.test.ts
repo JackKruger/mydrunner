@@ -14,7 +14,7 @@ import {
   encode,
 } from '../net/messages.js';
 import { PROTOCOL_VERSION } from '../constants.js';
-import { createStockBuild, VEHICLE_PART_CATALOGS } from '../vehicleBuild.js';
+import { createStockBuild, VEHICLE_PART_CATALOGS, VEHICLE_PART_SLOTS } from '../vehicleBuild.js';
 import type { VehicleState } from '../types.js';
 
 const raw = (obj: unknown): Uint8Array => msgpackEncode(obj);
@@ -212,6 +212,42 @@ describe('decodeServer schema guard', () => {
       rearBodyId: 'dustback-rs.rearBody.option-b',
       rearLocker: true,
     };
+    const out = decodeServer(encode({
+      t: 'snapshot',
+      snap: { ...snap, players: [{ ...snap.players[0]!, build }] },
+    }));
+    if (out.t !== 'snapshot') throw new Error('expected snapshot');
+    expect(out.snap.players[0]!.build).toEqual(build);
+  });
+
+  // Every slot non-factory at once, so a slot silently dropped from the
+  // build tuple - or carried at the wrong index - shows up as a part that
+  // came back as its factory default. The per-slot tests above each leave
+  // most slots stock, where a misplaced index still decodes to the right
+  // value by luck.
+  it('carries a distinct non-factory choice in every part slot', () => {
+    const build = {
+      ...createStockBuild('ridgeback'),
+      suspensionId: 'ridgeback.suspension.flex-100',
+      axleId: 'ridgeback.axle.portal-240',
+      tireId: 'ridgeback.tire.xt-40-wide',
+      wheelId: 'ridgeback.wheel.beadlock-alloy',
+      frontBarId: 'ridgeback.frontBar.steel-winch',
+      winchId: 'ridgeback.winch.fitted',
+      snorkelId: 'ridgeback.snorkel.fitted',
+      roofId: 'ridgeback.roof.platform-awning',
+      rearBodyId: 'ridgeback.rearBody.option-b',
+      paintColor: '#0a7b3f',
+      paintFinish: 'matte' as const,
+      frontLocker: true,
+      rearLocker: true,
+    };
+    // Guard the fixture itself: if any of these became incompatible the
+    // normaliser would quietly reset them and the assertion below would
+    // still pass against a stock build.
+    for (const slot of VEHICLE_PART_SLOTS) {
+      expect(build[slot]).not.toMatch(/\.(factory|none)$/);
+    }
     const out = decodeServer(encode({
       t: 'snapshot',
       snap: { ...snap, players: [{ ...snap.players[0]!, build }] },

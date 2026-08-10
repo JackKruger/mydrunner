@@ -167,12 +167,18 @@ export interface VehicleState {
   damage: VehicleDamageState;
   // Per-wheel data for visual representation
   wheels: WheelState[];
-  /** Solid-axle state, ordered [front, rear]. Optional so the legacy
-   *  raycast vehicle (which has no axle DOFs) can still produce snapshots
-   *  this type accepts, and so old clients can ignore the field on
-   *  receive without crashing. The new visual layout (axle groups, beam
-   *  pose) reads these instead of the per-wheel suspensionLength. */
-  axles?: [AxleSnapWire, AxleSnapWire];
+  /** Solid-axle state, ordered [front, rear]. The visual layout (axle
+   *  groups, beam pose) reads these rather than the per-wheel
+   *  suspensionLength.
+   *
+   *  This was optional while the legacy raycast vehicle - which had no axle
+   *  DOFs - could still produce a snapshot. That vehicle is gone,
+   *  SolidAxleVehicle always fills the field, and the wire always carries
+   *  the four slots (packVehicle wrote zeroes when they were missing, so
+   *  "absent" decoded as a truck sitting at rideY 0 anyway). Required, so
+   *  consumers stop carrying dead `?? rest` fallbacks for a case that
+   *  cannot occur. */
+  axles: [AxleSnapWire, AxleSnapWire];
 }
 
 /** Wire shape of an axle's two DOFs. Matches Physics.AxleSnap from the

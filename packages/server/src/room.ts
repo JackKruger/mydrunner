@@ -538,9 +538,7 @@ function isFiniteVehicleState(v: VehicleState): boolean {
   for (const wheel of v.wheels) {
     numbers.push(wheel.steer, wheel.spin, wheel.suspensionLength, wheel.angVel);
   }
-  if (v.axles) {
-    for (const axle of v.axles) numbers.push(axle.rideY, axle.rollAngle);
-  }
+  for (const axle of v.axles) numbers.push(axle.rideY, axle.rollAngle);
   const damageValid = v.damage.body >= 0 && v.damage.body <= 1
     && v.damage.engine >= 0 && v.damage.engine <= 1
     && v.damage.steering >= 0 && v.damage.steering <= 1
