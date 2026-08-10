@@ -76,13 +76,21 @@ test.describe('driving', () => {
 
     await page.keyboard.down('KeyW');
     await page.keyboard.down('KeyA');
-    await page.waitForTimeout(1500);
+    // The software renderer used by CI can run at only a few frames per
+    // second. Wait for the rendered rack to reach lock rather than assuming
+    // a fixed wall-clock delay produced enough frames.
+    await expect.poll(() => page.evaluate(() => {
+      const w = window as unknown as {
+        __scene?: { localId: string; vehicles: Map<string, { wheels: { rotation: { y: number } }[] }> };
+      };
+      const scene = w.__scene;
+      return Math.abs(scene?.vehicles.get(scene.localId)?.wheels[0]?.rotation.y ?? 0);
+    }), { timeout: 10_000 }).toBeGreaterThan(0.6);
 
     const samples: { y: number; x: number }[] = await page.evaluate(async () => {
       const w = window as unknown as { __scene?: any };
       const s = w.__scene!;
-      const ids = [...s.vehicles.keys()];
-      const v = s.vehicles.get(ids[0])!;
+      const v = s.vehicles.get(s.localId)!;
       const wheel = v.wheels[0]!;
       const out: { y: number; x: number }[] = [];
       for (let i = 0; i < 30; i++) {
