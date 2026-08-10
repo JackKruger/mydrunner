@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import {
   Physics,
+  TUNING,
   createStockBuild,
   normalizeVehicleBaseId,
   normalizeVehicleBuild,
@@ -19,6 +20,7 @@ import {
   type VisualBox,
 } from './vehicleVisualLayout.js';
 import { buildSuspensionVisual, type SuspensionVisual } from './suspensionVisual.js';
+import { activeQuality } from './quality.js';
 
 type Extents = { x: number; y: number; z: number };
 
@@ -29,6 +31,7 @@ export interface CarMesh {
    *  posing the axle moves both wheels together - that's the solid-axle
    *  rigid-beam coupling. */
   wheels: THREE.Object3D[];
+  tires: TireDeformer[];
   /** [front, rear] axle groups. Each is positioned at chassis-local
    *  (0, centerLocalY + rideY, centerLocalZ) and rotated by rollAngle
    *  about chassis-forward (local +Z). Wheel meshes are children at
@@ -41,6 +44,12 @@ export interface CarMesh {
     front: THREE.Object3D;
     rear: THREE.Object3D;
   };
+}
+
+export interface TireDeformer {
+  mesh: THREE.Mesh;
+  /** Normal is expressed in the spinning wheel group's local frame. */
+  update(deflection: number, normal: THREE.Vector3): void;
 }
 
 interface Materials {
@@ -101,10 +110,79 @@ function makeMaterials(bodyColor: number, finish: PaintFinish = 'gloss'): Materi
   };
 }
 
-function buildSingleWheel(r: number, w: number, build?: VehicleBuild): THREE.Group {
-  const tireGeo = new THREE.CylinderGeometry(r, r, w, 20);
+function deformableTireMaterial(
+  r: number,
+  w: number,
+): { material: THREE.MeshStandardMaterial; depth: THREE.MeshDepthMaterial; distance: THREE.MeshDistanceMaterial; uniforms: { deflection: { value: number }; normal: { value: THREE.Vector3 }; shoulderBulge: { value: number } } } {
+  const uniforms = {
+    deflection: { value: 0 },
+    normal: { value: new THREE.Vector3(0, 1, 0) },
+    shoulderBulge: { value: 1 },
+  };
+  const vertexPatch = `
+    float tirePlane = -${r.toFixed(7)} + tireDeflection;
+    float tireAlongNormal = dot(transformed, tireContactNormal);
+    if (tireAlongNormal < tirePlane) {
+      transformed += tireContactNormal * (tirePlane - tireAlongNormal);
+    }
+    vec3 tireAxial = vec3(transformed.x, 0.0, 0.0);
+    vec3 tireRadial = transformed - tireAxial;
+    float tireRadialLen = length(tireRadial);
+    float tirePatch = smoothstep(-${r.toFixed(7)}, tirePlane + tireDeflection * 2.5, tireAlongNormal);
+    float tireShoulder = smoothstep(0.55, 1.0, abs(transformed.x) / max(0.001, ${Math.max(0.001, w * 0.5).toFixed(7)}));
+    if (tireRadialLen > 0.0001) {
+      transformed += tireRadial / tireRadialLen * tireDeflection * 0.16 * tireShoulderBulge * tirePatch * tireShoulder;
+    }
+  `;
+  const hook = (shader: THREE.WebGLProgramParametersWithUniforms, treadPattern = false): void => {
+    shader.uniforms.tireDeflection = uniforms.deflection;
+    shader.uniforms.tireContactNormal = uniforms.normal;
+    shader.uniforms.tireShoulderBulge = uniforms.shoulderBulge;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\nuniform float tireDeflection;\nuniform vec3 tireContactNormal;\nuniform float tireShoulderBulge;${treadPattern ? '\nvarying vec3 tireRestPosition;' : ''}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${treadPattern ? 'tireRestPosition = position;' : ''}\n${vertexPatch}`);
+    if (treadPattern) {
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 tireRestPosition;')
+        .replace('#include <color_fragment>', `#include <color_fragment>
+          float tireAngle = atan(tireRestPosition.z, tireRestPosition.y);
+          float tireBlocks = step(0.46, fract(tireAngle * 1.2732395 + tireRestPosition.x * 5.0));
+          diffuseColor.rgb *= mix(0.76, 1.08, tireBlocks);`);
+    }
+  };
+  const material = new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness: 0.95 });
+  material.onBeforeCompile = (shader) => hook(shader, true);
+  material.customProgramCacheKey = () => 'directional-tire-v1';
+  const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  depth.onBeforeCompile = (shader) => hook(shader);
+  depth.customProgramCacheKey = () => 'directional-tire-depth-v1';
+  const distance = new THREE.MeshDistanceMaterial();
+  distance.onBeforeCompile = (shader) => hook(shader);
+  distance.customProgramCacheKey = () => 'directional-tire-distance-v1';
+  return { material, depth, distance, uniforms };
+}
+
+function buildSingleWheel(r: number, w: number, build?: VehicleBuild): { group: THREE.Group; tire: TireDeformer } {
+  const tireGeo = new THREE.CylinderGeometry(r, r, w, activeQuality().tireSegments, 8);
   tireGeo.rotateZ(Math.PI / 2);
-  const tireMat = new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness: 0.95 });
+  // Round the carcass shoulders while retaining a broad tread belt.
+  const positions = tireGeo.getAttribute('position');
+  for (let i = 0; i < positions.count; i++) {
+    const x = positions.getX(i);
+    const y = positions.getY(i);
+    const z = positions.getZ(i);
+    const radial = Math.hypot(y, z);
+    if (radial < r * 0.75) continue; // keep cap interiors planar
+    const edge = Math.min(1, Math.abs(x) / Math.max(0.001, w * 0.5));
+    const shoulder = Math.max(0, (edge - 0.62) / 0.38);
+    const roundedRadius = r * (1 - 0.055 * shoulder * shoulder);
+    const scale = roundedRadius / Math.max(1e-6, radial);
+    positions.setY(i, y * scale);
+    positions.setZ(i, z * scale);
+  }
+  positions.needsUpdate = true;
+  tireGeo.computeVertexNormals();
+  const tireShader = deformableTireMaterial(r, w);
   const rimGeo = new THREE.CylinderGeometry(r * 0.6, r * 0.6, w + 0.02, 14);
   rimGeo.rotateZ(Math.PI / 2);
   const steel = build?.wheelId.endsWith('.classic-steel') || build?.wheelId.endsWith('.reinforced-rally-steel') || false;
@@ -119,12 +197,6 @@ function buildSingleWheel(r: number, w: number, build?: VehicleBuild): THREE.Gro
   hubGeo.rotateZ(Math.PI / 2);
   const hubMat = new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.8 });
   const spokeGeo = new THREE.BoxGeometry(w + 0.005, r * 0.55, 0.05);
-  // 0.02m radial height keeps lugs visible but avoids digging 2.8cm into
-  // the visual terrain at each contact (the old 0.04m protrusion caused
-  // 8 visible ground-penetration bumps per wheel revolution).
-  const treadGeo = new THREE.BoxGeometry(w * 0.85, 0.02, 0.07);
-  const treadMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.95 });
-
   const wheelGroup = new THREE.Group();
   // YXZ rotation order so the renderer composes turn-then-roll correctly:
   // rotation.y is applied AFTER rotation.x, meaning the wheel rolls around
@@ -132,8 +204,11 @@ function buildSingleWheel(r: number, w: number, build?: VehicleBuild): THREE.Gro
   // wheel that's also steered tumbles around the world X axis (visibly
   // shaking when driving + turning).
   wheelGroup.rotation.order = 'YXZ';
-  const tire = new THREE.Mesh(tireGeo, tireMat);
+  const tire = new THREE.Mesh(tireGeo, tireShader.material);
+  tire.name = 'wheel.deformableCarcass';
   tire.castShadow = true;
+  tire.customDepthMaterial = tireShader.depth;
+  tire.customDistanceMaterial = tireShader.distance;
   wheelGroup.add(tire);
   wheelGroup.add(new THREE.Mesh(rimGeo, rimMat));
   wheelGroup.add(new THREE.Mesh(hubGeo, hubMat));
@@ -150,15 +225,20 @@ function buildSingleWheel(r: number, w: number, build?: VehicleBuild): THREE.Gro
     spoke.rotation.x = (s / spokeCount) * Math.PI * 2;
     wheelGroup.add(spoke);
   }
-  const lugCount = 8;
-  for (let l = 0; l < lugCount; l++) {
-    const lug = new THREE.Mesh(treadGeo, treadMat);
-    const a = (l / lugCount) * Math.PI * 2;
-    lug.position.set(0, r * Math.cos(a) * 1.01, r * Math.sin(a) * 1.01);
-    lug.rotation.x = a;
-    wheelGroup.add(lug);
-  }
-  return wheelGroup;
+  let renderedDeflection = 0;
+  return {
+    group: wheelGroup,
+    tire: {
+      mesh: tire,
+      update(deflection, normal) {
+        const visualTarget = Math.max(0, deflection) * TUNING.tireVisualDeformationMult;
+        renderedDeflection += (visualTarget - renderedDeflection) * 0.24;
+        tireShader.uniforms.deflection.value = renderedDeflection;
+        tireShader.uniforms.normal.value.copy(normal).normalize();
+        tireShader.uniforms.shoulderBulge.value = TUNING.tireShoulderBulgeMult;
+      },
+    },
+  };
 }
 
 /** Build the two solid-axle assemblies and attach them to the chassis
@@ -172,10 +252,12 @@ function buildSingleWheel(r: number, w: number, build?: VehicleBuild): THREE.Gro
 function buildAxles(group: THREE.Group, build: VehicleBuild): {
   axles: [THREE.Group, THREE.Group];
   wheels: THREE.Object3D[];
+  tires: TireDeformer[];
 } {
   const geom = Physics.geomFor(build);
   const axles: [THREE.Group, THREE.Group] = [new THREE.Group(), new THREE.Group()];
   const wheels: THREE.Object3D[] = [];
+  const tires: TireDeformer[] = [];
 
   const beamMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.85 });
   const diffMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.75, metalness: 0.2 });
@@ -218,16 +300,18 @@ function buildAxles(group: THREE.Group, build: VehicleBuild): {
     const wheelXOffset = ag.trackHalf;
     const wheelW = geom.wheelWidth;
     for (let side = 0; side < 2; side++) {
-      const wheel = buildSingleWheel(geom.wheelRadius, wheelW, build);
+      const builtWheel = buildSingleWheel(geom.wheelRadius, wheelW, build);
+      const wheel = builtWheel.group;
       wheel.position.set(side === 0 ? -wheelXOffset : +wheelXOffset, 0, 0);
       axle.add(wheel);
       wheels.push(wheel);
+      tires.push(builtWheel.tire);
     }
 
     group.add(axle);
   }
 
-  return { axles, wheels };
+  return { axles, wheels, tires };
 }
 
 function buildLowerBodyAndFlares(
@@ -635,7 +719,7 @@ function addRallyAccessories(
     blade.rotation.x = -0.14;
     rear.add(blade);
   } else if (build.rearBodyId.endsWith('.option-b')) {
-    const spare = buildSingleWheel(Physics.geomFor(build).wheelRadius * 0.86, 0.14, build);
+    const spare = buildSingleWheel(Physics.geomFor(build).wheelRadius * 0.86, 0.14, build).group;
     spare.name = 'rally.internalSpare';
     spare.rotation.z = Math.PI / 2;
     spare.position.set(-ext.x * 0.22, ext.y * 0.30, 0.27);
@@ -780,7 +864,7 @@ function addAccessories(
       rear.add(carrier);
       const spareCount = heavy ? 2 : 1;
       for (let i = 0; i < spareCount; i++) {
-        const spare = buildSingleWheel(Physics.geomFor(build).wheelRadius * 0.92, 0.20, build);
+        const spare = buildSingleWheel(Physics.geomFor(build).wheelRadius * 0.92, 0.20, build).group;
         spare.name = `rear.spare.${i}`;
         spare.rotation.y = Math.PI / 2;
         spare.position.set((i - (spareCount - 1) / 2) * ext.x * 0.88, ext.y * 0.48, -0.25);
@@ -825,7 +909,7 @@ export function buildCarMesh(value: CarKind | VehicleBuild, _isLocal: boolean, _
   }
   addBaseCharacter(group, layout, mats, build);
   addAccessories(group, layout, mats, build);
-  const { axles, wheels } = buildAxles(group, build);
+  const { axles, wheels, tires } = buildAxles(group, build);
   const suspension = buildSuspensionVisual(group, axles, build);
   const points = Physics.geomFor(build).recoveryPoints;
   const recovery = {
@@ -838,7 +922,7 @@ export function buildCarMesh(value: CarKind | VehicleBuild, _isLocal: boolean, _
     recovery[key].position.set(points[key].x, points[key].y, points[key].z);
     group.add(recovery[key]);
   }
-  return { group, wheels, axles, suspension, recovery };
+  return { group, wheels, tires, axles, suspension, recovery };
 }
 
 /** Hash a player id string to a stable small int for color selection. */

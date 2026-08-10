@@ -518,6 +518,8 @@ function initialVehicleState(
       contact: false,
       suspensionLength: 0,
       angVel: 0,
+      tireDeflection: 0,
+      tireContactNormal: { x: 0, y: 1, z: 0 },
     })),
     axles: [
       { rideY: 0, rollAngle: 0 },

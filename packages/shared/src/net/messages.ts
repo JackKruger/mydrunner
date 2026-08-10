@@ -125,6 +125,8 @@ const SUSP_SCALE = 1000;     // mm
 const RIDEY_SCALE = 1000;    // mm
 const ROLL_SCALE = 1000;     // millirad
 const WHEEL_ANGVEL_SCALE = 100; // centirads/s; ±327 rad/s fits int16
+const TIRE_DEFLECTION_SCALE = 1000; // millimetres
+const NORMAL_SCALE = 32767;
 const TWO_PI = Math.PI * 2;
 
 function q(v: number, scale: number): number {
@@ -132,7 +134,7 @@ function q(v: number, scale: number): number {
 }
 
 const DAMAGE_SCALE = 1000;
-const VEHICLE_TUPLE_LENGTH = 47;
+const VEHICLE_TUPLE_LENGTH = 63;
 
 function packVehicle(v: VehicleState): number[] {
   const out: number[] = [
@@ -168,6 +170,10 @@ function packVehicle(v: VehicleState): number[] {
       w.contact ? 1 : 0,
       q(w.suspensionLength, SUSP_SCALE),
       q(w.angVel, WHEEL_ANGVEL_SCALE),
+      q(w.tireDeflection, TIRE_DEFLECTION_SCALE),
+      q(w.tireContactNormal.x, NORMAL_SCALE),
+      q(w.tireContactNormal.y, NORMAL_SCALE),
+      q(w.tireContactNormal.z, NORMAL_SCALE),
     );
   }
   for (const a of v.axles) {
@@ -215,12 +221,35 @@ function unpackVehicle(arr: unknown[]): VehicleState {
   }
   const wheels: WheelState[] = [];
   for (let w = 0; w < 4; w++) {
+    const steer = (arr[i++] as number) / STEER_SCALE;
+    const spin = (arr[i++] as number) / SPIN_SCALE;
+    const contactWire = arr[i++] as number;
+    const contact = contactWire === 1;
+    const suspensionLength = (arr[i++] as number) / SUSP_SCALE;
+    const angVel = (arr[i++] as number) / WHEEL_ANGVEL_SCALE;
+    const tireDeflectionWire = arr[i++] as number;
+    const nxWire = arr[i++] as number;
+    const nyWire = arr[i++] as number;
+    const nzWire = arr[i++] as number;
+    if (
+      ![0, 1].includes(contactWire)
+      || tireDeflectionWire < 0 || tireDeflectionWire > TIRE_DEFLECTION_SCALE
+      || Math.abs(nxWire) > NORMAL_SCALE || Math.abs(nyWire) > NORMAL_SCALE || Math.abs(nzWire) > NORMAL_SCALE
+      || nxWire * nxWire + nyWire * nyWire + nzWire * nzWire < 1
+    ) throw new Error('vehicle state: wheel contact/carcass out of range');
+    const tireDeflection = tireDeflectionWire / TIRE_DEFLECTION_SCALE;
+    let nx = nxWire / NORMAL_SCALE;
+    let ny = nyWire / NORMAL_SCALE;
+    let nz = nzWire / NORMAL_SCALE;
+    const normalLength = Math.hypot(nx, ny, nz);
+    if (normalLength > 1e-6) {
+      nx /= normalLength; ny /= normalLength; nz /= normalLength;
+    } else {
+      nx = 0; ny = 1; nz = 0;
+    }
     wheels.push({
-      steer: (arr[i++] as number) / STEER_SCALE,
-      spin: (arr[i++] as number) / SPIN_SCALE,
-      contact: (arr[i++] as number) === 1,
-      suspensionLength: (arr[i++] as number) / SUSP_SCALE,
-      angVel: (arr[i++] as number) / WHEEL_ANGVEL_SCALE,
+      steer, spin, contact, suspensionLength, angVel, tireDeflection,
+      tireContactNormal: { x: nx, y: ny, z: nz },
     });
   }
   const axles: VehicleState['axles'] = [
@@ -341,7 +370,7 @@ function unpackPlayer(arr: unknown[]): PlayerSnapshot {
 /** Per-player tuple layout version. Bump whenever packPlayer's fields or
  *  any nested positional tuple (including VehicleBuild) changes; a stale
  *  decoder would otherwise silently misread values by position. */
-export const SNAPSHOT_SCHEMA = 5;
+export const SNAPSHOT_SCHEMA = 6;
 
 const CABLE_SCALE = 1000;
 const TENSION_SCALE = 0.1;

@@ -197,6 +197,10 @@ export interface WheelState {
   /** Angular velocity of the wheel in rad/s. Relayed for remote wheel
    *  animation, audio/particles and collision presentation. */
   angVel: number;
+  /** Immediate radial carcass compression in metres. */
+  tireDeflection: number;
+  /** Contact normal in chassis-local coordinates. */
+  tireContactNormal: Vec3;
 }
 
 export type WinchMotor = -1 | 0 | 1; // out, hold, in

@@ -124,6 +124,7 @@ export function findSteepWheelContact(
   edgeAdvance: number,
   wheelForward: ContactVec3,
   queryGroups: number,
+  wheelAxle?: ContactVec3,
 ): SteepWheelContact | null {
   const start = previousCenter ?? currentCenter;
   const delta = sub(currentCenter, start);
@@ -185,7 +186,10 @@ export function findSteepWheelContact(
     // up/back corner normal is retained only when the same collider has a
     // validated reachable top; dropping it here creates a gap between the
     // wall contact ending and the downward ray moving over the edge.
-    if (normal.y >= maxSupportNormalY && climb === null) return true;
+    const pureSidewall = wheelAxle
+      ? Math.abs(dot(normal, normalize(wheelAxle))) >= 0.80
+      : false;
+    if (normal.y >= maxSupportNormalY && climb === null && !pureSidewall) return true;
     const penetration = Math.max(0, -contact.distance, sweptOvershoot);
     const proximity = Math.max(0, prediction - Math.max(0, contact.distance));
     const severity = penetration + proximity;

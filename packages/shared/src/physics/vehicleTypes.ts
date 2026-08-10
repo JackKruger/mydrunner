@@ -65,6 +65,12 @@ export interface WheelDebugTelemetry {
   driveTorque: number;
   brakeTorque: number;
   groundTorque: number;
+  contactZone: 'tread' | 'shoulder' | 'sidewall' | 'air';
+  treadFraction: number;
+  suspensionAxisAlignment: number;
+  carcassDeflection: number;
+  suspensionForce: number;
+  carcassForce: number;
 }
 
 export interface VehicleDebugTelemetry {

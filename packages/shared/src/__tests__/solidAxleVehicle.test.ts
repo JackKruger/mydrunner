@@ -113,11 +113,12 @@ function frontVisualTyreDistances(
   const basis = wheelBasis(forward, right, up, axle.rollAngle, 0);
   const wheelRotation = cylinderRotation(basis.axle);
   const wheelShape = new RAPIER.Cylinder(geom.wheelWidth / 2, geom.wheelRadius);
+  const wheelStates = vehicle.getState().wheels;
   const cr = Math.cos(axle.rollAngle);
   const sr = Math.sin(axle.rollAngle);
   const rayDirection = Physics.rotateVecByQuat({ x: 0, y: -1, z: 0 }, rotation);
 
-  return [-geom.front.trackHalf, geom.front.trackHalf].map((localX) => {
+  return [-geom.front.trackHalf, geom.front.trackHalf].map((localX, index) => {
     const localCenter = {
       x: localX * cr,
       y: geom.front.centerLocalY - geom.front.suspensionRestLength
@@ -163,7 +164,10 @@ function frontVisualTyreDistances(
       (center.x - origin.x) * rayDirection.x
       + (center.y - origin.y) * rayDirection.y
       + (center.z - origin.z) * rayDirection.z;
-    return hit.time_of_impact - visualTravel;
+    // The rendered carcass clamps its contact-facing vertices by this
+    // replicated amount; a rigid nominal-radius cylinder intentionally
+    // extends that far below the loaded tyre shape.
+    return hit.time_of_impact - visualTravel + (wheelStates[index]?.tireDeflection ?? 0);
   });
 }
 
@@ -360,6 +364,41 @@ describe('solid-axle vehicle: settling', () => {
     const committed = settleFromRoll(135, createStockBuild('ridgeback'), 1.5, 2.5);
     expect(committed.signedRollTravel).toBeGreaterThan(0.5);
     expect(committed.upY).toBeLessThan(0.5);
+  });
+
+  it.each([75, 85, 90])('keeps a %d° sidewall rest out of suspension and traction paths', (degrees) => {
+    const { world, vehicle } = makeWorld();
+    const roll = degrees * Math.PI / 180;
+    vehicle.body.setRotation({ x: 0, y: 0, z: Math.sin(roll / 2), w: Math.cos(roll / 2) }, true);
+    const axleAlignment = Math.abs(Math.sin(roll));
+    const radialAlignment = Math.sqrt(Math.max(0, 1 - axleAlignment * axleAlignment));
+    const centerRelativeY = -vehicle.geom.front.trackHalf * Math.sin(roll)
+      + (vehicle.geom.front.centerLocalY - vehicle.geom.front.suspensionRestLength) * Math.cos(roll);
+    const verticalExtent = vehicle.geom.wheelWidth * 0.5 * axleAlignment
+      + vehicle.geom.wheelRadius * radialAlignment;
+    vehicle.body.setTranslation({ x: 0, y: -centerRelativeY + verticalExtent + 0.005, z: 0 }, true);
+    vehicle.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1 });
+    let sidewallSamples = 0;
+    let maxSidewallDeflection = 0;
+    for (let tick = 0; tick < 240; tick++) {
+      world.step();
+      for (const wheel of vehicle.debugTelemetry().wheels) {
+        if (wheel.contactZone !== 'sidewall') continue;
+        sidewallSamples++;
+        maxSidewallDeflection = Math.max(maxSidewallDeflection, wheel.carcassDeflection);
+        expect(wheel.contact).toBe(false);
+        expect(wheel.suspensionCompression).toBe(0);
+        expect(wheel.suspensionForce).toBe(0);
+        expect(wheel.driveTorque).toBe(0);
+        expect(wheel.groundTorque).toBe(0);
+      }
+    }
+    expect(sidewallSamples).toBeGreaterThan(0);
+    expect(maxSidewallDeflection).toBeGreaterThan(0);
+    const q = vehicle.getState().rotation;
+    const upY = 1 - 2 * (q.x * q.x + q.z * q.z);
+    expect(Math.abs(upY)).toBeLessThan(0.5);
+    world.dispose();
   });
 
   it('makes a lifted roof-loaded build less stable than stock', () => {
@@ -676,6 +715,26 @@ describe('SolidAxleVehicle: live tire budget tuning', () => {
       expect(coefficientAt(0.5)).toBeCloseTo(baseline * 0.5, 5);
     } finally {
       TUNING.tireLongGripMult = saved;
+    }
+  });
+
+  it('changes the settled physical carcass deflection', () => {
+    const saved = TUNING.tireCarcassComplianceMult;
+    const deflectionAt = (mult: number): number => {
+      TUNING.tireCarcassComplianceMult = mult;
+      const { world, vehicle } = makeWorld();
+      settle(world, 120);
+      const loaded = vehicle.debugTelemetry().wheels.filter((wheel) => wheel.contact);
+      world.dispose();
+      if (loaded.length === 0) throw new Error('settled vehicle had no tire contact');
+      return loaded.reduce((sum, wheel) => sum + wheel.carcassDeflection, 0) / loaded.length;
+    };
+    try {
+      const firm = deflectionAt(0.5);
+      const soft = deflectionAt(2);
+      expect(soft).toBeGreaterThan(firm * 1.5);
+    } finally {
+      TUNING.tireCarcassComplianceMult = saved;
     }
   });
 });

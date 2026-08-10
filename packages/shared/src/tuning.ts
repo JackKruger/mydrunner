@@ -54,6 +54,18 @@ export interface Tuning {
   rearGripMult: number;
   /** Multiplier on the base longitudinal friction coefficient. */
   tireLongGripMult: number;
+  /** Multiplier on the tyre's nominal static deflection (higher is softer). */
+  tireCarcassComplianceMult: number;
+  /** Multiplier on carcass radial damping in the series suspension response. */
+  tireRadialDampingMult: number;
+  /** Multiplier on sidewall penetration correction rate and speed. */
+  tireSidewallCorrectionMult: number;
+  /** Multiplier on the fitted tyre's sidewall tangential friction. */
+  tireSidewallFrictionMult: number;
+  /** Render-only multiplier on contact-patch flattening. */
+  tireVisualDeformationMult: number;
+  /** Render-only multiplier on the volume-preserving shoulder bulge. */
+  tireShoulderBulgeMult: number;
   /** Lateral friction capacity relative to longitudinal capacity. */
   tireLateralGripRatio: number;
   tireSlipAnglePeak: number;
@@ -103,6 +115,12 @@ export const TUNING: Tuning = {
   frontGripMult: VEHICLE.frontGripMult,
   rearGripMult: VEHICLE.rearGripMult,
   tireLongGripMult: 1,
+  tireCarcassComplianceMult: 1,
+  tireRadialDampingMult: 1,
+  tireSidewallCorrectionMult: 1,
+  tireSidewallFrictionMult: 1,
+  tireVisualDeformationMult: 1,
+  tireShoulderBulgeMult: 1,
   tireLateralGripRatio: TIRE_LATERAL.longRatio,
   tireSlipAnglePeak: TIRE_LATERAL.slipAnglePeak,
   tireSlipAngleFalloff: TIRE_LATERAL.slipAngleFalloff,

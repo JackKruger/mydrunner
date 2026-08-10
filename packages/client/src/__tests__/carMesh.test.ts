@@ -3,6 +3,7 @@ import { VEHICLE_BASE_IDS, VEHICLE_PART_CATALOGS, createStockBuild } from '@mydr
 import * as THREE from 'three';
 import { buildCarMesh } from '../carMesh.js';
 import { disposeObject3D } from '../three/dispose.js';
+import { setQualityTier } from '../quality.js';
 
 describe('vehicle-specific fitted visuals', () => {
   it('builds every production base with four physics-driven wheel children', () => {
@@ -29,6 +30,46 @@ describe('vehicle-specific fitted visuals', () => {
     }
 
     disposeObject3D(car.group);
+  });
+
+  it('keeps rigid rims beside four deformable carcasses with shadow deformation', () => {
+    setQualityTier('high');
+    const car = buildCarMesh(createStockBuild('ridgeback'), true, 0);
+    expect(car.tires).toHaveLength(4);
+    for (const tire of car.tires) {
+      expect(tire.mesh.name).toBe('wheel.deformableCarcass');
+      expect(tire.mesh.customDepthMaterial).toBeInstanceOf(THREE.MeshDepthMaterial);
+      expect(tire.mesh.customDistanceMaterial).toBeInstanceOf(THREE.MeshDistanceMaterial);
+      tire.update(0.02, new THREE.Vector3(0, 1, 0));
+      const shader = {
+        uniforms: {},
+        vertexShader: '#include <common>\n#include <begin_vertex>',
+        fragmentShader: '#include <common>\n#include <color_fragment>',
+      };
+      (tire.mesh.material as THREE.MeshStandardMaterial).onBeforeCompile(
+        shader as never,
+        {} as THREE.WebGLRenderer,
+      );
+      expect(shader.vertexShader).toContain('tireContactNormal');
+      expect(shader.fragmentShader).toContain('tireBlocks');
+      const rim = tire.mesh.parent!.children.find((child) => child !== tire.mesh) as THREE.Mesh;
+      expect(rim.customDepthMaterial).toBeUndefined();
+    }
+    disposeObject3D(car.group);
+  });
+
+  it('retains tyre deformation geometry at low quality with fewer subdivisions', () => {
+    setQualityTier('high');
+    const high = buildCarMesh(createStockBuild('ridgeback'), true, 0);
+    const highVertices = high.tires[0]!.mesh.geometry.getAttribute('position').count;
+    disposeObject3D(high.group);
+    setQualityTier('low');
+    const low = buildCarMesh(createStockBuild('ridgeback'), true, 0);
+    const lowVertices = low.tires[0]!.mesh.geometry.getAttribute('position').count;
+    expect(lowVertices).toBeLessThan(highVertices);
+    expect(low.tires).toHaveLength(4);
+    disposeObject3D(low.group);
+    setQualityTier('high');
   });
 
   it('fits only accessories selected by the normalized build', () => {

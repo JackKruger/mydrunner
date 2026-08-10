@@ -52,6 +52,8 @@ function vehicle(speed = 5, contact = true): VehicleState {
       contact,
       suspensionLength: 0.3,
       angVel: 10,
+      tireDeflection: 0.015,
+      tireContactNormal: { x: 0, y: 1, z: 0 },
     })),
     axles: [{ rideY: 0, rollAngle: 0 }, { rideY: 0, rollAngle: 0 }],
   };

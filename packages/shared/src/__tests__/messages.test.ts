@@ -35,6 +35,8 @@ const vehicle: VehicleState = {
     contact: true,
     suspensionLength: 0.3,
     angVel: 0,
+    tireDeflection: 0.018,
+    tireContactNormal: { x: 0, y: 1, z: 0 },
   })),
   axles: [
     { rideY: 0, rollAngle: 0 },
@@ -82,6 +84,8 @@ describe('decodeClient validation', () => {
     if (msg.t !== 'state') throw new Error('expected state');
     expect(msg.update.seq).toBe(42);
     expect(msg.update.vehicle.position.x).toBeCloseTo(1.23, 2);
+    expect(msg.update.vehicle.wheels[0]!.tireDeflection).toBeCloseTo(0.018, 3);
+    expect(msg.update.vehicle.wheels[0]!.tireContactNormal).toEqual({ x: 0, y: 1, z: 0 });
   });
 
   it('round-trips winch runtime and snapshot links', () => {
@@ -134,6 +138,18 @@ describe('decodeClient validation', () => {
     expect(() => decodeClient(raw({ ...packed, V: tuple }))).toThrow();
     tuple[0] = Infinity;
     expect(() => decodeClient(raw({ ...packed, V: tuple }))).toThrow();
+  });
+
+  it('rejects wrong-length and out-of-range carcass wire values', () => {
+    const packed = msgpackDecode(encode({ t: 'state', update: { seq: 1, vehicle } })) as Record<string, unknown>;
+    const tuple = [...(packed.V as number[])];
+    expect(() => decodeClient(raw({ ...packed, V: tuple.slice(0, -1) }))).toThrow();
+    const negativeDeflection = [...tuple];
+    negativeDeflection[28] = -1;
+    expect(() => decodeClient(raw({ ...packed, V: negativeDeflection }))).toThrow();
+    const invalidNormal = [...tuple];
+    invalidNormal[29] = 40_000;
+    expect(() => decodeClient(raw({ ...packed, V: invalidNormal }))).toThrow();
   });
 
   it('rejects owner state with a missing or non-integer sequence', () => {

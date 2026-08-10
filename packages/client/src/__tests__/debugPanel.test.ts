@@ -35,6 +35,12 @@ function telemetry(): Physics.VehicleDebugTelemetry {
     driveTorque: 300,
     brakeTorque: 0,
     groundTorque: -250,
+    contactZone: contact ? 'tread' : 'air',
+    treadFraction: contact ? 1 : 0,
+    suspensionAxisAlignment: contact ? 1 : 0,
+    carcassDeflection: contact ? 0.016 : 0,
+    suspensionForce: contact ? 4_000 : 0,
+    carcassForce: contact ? 4_000 : 0,
   });
   return {
     position: { x: 0, y: 1, z: 0 },
@@ -113,6 +119,26 @@ describe('physics debug panel', () => {
     expect(TUNING.engineTorqueMult).toBe(1.25);
     expect(torqueRow?.title).toContain('engine torque');
     TUNING.engineTorqueMult = savedTorque;
+
+    const newTireControls = [
+      'carcassCompliance×',
+      'radialDamping×',
+      'sidewallCorrection×',
+      'sidewallFriction×',
+      'visualBagging×',
+      'shoulderBulge×',
+    ];
+    for (const label of newTireControls) {
+      expect(tuningRows.some((row) => row.querySelector('label')?.textContent === label)).toBe(true);
+    }
+    const baggingRow = tuningRows.find((row) => row.querySelector('label')?.textContent === 'visualBagging×');
+    const savedBagging = TUNING.tireVisualDeformationMult;
+    const baggingInput = baggingRow?.querySelector<HTMLInputElement>('input');
+    expect(baggingInput).toBeTruthy();
+    baggingInput!.value = '2.5';
+    baggingInput!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(TUNING.tireVisualDeformationMult).toBe(2.5);
+    TUNING.tireVisualDeformationMult = savedBagging;
 
     const record = document.querySelector<HTMLButtonElement>('#debug-record')!;
     record.click();

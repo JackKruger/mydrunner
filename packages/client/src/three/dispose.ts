@@ -17,6 +17,8 @@ export function disposeObject3D(root: THREE.Object3D): void {
     const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
     if (Array.isArray(mat)) for (const m of mat) disposeMaterial(m);
     else if (mat) disposeMaterial(mat);
+    mesh.customDepthMaterial?.dispose();
+    mesh.customDistanceMaterial?.dispose();
   });
 }
 

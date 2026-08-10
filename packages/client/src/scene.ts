@@ -16,7 +16,7 @@ import {
 } from '@mydrunner/shared';
 import type { WinchAttachTarget } from '@mydrunner/shared/net';
 import { RENDER_DELAY_MS } from './net.js';
-import { buildCarMesh, colorHash } from './carMesh.js';
+import { buildCarMesh, colorHash, type TireDeformer } from './carMesh.js';
 import type { SuspensionVisual } from './suspensionVisual.js';
 import { createNameplate, disposeNameplate } from './nameplate.js';
 import { VehicleEffects } from './vehicleEffects.js';
@@ -42,7 +42,10 @@ interface SnapshotEntry {
 interface LocalOverride {
   pos: { x: number; y: number; z: number };
   rot: { x: number; y: number; z: number; w: number };
-  wheels: { steer: number; spin: number; suspensionLength: number }[];
+  wheels: {
+    steer: number; spin: number; suspensionLength: number;
+    tireDeflection: number; tireContactNormal: { x: number; y: number; z: number };
+  }[];
   axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }];
 }
 
@@ -62,6 +65,7 @@ export interface RemoteCollisionState {
 interface VehicleVisual {
   group: THREE.Group;
   wheels: THREE.Object3D[];
+  tires: TireDeformer[];
   /** Solid-axle group meshes [front, rear]. Posed each frame from the
    *  vehicle's axle DOFs (rideY + rollAngle). Wheels are children of
    *  these groups, so moving the axle moves both wheels as one rigid
@@ -127,6 +131,8 @@ export class Scene {
   private _aMap = new Map<PlayerId, PlayerSnapshot>();
   private _qa = new THREE.Quaternion();
   private _qb = new THREE.Quaternion();
+  private _tireNormal = new THREE.Vector3();
+  private _tireInverseQ = new THREE.Quaternion();
   private _axleBuf: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }] = [
     { rideY: 0, rollAngle: 0 },
     { rideY: 0, rollAngle: 0 },
@@ -337,6 +343,7 @@ export class Scene {
     v = {
       group: built.group,
       wheels: built.wheels,
+      tires: built.tires,
       axles: built.axles,
       suspension: built.suspension,
       nameplate: null,
@@ -421,7 +428,10 @@ export class Scene {
   setLocalVehiclePose(
     pos: { x: number; y: number; z: number },
     rot: { x: number; y: number; z: number; w: number },
-    wheels: { steer: number; spin: number; suspensionLength: number }[],
+    wheels: {
+      steer: number; spin: number; suspensionLength: number;
+      tireDeflection: number; tireContactNormal: { x: number; y: number; z: number };
+    }[],
     axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }],
   ): void {
     this._localOverride = { pos, rot, wheels, axles };
@@ -496,11 +506,26 @@ export class Scene {
       // the same progressive travel that the tyre forces actually use.
       const steer = ws ? ws.steer : 0;
       wheel.rotation.set(ws ? ws.spin : 0, -steer, 0);
+      if (ws) this.deformTire(vis, i, ws.tireDeflection, ws.tireContactNormal);
     }
     this._localAxlesLast[0]!.rideY = ov.axles[0].rideY;
     this._localAxlesLast[0]!.rollAngle = ov.axles[0].rollAngle;
     this._localAxlesLast[1]!.rideY = ov.axles[1].rideY;
     this._localAxlesLast[1]!.rollAngle = ov.axles[1].rollAngle;
+  }
+
+  private deformTire(
+    vis: VehicleVisual,
+    index: number,
+    deflection: number,
+    chassisNormal: { x: number; y: number; z: number },
+  ): void {
+    this._tireNormal.set(chassisNormal.x, chassisNormal.y, chassisNormal.z);
+    this._tireInverseQ.copy(vis.axles[index < 2 ? 0 : 1]!.quaternion).invert();
+    this._tireNormal.applyQuaternion(this._tireInverseQ);
+    this._tireInverseQ.copy(vis.wheels[index]!.quaternion).invert();
+    this._tireNormal.applyQuaternion(this._tireInverseQ).normalize();
+    vis.tires[index]!.update(deflection, this._tireNormal);
   }
 
   /** Point the camera at whatever pose was just written, and publish the
@@ -584,6 +609,15 @@ export class Scene {
             spin = wa.spin + d * t;
           }
           wheel.rotation.set(spin, -steer, 0);
+          if (wa && wb) {
+            const nx = wa.tireContactNormal.x + (wb.tireContactNormal.x - wa.tireContactNormal.x) * t;
+            const ny = wa.tireContactNormal.y + (wb.tireContactNormal.y - wa.tireContactNormal.y) * t;
+            const nz = wa.tireContactNormal.z + (wb.tireContactNormal.z - wa.tireContactNormal.z) * t;
+            const nl = Math.hypot(nx, ny, nz) || 1;
+            this.deformTire(vis, i,
+              wa.tireDeflection + (wb.tireDeflection - wa.tireDeflection) * t,
+              { x: nx / nl, y: ny / nl, z: nz / nl });
+          }
         }
 
         if (isLocal) {

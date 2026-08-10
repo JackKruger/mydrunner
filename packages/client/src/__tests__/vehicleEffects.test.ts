@@ -46,6 +46,7 @@ function vehicleState(over: Partial<VehicleState> = {}): VehicleState {
     damage: { body: 1, engine: 1, steering: 1, stoppedCause: 'none' },
     wheels: [0, 1, 2, 3].map(() => ({
       steer: 0, spin: 0, contact: true, suspensionLength: 0.3, angVel: 0,
+      tireDeflection: 0.015, tireContactNormal: { x: 0, y: 1, z: 0 },
     })),
     axles: [{ rideY: 0, rollAngle: 0 }, { rideY: 0, rollAngle: 0 }],
     ...over,
@@ -113,7 +114,8 @@ describe('wheelspin ground response', () => {
     const geom = Physics.geomFor(BUILD);
     const mountY = Physics.restWheelPositions(BUILD)[0]!.y;
     const expectedY = g.position.y + mountY
-      - v.wheels[0]!.suspensionLength - geom.wheelRadius;
+      - v.wheels[0]!.suspensionLength
+      - (geom.wheelRadius - v.wheels[0]!.tireDeflection);
     expect(liveMeshes(fx)[0]!.position.y).toBeCloseTo(expectedY, 5);
     fx.dispose();
   });

@@ -231,10 +231,11 @@ export class TyreTrackSystem {
       }
 
       const mount = wheelPositions[i]!;
+      const loadedRadius = Math.max(0, geom.wheelRadius - wheel.tireDeflection);
       const localBottom = {
-        x: mount.x,
-        y: mount.y - wheel.suspensionLength - geom.wheelRadius,
-        z: mount.z,
+        x: mount.x - wheel.tireContactNormal.x * loadedRadius,
+        y: mount.y - wheel.suspensionLength - wheel.tireContactNormal.y * loadedRadius,
+        z: mount.z - wheel.tireContactNormal.z * loadedRadius,
       };
       const offset = Physics.rotateVecByQuat(localBottom, {
         x: q.x, y: q.y, z: q.z, w: q.w,

@@ -25,7 +25,10 @@ import type { RemoteCollisionState } from './scene.js';
 export interface LocalSimulationState {
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number; w: number };
-  wheels: { steer: number; spin: number; suspensionLength: number }[];
+  wheels: {
+    steer: number; spin: number; suspensionLength: number;
+    tireDeflection: number; tireContactNormal: { x: number; y: number; z: number };
+  }[];
   axles: [{ rideY: number; rollAngle: number }, { rideY: number; rollAngle: number }];
 }
 
@@ -34,10 +37,10 @@ function makeState(): LocalSimulationState {
     position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0, w: 1 },
     wheels: [
-      { steer: 0, spin: 0, suspensionLength: 0 },
-      { steer: 0, spin: 0, suspensionLength: 0 },
-      { steer: 0, spin: 0, suspensionLength: 0 },
-      { steer: 0, spin: 0, suspensionLength: 0 },
+      { steer: 0, spin: 0, suspensionLength: 0, tireDeflection: 0, tireContactNormal: { x: 0, y: 1, z: 0 } },
+      { steer: 0, spin: 0, suspensionLength: 0, tireDeflection: 0, tireContactNormal: { x: 0, y: 1, z: 0 } },
+      { steer: 0, spin: 0, suspensionLength: 0, tireDeflection: 0, tireContactNormal: { x: 0, y: 1, z: 0 } },
+      { steer: 0, spin: 0, suspensionLength: 0, tireDeflection: 0, tireContactNormal: { x: 0, y: 1, z: 0 } },
     ],
     axles: [
       { rideY: 0, rollAngle: 0 },
@@ -61,6 +64,10 @@ function copyVehicleState(from: VehicleState, to: LocalSimulationState): void {
     dst.steer = src.steer;
     dst.spin = src.spin;
     dst.suspensionLength = src.suspensionLength;
+    dst.tireDeflection = src.tireDeflection;
+    dst.tireContactNormal.x = src.tireContactNormal.x;
+    dst.tireContactNormal.y = src.tireContactNormal.y;
+    dst.tireContactNormal.z = src.tireContactNormal.z;
   }
   const axles = from.axles;
   to.axles[0].rideY = axles[0].rideY;
@@ -83,6 +90,10 @@ function copyState(from: LocalSimulationState, to: LocalSimulationState): void {
     dst.steer = src.steer;
     dst.spin = src.spin;
     dst.suspensionLength = src.suspensionLength;
+    dst.tireDeflection = src.tireDeflection;
+    dst.tireContactNormal.x = src.tireContactNormal.x;
+    dst.tireContactNormal.y = src.tireContactNormal.y;
+    dst.tireContactNormal.z = src.tireContactNormal.z;
   }
   for (let i = 0; i < 2; i++) {
     to.axles[i]!.rideY = from.axles[i]!.rideY;
@@ -411,6 +422,14 @@ export class LocalSimulation {
       ow.steer = aw.steer + (bw.steer - aw.steer) * t;
       ow.spin = aw.spin + (bw.spin - aw.spin) * t;
       ow.suspensionLength = aw.suspensionLength + (bw.suspensionLength - aw.suspensionLength) * t;
+      ow.tireDeflection = aw.tireDeflection + (bw.tireDeflection - aw.tireDeflection) * t;
+      const nx = aw.tireContactNormal.x + (bw.tireContactNormal.x - aw.tireContactNormal.x) * t;
+      const ny = aw.tireContactNormal.y + (bw.tireContactNormal.y - aw.tireContactNormal.y) * t;
+      const nz = aw.tireContactNormal.z + (bw.tireContactNormal.z - aw.tireContactNormal.z) * t;
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      ow.tireContactNormal.x = nx / nl;
+      ow.tireContactNormal.y = ny / nl;
+      ow.tireContactNormal.z = nz / nl;
     }
     for (let i = 0; i < 2; i++) {
       const aa = a.axles[i]!;

@@ -32,7 +32,7 @@ interface Slider {
 }
 
 const TUNING_GROUP_HELP = {
-  'TIRE + GRIP': 'Overall tire capacity, combined-force balance, and the shape of lateral breakaway.',
+  'TIRE + GRIP': 'Tyre carcass compliance and visuals, sidewall response, combined-force capacity, and lateral breakaway.',
   'TERRAIN + ROLLING': 'Surface friction and the separate energy loss caused by rolling through soft ground.',
   'SUSPENSION + ANTI-ROLL': 'Spring, damping, articulation, and cornering load-transfer controls.',
   'POWERTRAIN + STEERING': 'Brakes, engine output, off-throttle drag, steering rate, and high-speed steering authority.',
@@ -45,6 +45,12 @@ const SLIDERS: Slider[] = [
   { label: 'frontGripMult', description: 'Global multiplier on the front axle friction budget after tire and surface grip are resolved.', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.frontGripMult, set: (v) => (TUNING.frontGripMult = v) },
   { label: 'rearGripMult', description: 'Global multiplier on the rear axle friction budget. Lower values make power oversteer easier.', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.rearGripMult, set: (v) => (TUNING.rearGripMult = v) },
   { label: 'longGrip×', description: 'Multiplier on the base acceleration and braking grip available at every tire. Surface and axle grip still apply afterward.', min: 0.5, max: 1.5, step: 0.02, get: () => TUNING.tireLongGripMult, set: (v) => (TUNING.tireLongGripMult = v) },
+  { label: 'carcassCompliance×', description: 'Tyre softness relative to the fitted carcass preset. Higher values produce more physical deflection under the same load.', min: 0.4, max: 2.5, step: 0.05, get: () => TUNING.tireCarcassComplianceMult, set: (v) => (TUNING.tireCarcassComplianceMult = v) },
+  { label: 'radialDamping×', description: 'Carcass contribution to the series suspension damping. Raise it to settle tyre squash faster; excessive values can feel harsh.', min: 0.3, max: 2, step: 0.05, get: () => TUNING.tireRadialDampingMult, set: (v) => (TUNING.tireRadialDampingMult = v) },
+  { label: 'sidewallCorrection×', description: 'Rate and speed of the compliant sidewall collision constraint. Higher values push out of ledges and side-rest contacts more firmly.', min: 0.25, max: 2.5, step: 0.05, get: () => TUNING.tireSidewallCorrectionMult, set: (v) => (TUNING.tireSidewallCorrectionMult = v) },
+  { label: 'sidewallFriction×', description: 'Tangential scrub from a pure sidewall contact. It never adds drive or braking torque.', min: 0, max: 2.5, step: 0.05, get: () => TUNING.tireSidewallFrictionMult, set: (v) => (TUNING.tireSidewallFrictionMult = v) },
+  { label: 'visualBagging×', description: 'Render-only contact-patch flattening. Use this to inspect deformation without changing tyre physics.', min: 0, max: 3, step: 0.05, get: () => TUNING.tireVisualDeformationMult, set: (v) => (TUNING.tireVisualDeformationMult = v) },
+  { label: 'shoulderBulge×', description: 'Render-only shoulder expansion around a loaded patch. 0 leaves flattening on but removes the bulge.', min: 0, max: 3, step: 0.05, get: () => TUNING.tireShoulderBulgeMult, set: (v) => (TUNING.tireShoulderBulgeMult = v) },
   { label: 'lat/long grip', description: 'Lateral capacity relative to longitudinal capacity in the friction ellipse. Lower values make tires run out of cornering grip sooner.', min: 0.5, max: 1.4, step: 0.02, get: () => TUNING.tireLateralGripRatio, set: (v) => (TUNING.tireLateralGripRatio = v) },
   { label: 'latStiff', description: 'Lateral tire stiffness in force per metre/second of sideways patch velocity. Higher values give sharper turn-in.', min: 2000, max: 40000, step: 500, get: () => TUNING.tireLatStiffness, set: (v) => (TUNING.tireLatStiffness = v) },
   { label: 'slipPeak (°)', description: 'Slip angle where lateral grip begins falling. Higher values feel forgiving; lower values enter a slide earlier.', min: 4, max: 16, step: 0.25, get: () => TUNING.tireSlipAnglePeak * 180 / Math.PI, set: (v) => (TUNING.tireSlipAnglePeak = v * Math.PI / 180) },
@@ -322,6 +328,12 @@ function tuningRecord(): Record<string, RecordedValue> {
     tune_front_grip: TUNING.frontGripMult,
     tune_rear_grip: TUNING.rearGripMult,
     tune_long_grip_mult: TUNING.tireLongGripMult,
+    tune_carcass_compliance: TUNING.tireCarcassComplianceMult,
+    tune_radial_damping: TUNING.tireRadialDampingMult,
+    tune_sidewall_correction: TUNING.tireSidewallCorrectionMult,
+    tune_sidewall_friction: TUNING.tireSidewallFrictionMult,
+    tune_visual_bagging: TUNING.tireVisualDeformationMult,
+    tune_shoulder_bulge: TUNING.tireShoulderBulgeMult,
     tune_lateral_grip_ratio: TUNING.tireLateralGripRatio,
     tune_lat_stiffness: TUNING.tireLatStiffness,
     tune_slip_peak_deg: TUNING.tireSlipAnglePeak * 180 / Math.PI,
@@ -800,6 +812,13 @@ export const SURFACE_FRICTION = {
 //     maxArticulation: ${ax(AXLE.rear.maxArticulation, t.axleRear.maxArticulationMult, 2)}, // x${f(t.axleRear.maxArticulationMult, 2)}
 //   },
 export const TIRE_LONG_FRICTION = ${f(TIRE_LONG_FRICTION * t.tireLongGripMult)}; // x${f(t.tireLongGripMult, 2)}
+// TIRE_CARCASS live multipliers:
+//   static deflection / compliance x${f(t.tireCarcassComplianceMult, 2)}
+//   radial damping               x${f(t.tireRadialDampingMult, 2)}
+//   sidewall correction          x${f(t.tireSidewallCorrectionMult, 2)}
+//   sidewall friction            x${f(t.tireSidewallFrictionMult, 2)}
+// Render-only tyre deformation:
+//   visual bagging x${f(t.tireVisualDeformationMult, 2)}, shoulder bulge x${f(t.tireShoulderBulgeMult, 2)}
 // TIRE_LATERAL.*:
 //   stiffness: ${f(t.tireLatStiffness, 0)},
 //   longRatio: ${f(t.tireLateralGripRatio)},
@@ -944,8 +963,10 @@ export function updateVehicleDebug(telemetry: Physics.VehicleDebugTelemetry): vo
         : 0;
       data.textContent = wheel.contact
         ? `${(wheel.normalLoad / 1000).toFixed(1)}kN · μ${wheel.gripCoefficient.toFixed(2)} · use ${(wheel.utilization * 100).toFixed(0)}%\n`
-          + `slip ${(wheel.slipRatio * 100).toFixed(0)}% / ${(wheel.slipAngle * degrees).toFixed(1)}° · susp ${(wheel.suspensionCompression * 1000).toFixed(0)}mm (${travel.toFixed(0)}%)`
-        : `no contact · susp ${(wheel.suspensionCompression * 1000).toFixed(0)}mm (${travel.toFixed(0)}%)`;
+          + `${wheel.contactZone} ${(wheel.treadFraction * 100).toFixed(0)}% tread · axis ${(wheel.suspensionAxisAlignment * 100).toFixed(0)}%\n`
+          + `slip ${(wheel.slipRatio * 100).toFixed(0)}% / ${(wheel.slipAngle * degrees).toFixed(1)}° · susp ${(wheel.suspensionCompression * 1000).toFixed(0)}mm (${travel.toFixed(0)}%) · tyre ${(wheel.carcassDeflection * 1000).toFixed(0)}mm\n`
+          + `forces susp ${(wheel.suspensionForce / 1000).toFixed(1)} / carcass ${(wheel.carcassForce / 1000).toFixed(1)}kN`
+        : `${wheel.contactZone} · no tread contact · susp ${(wheel.suspensionCompression * 1000).toFixed(0)}mm (${travel.toFixed(0)}%) · tyre ${(wheel.carcassDeflection * 1000).toFixed(0)}mm`;
       data.style.whiteSpace = 'pre-line';
     }
     const driveWheel = telemetryEl.querySelector<HTMLElement>(`[data-drive-wheel="${index}"]`);

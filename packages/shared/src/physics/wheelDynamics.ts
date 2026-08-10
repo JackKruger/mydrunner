@@ -62,6 +62,15 @@ export interface WheelKinematic {
    *  Feeds both the grip multiplier and the extra rolling resistance of
    *  wading, and is read by the renderer for wheel spray. */
   waterDepth: number;
+  tireDeflection: number;
+  previousTireDeflection: number;
+  tireContactNormal: { x: number; y: number; z: number };
+  contactZone: 'tread' | 'shoulder' | 'sidewall' | 'air';
+  treadFraction: number;
+  suspensionAxisAlignment: number;
+  carcassForce: number;
+  suspensionForce: number;
+  tireDeflectionRate: number;
 }
 
 export function createWheelKinematic(): WheelKinematic {
@@ -89,6 +98,15 @@ export function createWheelKinematic(): WheelKinematic {
     supportColliderFriction: 1,
     volumeSupport: false,
     waterDepth: 0,
+    tireDeflection: 0,
+    previousTireDeflection: 0,
+    tireContactNormal: { x: 0, y: 1, z: 0 },
+    contactZone: 'air',
+    treadFraction: 0,
+    suspensionAxisAlignment: 0,
+    carcassForce: 0,
+    suspensionForce: 0,
+    tireDeflectionRate: 0,
   };
 }
 
@@ -112,6 +130,15 @@ export function resetWheelKinematic(w: WheelKinematic): void {
   w.supportColliderFriction = 1;
   w.volumeSupport = false;
   w.waterDepth = 0;
+  w.tireDeflection = 0;
+  w.previousTireDeflection = 0;
+  w.tireContactNormal = { x: 0, y: 1, z: 0 };
+  w.contactZone = 'air';
+  w.treadFraction = 0;
+  w.suspensionAxisAlignment = 0;
+  w.carcassForce = 0;
+  w.suspensionForce = 0;
+  w.tireDeflectionRate = 0;
 }
 
 /** Integrate wheel angular velocity by net torque this tick.

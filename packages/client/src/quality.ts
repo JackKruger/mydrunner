@@ -82,6 +82,8 @@ export interface QualitySettings {
   /** Full-resolution coil springs on the undercarriage: ~640 triangles each,
    *  four per truck, mostly hidden behind a wheel. */
   detailedSuspension: boolean;
+  /** Radial tyre segments; deformation stays enabled on both tiers. */
+  tireSegments: number;
   /** Menu panorama redraw rate. It renders the whole world behind the start
    *  menu, which on a phone is a thermal warm-up before the player has
    *  pressed anything. */
@@ -113,6 +115,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     particleInstancing: false,
     trackSegments: 8192,
     detailedSuspension: true,
+    tireSegments: 36,
     menuPanoramaHz: 60,
   },
   low: {
@@ -135,6 +138,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     particleInstancing: true,
     trackSegments: 2048,
     detailedSuspension: false,
+    tireSegments: 20,
     menuPanoramaHz: 20,
   },
 };

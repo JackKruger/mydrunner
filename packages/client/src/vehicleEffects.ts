@@ -215,10 +215,13 @@ export class VehicleEffects {
       const axle = i < 2 ? geom.front : geom.rear;
       const suspensionLength = vehicle.wheels[i]?.suspensionLength
         ?? axle.suspensionRestLength;
+      const wheel = vehicle.wheels[i];
+      const normal = wheel?.tireContactNormal ?? { x: 0, y: 1, z: 0 };
+      const loadedRadius = Math.max(0, geom.wheelRadius - (wheel?.tireDeflection ?? 0));
       const local = {
-        x: wp.x,
-        y: wp.y - suspensionLength - geom.wheelRadius,
-        z: wp.z,
+        x: wp.x - normal.x * loadedRadius,
+        y: wp.y - suspensionLength - normal.y * loadedRadius,
+        z: wp.z - normal.z * loadedRadius,
       };
       const v = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
       const wx = t.x + v.x;
@@ -304,10 +307,11 @@ export class VehicleEffects {
       // reach the ground-facing edge; using only a fraction of the radius
       // put the old plume visibly above the wheel centre.
       const wp = wheelPositions[i]!;
+      const loadedRadius = Math.max(0, geom.wheelRadius - wheelSnap.tireDeflection);
       const local = {
-        x: wp.x,
-        y: wp.y - wheelSnap.suspensionLength - geom.wheelRadius,
-        z: wp.z,
+        x: wp.x - wheelSnap.tireContactNormal.x * loadedRadius,
+        y: wp.y - wheelSnap.suspensionLength - wheelSnap.tireContactNormal.y * loadedRadius,
+        z: wp.z - wheelSnap.tireContactNormal.z * loadedRadius,
       };
       const v = Physics.rotateVecByQuat(local, { x: q.x, y: q.y, z: q.z, w: q.w });
       const wx = t.x + v.x;

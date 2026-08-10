@@ -41,6 +41,14 @@ describe('LocalSimulation', () => {
     const midpoint = { ...sim.state(0.5).position };
     expect(previous).toEqual(before);
     expect(midpoint.y).toBeCloseTo((previous.y + current.y) * 0.5, 6);
+    for (const wheel of sim.state(0.5).wheels) {
+      expect(wheel.tireDeflection).toBeGreaterThanOrEqual(0);
+      expect(Math.hypot(
+        wheel.tireContactNormal.x,
+        wheel.tireContactNormal.y,
+        wheel.tireContactNormal.z,
+      )).toBeCloseTo(1, 6);
+    }
     sim.dispose();
   });
 

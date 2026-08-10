@@ -37,7 +37,9 @@
 //     its chassis, axle track and suspension tune.
 // 12: workshop builds add selectable axle widths plus wider 37/40-inch
 //     tyre packages, changing both the build tuple and vehicle geometry.
-export const PROTOCOL_VERSION = 13;
+// 14: wheel snapshots add carcass deflection and a chassis-local contact
+//     normal; schema-5 clients would otherwise misread the 63-value tuple.
+export const PROTOCOL_VERSION = 14;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // The client-owned vehicle simulation advances at this fixed cadence.

@@ -1,5 +1,6 @@
 import { normalizeVehicleBaseId } from './types.js';
 import type { PaintFinish, VehicleBaseId, VehicleBuild } from './types.js';
+import type { TireCarcassSpec } from './physics/tireCarcass.js';
 
 export const VEHICLE_BUILD_VERSION = 1 as const;
 export const VEHICLE_BASE_IDS: readonly VehicleBaseId[] = [
@@ -30,7 +31,17 @@ export interface VehiclePartOption {
   description: string;
   priceLabel: 'FREE';
   massKg: number;
+  /** Present on every tyre catalogue entry and no other part type. */
+  tireCarcass?: TireCarcassSpec;
 }
+
+const ROAD_CARCASS: TireCarcassSpec = {
+  staticDeflectionRatio: 0.04, radialDampingRatio: 0.7,
+  sidewallDampingRatio: 0.5, sidewallFrictionRatio: 0.35,
+};
+const GRAVEL_CARCASS: TireCarcassSpec = { ...ROAD_CARCASS, staticDeflectionRatio: 0.06 };
+const MUD_CARCASS: TireCarcassSpec = { ...ROAD_CARCASS, staticDeflectionRatio: 0.08 };
+const EXTREME_CARCASS: TireCarcassSpec = { ...ROAD_CARCASS, staticDeflectionRatio: 0.10 };
 
 export interface VehiclePartCatalog {
   baseId: VehicleBaseId;
@@ -231,6 +242,17 @@ function part(
   };
 }
 
+function tirePart(
+  baseId: VehicleBaseId,
+  slug: string,
+  name: string,
+  description: string,
+  carcass: TireCarcassSpec,
+  massKg = 0,
+): VehiclePartOption {
+  return { ...part(baseId, 'tireId', slug, name, description, massKg), tireCarcass: carcass };
+}
+
 function makeCatalog(baseId: VehicleBaseId): VehiclePartCatalog {
   const tune = BASE_TUNING[baseId];
   if (baseId === 'dustback-rs') {
@@ -247,9 +269,9 @@ function makeCatalog(baseId: VehicleBaseId): VehiclePartCatalog {
         part(baseId, 'axleId', 'reinforced-wide', 'Reinforced wide axle', 'Maximum rally track with stronger housings.', 46),
       ],
       tires: [
-        part(baseId, 'tireId', 'factory', 'Period road tyres', 'Progressive road compound with modest loose-surface bite.'),
-        part(baseId, 'tireId', 'gravel-rally', 'Gravel rally tyres', 'Loose-surface tread with the strongest gravel grip.', 18),
-        part(baseId, 'tireId', 'tarmac-rally', 'Tarmac rally tyres', 'Firm sealed-stage compound with reduced mud and gravel grip.', 14),
+        tirePart(baseId, 'factory', 'Period road tyres', 'Progressive road compound with modest loose-surface bite.', ROAD_CARCASS),
+        tirePart(baseId, 'gravel-rally', 'Gravel rally tyres', 'Loose-surface tread with the strongest gravel grip.', GRAVEL_CARCASS, 18),
+        tirePart(baseId, 'tarmac-rally', 'Tarmac rally tyres', 'Firm sealed-stage compound with reduced mud and gravel grip.', ROAD_CARCASS, 14),
       ],
       wheels: [
         part(baseId, 'wheelId', 'factory', 'Factory steel wheels', 'Narrow original steel wheel package.'),
@@ -288,14 +310,14 @@ function makeCatalog(baseId: VehicleBaseId): VehiclePartCatalog {
       part(baseId, 'axleId', 'portal-240', '240 mm portal axles', 'Maximum track width plus 80 mm of portal ground clearance.', 92),
     ],
     tires: [
-      part(baseId, 'tireId', 'factory', 'Factory tyres', 'Quick steering and low rolling resistance.'),
-      part(baseId, 'tireId', 'at-33', '33-inch all-terrain', 'Predictable mixed-surface touring tyre.', 28),
-      part(baseId, 'tireId', 'at-33-wide', '33-inch wide all-terrain', 'A wider footprint for extra flotation and mixed-surface grip.', 38),
-      part(baseId, 'tireId', 'mt-33', '33-inch mud-terrain', 'More mud bite with extra road noise and drag.', 36),
-      part(baseId, 'tireId', 'mt-35', '35-inch mud-terrain', 'More clearance and mud grip; slower steering.', 52),
-      part(baseId, 'tireId', 'mt-35-wide', '35-inch wide mud-terrain', 'A broad 35-inch footprint for deep mud and soft terrain.', 64),
-      part(baseId, 'tireId', 'mt-37', '37-inch mud-terrain', 'Serious obstacle clearance and mud grip with heavier steering.', 78),
-      part(baseId, 'tireId', 'xt-40-wide', '40-inch wide extreme-terrain', 'The largest tyre package; built for portals and extreme trails.', 108),
+      tirePart(baseId, 'factory', 'Factory tyres', 'Quick steering and low rolling resistance.', ROAD_CARCASS),
+      tirePart(baseId, 'at-33', '33-inch all-terrain', 'Predictable mixed-surface touring tyre.', GRAVEL_CARCASS, 28),
+      tirePart(baseId, 'at-33-wide', '33-inch wide all-terrain', 'A wider footprint for extra flotation and mixed-surface grip.', GRAVEL_CARCASS, 38),
+      tirePart(baseId, 'mt-33', '33-inch mud-terrain', 'More mud bite with extra road noise and drag.', MUD_CARCASS, 36),
+      tirePart(baseId, 'mt-35', '35-inch mud-terrain', 'More clearance and mud grip; slower steering.', MUD_CARCASS, 52),
+      tirePart(baseId, 'mt-35-wide', '35-inch wide mud-terrain', 'A broad 35-inch footprint for deep mud and soft terrain.', MUD_CARCASS, 64),
+      tirePart(baseId, 'mt-37', '37-inch mud-terrain', 'Serious obstacle clearance and mud grip with heavier steering.', MUD_CARCASS, 78),
+      tirePart(baseId, 'xt-40-wide', '40-inch wide extreme-terrain', 'The largest tyre package; built for portals and extreme trails.', EXTREME_CARCASS, 108),
     ],
     wheels: [
       part(baseId, 'wheelId', 'factory', 'Factory wheels', 'Original lightweight wheel package.'),
@@ -536,6 +558,7 @@ export interface ResolvedVehicleSpec {
   track: number;
   wheelRadius: number;
   wheelWidth: number;
+  tireCarcass: TireCarcassSpec;
   massKg: number;
   powerMult: number;
   frontSpring: number;
@@ -588,6 +611,8 @@ function tireSizeLabel(tireId: string): string {
 export function resolveVehicleSpec(value: VehicleBuild | unknown): ResolvedVehicleSpec {
   const build = normalizeVehicleBuild(value);
   const base = BASE_TUNING[build.baseId];
+  const selectedTire = VEHICLE_PART_CATALOGS[build.baseId].tires.find((part) => part.id === build.tireId);
+  const tireCarcass = selectedTire?.tireCarcass ?? ROAD_CARCASS;
   const rally = build.baseId === 'dustback-rs';
   const rallyGravelSuspension = build.suspensionId.endsWith('.gravel-rally');
   const rallyTarmacSuspension = build.suspensionId.endsWith('.tarmac-sprint');
@@ -650,6 +675,7 @@ export function resolveVehicleSpec(value: VehicleBuild | unknown): ResolvedVehic
     track: base.track + axleTrackGain + (build.wheelId.endsWith('.beadlock-alloy') ? 0.06 : 0),
     wheelRadius,
     wheelWidth,
+    tireCarcass,
     massKg: base.massKg + extraMass,
     powerMult: base.powerMult,
     frontSpring: base.frontSpring * (rallyGravelSuspension ? 0.88 : rallyTarmacSuspension ? 1.22 : flex ? 0.9 : touring ? 0.96 : 1),
