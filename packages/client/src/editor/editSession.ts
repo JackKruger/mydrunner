@@ -28,6 +28,7 @@ interface Snapshot {
   added: Maps.PlacedObject[];
   removed: string[];
   spawns: Maps.SpawnPoint[];
+  markers: Maps.Marker[];
   includeProcedural: boolean;
   water: WaterSnapshot;
 }
@@ -46,6 +47,7 @@ export class EditSession {
   private added: Maps.PlacedObject[];
   private removed: string[];
   private spawns: Maps.SpawnPoint[];
+  private markers: Maps.Marker[];
   private includeProcedural: boolean;
   /** Authored water. Its own layer because water is absolute rather than
    *  a delta over the generated base — no rebase, no checksum, no drift. */
@@ -56,6 +58,7 @@ export class EditSession {
   }, MAX_HISTORY);
   private strokeOpen = false;
   private objectSeq = 0;
+  private markerSeq = 0;
   /** Held between previewId() and the addObject() that consumes it. */
   private pendingId: string | null = null;
 
@@ -66,6 +69,10 @@ export class EditSession {
     this.added = doc.objects.added.map((o) => ({ ...o }));
     this.removed = [...doc.objects.removed];
     this.spawns = doc.spawns.map((s) => ({ ...s }));
+    // Markers are copied, ids and all. Room leases a workshop bay by
+    // marker id, so re-minting them on open would break every client
+    // sitting in a bay on the map being edited.
+    this.markers = doc.markers.map((m) => ({ ...m }));
     this.includeProcedural = doc.objects.includeProcedural;
 
     const n = doc.base.resolution;
@@ -114,6 +121,10 @@ export class EditSession {
 
   get spawnPoints(): readonly Maps.SpawnPoint[] {
     return this.spawns;
+  }
+
+  get markerList(): readonly Maps.Marker[] {
+    return this.markers;
   }
 
   get canUndo(): boolean { return this.history.canUndo; }
@@ -241,23 +252,33 @@ export class EditSession {
     this.rebuildObjects();
   }
 
-  /** Delete every object and spawn whose anchor lies inside a brush.
-   *  The entire clear is one history entry, regardless of how many things
-   *  it catches. Returns counts so the panel can report exactly what went. */
-  deleteInRadius(x: number, z: number, radius: number): { objects: number; spawns: number } {
+  /** Delete every object, spawn and marker whose anchor lies inside a
+   *  brush. The entire clear is one history entry, regardless of how many
+   *  things it catches. Returns counts so the panel can report exactly
+   *  what went. */
+  deleteInRadius(
+    x: number,
+    z: number,
+    radius: number,
+  ): { objects: number; spawns: number; markers: number } {
     const within = Math.max(0, radius);
     const objectIds = this.world.obstacles
       .filter((o) => Math.hypot(o.x - x, o.z - z) <= within)
       .map((o) => o.id);
     const keptSpawns = this.spawns.filter((s) => Math.hypot(s.x - x, s.z - z) > within);
     const spawnCount = this.spawns.length - keptSpawns.length;
-    if (objectIds.length === 0 && spawnCount === 0) return { objects: 0, spawns: 0 };
+    const keptMarkers = this.markers.filter((m) => Math.hypot(m.x - x, m.z - z) > within);
+    const markerCount = this.markers.length - keptMarkers.length;
+    if (objectIds.length === 0 && spawnCount === 0 && markerCount === 0) {
+      return { objects: 0, spawns: 0, markers: 0 };
+    }
 
     this.pushUndo();
     for (const id of objectIds) this.removeObject(id);
     this.spawns = keptSpawns;
+    this.markers = keptMarkers;
     if (objectIds.length > 0) this.rebuildObjects();
-    return { objects: objectIds.length, spawns: spawnCount };
+    return { objects: objectIds.length, spawns: spawnCount, markers: markerCount };
   }
 
   private removeObject(id: string): void {
@@ -284,6 +305,62 @@ export class EditSession {
     this.pushUndo();
     this.spawns.splice(best, 1);
     return true;
+  }
+
+  /** Place a marker.
+   *
+   *  `y` is stamped from the ground under it. Nothing reads the field —
+   *  Room parks you at its own bilinear sample and the visual seats
+   *  itself the same way — but a document whose markers all claim y=0 on
+   *  a hillside map is a lie waiting to be believed by whatever reads it
+   *  next.
+   *
+   *  A blank label is numbered from the kind, so dropping three bays in a
+   *  row produces "Workshop bay 1/2/3" without a trip to the text field —
+   *  the label is what the in-game prompt shows. */
+  addMarker(m: {
+    kind: Maps.MarkerKind;
+    x: number;
+    z: number;
+    radius: number;
+    yaw: number;
+    label?: string;
+  }): Maps.Marker {
+    this.pushUndo();
+    const info = Maps.markerInfo(m.kind);
+    const ofKind = this.markers.filter((existing) => existing.kind === m.kind).length;
+    const marker: Maps.Marker = {
+      id: `m${this.markerSeq++}-${Date.now().toString(36)}`,
+      kind: m.kind,
+      x: m.x,
+      y: Physics.sampleHeightBilinear(this.world.terrain, m.x, m.z),
+      z: m.z,
+      radius: m.radius,
+      label: m.label?.trim() || `${info.labelPrefix} ${ofKind + 1}`,
+      // Written only for kinds that use it, matching how PlacedObject
+      // omits `length` on kinds with no run: a yaw nothing reads still
+      // changes the document's revision hash.
+      ...(info.usesYaw ? { yaw: m.yaw } : {}),
+    };
+    this.markers.push(marker);
+    return marker;
+  }
+
+  /** Remove the marker nearest (x, z) within `within` metres. Returns the
+   *  one that went, so the panel can name it. */
+  deleteMarkerNear(x: number, z: number, within: number): Maps.Marker | null {
+    let best = -1;
+    let bestD = Infinity;
+    this.markers.forEach((m, i) => {
+      // Its own radius counts: a 6 m checkpoint is a thing you click
+      // inside, not a point you have to hit within the brush.
+      const reach = Math.max(within, m.radius);
+      const d = Math.hypot(m.x - x, m.z - z);
+      if (d <= reach && d < bestD) { bestD = d; best = i; }
+    });
+    if (best < 0) return null;
+    this.pushUndo();
+    return this.markers.splice(best, 1)[0] ?? null;
   }
 
   /** Re-seat objects on the ground as it is now, and rebuild the list.
@@ -314,6 +391,7 @@ export class EditSession {
       added: this.added.map((o) => ({ ...o })),
       removed: [...this.removed],
       spawns: this.spawns.map((s) => ({ ...s })),
+      markers: this.markers.map((m) => ({ ...m })),
       includeProcedural: this.includeProcedural,
       water: this.water.snapshot(),
     };
@@ -325,6 +403,7 @@ export class EditSession {
     this.added = s.added.map((o) => ({ ...o }));
     this.removed = [...s.removed];
     this.spawns = s.spawns.map((x) => ({ ...x }));
+    this.markers = s.markers.map((m) => ({ ...m }));
     this.includeProcedural = s.includeProcedural;
     this.water.restore(s.water);
     this.recomposeAll();
@@ -384,6 +463,7 @@ export class EditSession {
         removed: [...this.removed],
       },
       spawns: this.spawns.map((s) => ({ ...s })),
+      markers: this.markers.map((m) => ({ ...m })),
       water: this.water.toDoc(),
     };
     if (opts.bake) {

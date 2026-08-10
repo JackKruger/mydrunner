@@ -16,6 +16,7 @@
 import { isObstacleKind, type ObstacleKind } from '../physics/objectCatalog.js';
 import type { Bog, PetrolStationPad, Road, Surface } from '../physics/terrain.js';
 import { canonicalStringify, fnv1a32 } from '../hash.js';
+import { isMarkerKind, type MarkerKind } from './markerCatalog.js';
 import type { TileGrid } from './tileGrid.js';
 
 /** Bumped when the document shape changes incompatibly. decodeMapDoc
@@ -52,14 +53,9 @@ export interface SpawnPoint {
   yaw: number;
 }
 
-export type MarkerKind = 'checkpoint' | 'objective' | 'cargoPickup' | 'cargoDropoff' | 'garageBay';
-
-export const MARKER_KINDS: readonly MarkerKind[] = [
-  'checkpoint', 'objective', 'cargoPickup', 'cargoDropoff', 'garageBay',
-];
-
-/** Authored gameplay marker. Carried and rendered, not yet simulated —
- *  these are data for the cargo objective on the roadmap. */
+/** Authored gameplay marker. `garageBay` is simulated (Room leases bays
+ *  by id); the rest are carried and drawn for the cargo objective on the
+ *  roadmap. What each kind means lives in MARKER_INFO. */
 export interface Marker {
   id: string;
   kind: MarkerKind;
@@ -332,8 +328,11 @@ function decodePlaced(v: unknown, path: string, formatVersion: number): PlacedOb
 
 function decodeMarker(v: unknown, path: string): Marker {
   const o = obj(v, path);
-  const kind = str(o.kind, `${path}.kind`) as MarkerKind;
-  if (!MARKER_KINDS.includes(kind)) fail(`${path}.kind`, 'is not a known marker kind');
+  // Validated against the catalog rather than a list kept here, for the
+  // same reason decodePlaced asks isObstacleKind: a copy at this line has
+  // no compile-time link to the union it is checking.
+  const kind = str(o.kind, `${path}.kind`);
+  if (!isMarkerKind(kind)) fail(`${path}.kind`, 'is not a known marker kind');
   return {
     id: str(o.id, `${path}.id`),
     kind,

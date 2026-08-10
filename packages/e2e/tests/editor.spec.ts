@@ -106,7 +106,7 @@ async function openEditor(page: Page): Promise<string[]> {
 test('editor loads the authored default map without errors', async ({ page }) => {
   const errors = await openEditor(page);
   await expect(page.locator('.ed-status')).toContainText('default map');
-  await expect(page.locator('.ed-section', { hasText: 'Map' }).locator('input').first())
+  await expect(page.locator('[data-section="Map"]').locator('input').first())
     .toHaveValue('procedural');
   const canvas = page.locator('#app canvas');
   const box = await canvas.boundingBox();
@@ -186,7 +186,7 @@ test('the delete tool can clear every item inside its radius', async ({ page }) 
   expect(placedIds).toHaveLength(2);
 
   await page.keyboard.press('Digit8');
-  await page.locator('.ed-section', { hasText: 'Delete' }).locator('select')
+  await page.locator('[data-section="Delete"]').locator('select')
     .selectOption('radius');
   await page.mouse.click(x, y);
   await expect(page.locator('.ed-status')).toContainText('deleted');
@@ -269,7 +269,7 @@ test('absolute placement puts the ghost and object base at an exact world Y', as
   const cy = box.y + box.height * 0.72;
   await page.mouse.move(cx, cy);
 
-  const object = page.locator('.ed-section', { hasText: 'Object' });
+  const object = page.locator('[data-section="Object"]');
   await object.locator('.ed-field', { hasText: 'placement' }).locator('select')
     .selectOption('absolute');
   await object.locator('input[type="number"]').fill('17.375');
@@ -299,7 +299,7 @@ test('absolute placement puts the ghost and object base at an exact world Y', as
 test('picking a kind reseeds its own dimensions and previews that kind', async ({ page }) => {
   await openEditor(page);
   await page.keyboard.press('Digit6');
-  await page.locator('.ed-section', { hasText: 'Object' })
+  await page.locator('[data-section="Object"]')
     .locator('.ed-field', { hasText: 'kind' }).locator('select')
     .selectOption('shippingContainer');
   const box = (await page.locator('#app canvas').boundingBox())!;
@@ -316,6 +316,58 @@ test('picking a kind reseeds its own dimensions and previews that kind', async (
   expect(state.objectKind).toBe('shippingContainer');
   expect(state.objectLength).toBeGreaterThan(4);
   expect((await ghostState(page)).visible).toBe(true);
+});
+
+test('the marker tool places a garage bay the document and the world carry', async ({ page }) => {
+  const errors = await openEditor(page);
+  const before = await page.evaluate(() => {
+    const w = window as unknown as { __editor: { doc(): { markers: unknown[] } } };
+    return w.__editor.doc().markers.length;
+  });
+
+  await page.keyboard.press('Digit0');
+  await expect(page.locator('[data-section="Marker"]')).toBeVisible();
+  const box = (await page.locator('#app canvas').boundingBox())!;
+  const cx = box.x + box.width * 0.4;
+  const cy = box.y + box.height * 0.72;
+  await page.mouse.move(cx, cy);
+  // Aimed with the same gesture an object is, because a bay is a parked
+  // pose rather than a point.
+  for (let i = 0; i < 3; i++) await page.keyboard.press('BracketRight');
+  await page.mouse.click(cx, cy);
+  await expect(page.locator('.ed-status')).toContainText('Workshop bay');
+
+  const placed = await page.evaluate(() => {
+    const w = window as unknown as {
+      __editor: { doc(): { markers: Array<Record<string, unknown>> } };
+    };
+    const markers = w.__editor.doc().markers;
+    return { count: markers.length, last: markers.at(-1)! };
+  });
+  expect(placed.count).toBe(before + 1);
+  expect(placed.last.kind).toBe('garageBay');
+  expect(placed.last.yaw as number).toBeGreaterThan(0);
+  expect(placed.last.radius).toBe(1.65);
+
+  // And it is on screen: the bay paints itself from the marker, so a
+  // placement that only reached the document would be invisible until
+  // the map was reloaded.
+  const drawn = await page.evaluate(() => {
+    const w = window as unknown as {
+      __editor: { view: { markerGroup: { children: unknown[] } | null } };
+    };
+    return w.__editor.view.markerGroup?.children.length ?? 0;
+  });
+  // One bay group and one trigger ring per marker, the new one included.
+  expect(drawn).toBe((before + 1) * 2);
+
+  await page.keyboard.press('KeyZ');
+  const afterUndo = await page.evaluate(() => {
+    const w = window as unknown as { __editor: { doc(): { markers: unknown[] } } };
+    return w.__editor.doc().markers.length;
+  });
+  expect(afterUndo).toBe(before);
+  expect(errors, errors.join('\n')).toEqual([]);
 });
 
 test('the paint tool writes a surface the document carries', async ({ page }) => {
@@ -367,7 +419,7 @@ test('@editor-shots capture', async ({ page }) => {
   // Paint deep mud, not the default dirt: painting dirt onto dirt is a
   // real edit that the document records and the image cannot show.
   await page.keyboard.press('Digit5');
-  await page.locator('.ed-section', { hasText: 'Surface' }).locator('select').selectOption(
+  await page.locator('[data-section="Surface"]').locator('select').selectOption(
     String(3 /* Surface.DeepMud */),
   );
   await stroke(page, { x: cx, y: cy + 40 }, { x: cx + 70, y: cy + 40 });
@@ -380,7 +432,7 @@ test('@editor-shots capture', async ({ page }) => {
   // "is the ghost the same shape as what lands" is a question only a
   // picture answers.
   await page.keyboard.press('Digit6');
-  await page.locator('.ed-section', { hasText: 'Object' })
+  await page.locator('[data-section="Object"]')
     .locator('.ed-field', { hasText: 'kind' }).locator('select')
     .selectOption('shippingContainer');
   // Clear of the crater the sculpt above dug, and far enough up the frame
@@ -395,4 +447,23 @@ test('@editor-shots capture', async ({ page }) => {
     }))
     .toBe(true);
   await page.screenshot({ path: `${SHOT_DIR}/04-object-ghost.png` });
+
+  // The garage bays under the station canopy, close up. The bay is the
+  // one marker the game simulates, and its whole reason for existing is
+  // that a player can see where to stop — so "does it read as a place to
+  // park" is a question only a picture answers. Flown in rather than
+  // captured from the opening 140 m: a 3 m × 5 m bay is a few pixels
+  // from up there.
+  await page.keyboard.press('Digit0');
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __editor: { camera: { lookAtPoint(x: number, y: number, z: number, d?: number): void } };
+    };
+    // The three shipped bays sit at x -58/-55/-52, z -28.5. Framed from
+    // close in: any further back and the fuel canopy and the office are
+    // between the camera and the thing the shot is of.
+    w.__editor.camera.lookAtPoint(-55, 0.8, -27.5, 12);
+  });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${SHOT_DIR}/05-garage-bays.png` });
 });

@@ -153,4 +153,38 @@ test.describe('@screenshot', () => {
     await page.waitForTimeout(400);
     await page.screenshot({ path: join(outDir, '34-bike-drowned.png') });
   });
+
+  // The workshop bays. Until markers.ts existed, the only thing on the
+  // ground here was three white stripes hardcoded into the petrol
+  // station's mesh, which lined up with the bay triggers by coincidence
+  // and told a player nothing about which way to face. These frames are
+  // the check that a bay now reads as a bay from the seat.
+  test('the garage bays you park in', async ({ page }) => {
+    test.setTimeout(180_000);
+    const outDir = join(process.cwd(), 'screenshots');
+    mkdirSync(outDir, { recursive: true });
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/?auto=1');
+    await expect(page.locator('#hud')).toContainText('connected', { timeout: 10_000 });
+    await page.waitForTimeout(800);
+
+    // The three shipped bays sit at x -58/-55/-52, z -28.5, facing -Z
+    // into the workshop. Viewed from the open side, which is the side you
+    // drive in from.
+    await page.evaluate(() => {
+      const w = window as unknown as { __scene: { setReviewView: (p: unknown, l: unknown) => void } };
+      w.__scene.setReviewView({ x: -55, y: 7, z: -12 }, { x: -55, y: 0.5, z: -29 });
+    });
+    await page.waitForTimeout(700);
+    await page.screenshot({ path: join(outDir, '40-garage-bays.png') });
+
+    // Roughly where a driver's eye would be lining one up.
+    await page.evaluate(() => {
+      const w = window as unknown as { __scene: { setReviewView: (p: unknown, l: unknown) => void } };
+      w.__scene.setReviewView({ x: -58, y: 2.4, z: -20 }, { x: -58, y: 0.6, z: -30 });
+    });
+    await page.waitForTimeout(700);
+    await page.screenshot({ path: join(outDir, '41-garage-bay-approach.png') });
+  });
 });

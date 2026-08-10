@@ -40,6 +40,10 @@
 // 14: wheel snapshots add carcass deflection and a chassis-local contact
 //     normal; schema-5 clients would otherwise misread the 63-value tuple.
 // 15: sparse session-rut stamps, authoritative batches, and chunked tile sync.
+// 16: combined-slip tyre curves, physical differentials, adjustable tyre
+//     pressure and soft-ground sinkage. No wire layout change, but two
+//     builds either side of it disagree about how a truck behaves, which
+//     is exactly what this guard exists to stop.
 export const PROTOCOL_VERSION = 16;
 
 // Tick rates and timing - all simulation runs at fixed step.

@@ -45,6 +45,11 @@ describe('production client world', () => {
     world.dispose();
   });
 
+  // 16 vehicles x 180 steps of real Rapier is the heaviest test in the suite,
+  // and the compliant tyre model made preStep ~50% dearer. It runs in ~1.7s
+  // locally but CI shares a runner between three packages' vitest pools, where
+  // it overran the 5s default. Explicit timeout rather than a thinner grid:
+  // the whole point is a full spawn grid settling against its neighbours.
   it('settles a full grid without falling through or pushing neighbours', () => {
     const { map, world } = makeWorld();
     spawnGrid(map, world);
@@ -64,7 +69,7 @@ describe('production client world', () => {
       expect(Math.hypot(s.linVel.x, s.linVel.y, s.linVel.z), `${id} still moving`).toBeLessThan(0.5);
     }
     world.dispose();
-  });
+  }, 30000);
 
   it('keeps the mountain trail climbing and within its current grade envelope', () => {
     const { world } = makeWorld();

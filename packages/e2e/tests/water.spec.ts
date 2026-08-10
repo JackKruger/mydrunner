@@ -82,17 +82,44 @@ test.describe('water', () => {
     await waitConnected(page);
     await page.waitForTimeout(500);
 
-    // The ford crosses the main road ~95 m along from the spawn grid.
-    await page.keyboard.down('KeyW');
-    await expect.poll(async () => page.evaluate(() => {
-      const w = window as unknown as { __scene?: any };
-      return w.__scene?.localPosition?.()?.x ?? -999;
-    }), { timeout: 30_000 }).toBeGreaterThan(-60);
+    // The river runs north-south down the map's eastern side and crosses the
+    // main road ~190 m along from the spawn grid, and at road speed the truck
+    // is through the crossing in about a second. Watch for the readout from
+    // inside the page rather than sampling it: an assertion poll fast enough
+    // to catch a one-second window competes with rAF for the main thread,
+    // which starves the sim of steps and leaves the truck short of the water.
+    await page.evaluate(() => {
+      const el = document.querySelector('#hud-surface');
+      const w = window as unknown as { __sawWater?: boolean };
+      w.__sawWater = false;
+      if (!el) return;
+      const check = (): void => {
+        if (/water \d/.test(el.textContent ?? '')) w.__sawWater = true;
+      };
+      new MutationObserver(check).observe(el, { childList: true, characterData: true, subtree: true });
+      check();
+    });
 
-    // Somewhere in the crossing the HUD's surface line should carry a
-    // depth readout — the thing a player reads before committing.
-    await expect(page.locator('#hud-surface')).toContainText(/water \d/, { timeout: 20_000 });
+    // Pinned throttle is not the way there either: the truck tops 80 km/h
+    // within a few seconds, launches off the road's crown and beaches in
+    // scenery well short of the river. Lift off periodically so it stays
+    // around road speed and tracks the bends.
+    let sawWater = false;
+    const deadline = Date.now() + 75_000;
+    await page.keyboard.down('KeyW');
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(1_200);
+      sawWater = await page.evaluate(
+        () => (window as unknown as { __sawWater?: boolean }).__sawWater === true,
+      );
+      if (sawWater) break;
+      await page.keyboard.up('KeyW');
+      await page.waitForTimeout(600);
+      await page.keyboard.down('KeyW');
+    }
     await page.keyboard.up('KeyW');
+
+    expect(sawWater, 'never reached the ford').toBe(true);
 
     expect(errors, errors.join('\n')).toEqual([]);
   });

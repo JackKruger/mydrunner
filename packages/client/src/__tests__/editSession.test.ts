@@ -210,7 +210,7 @@ describe('objects', () => {
     s.addSpawn({ x: 3, z: -3, yaw: 1 });
     s.addSpawn({ x: -20, z: -20, yaw: 2 });
 
-    expect(s.deleteInRadius(0, 0, 6)).toEqual({ objects: 2, spawns: 2 });
+    expect(s.deleteInRadius(0, 0, 6)).toEqual({ objects: 2, spawns: 2, markers: 0 });
     expect(s.world.obstacles.map((o) => o.id)).toEqual([far.id]);
     expect(s.spawnPoints).toEqual([{ x: -20, z: -20, yaw: 2 }]);
 
@@ -223,7 +223,7 @@ describe('objects', () => {
     const clean = doc();
     clean.objects.includeProcedural = false;
     const s = EditSession.open(clean);
-    expect(s.deleteInRadius(0, 0, 5)).toEqual({ objects: 0, spawns: 0 });
+    expect(s.deleteInRadius(0, 0, 5)).toEqual({ objects: 0, spawns: 0, markers: 0 });
     expect(s.canUndo).toBe(false);
   });
 });
@@ -244,6 +244,92 @@ describe('spawns', () => {
     s.addSpawn({ x: 5, z: 5, yaw: 1 });
     expect(s.deleteSpawnNear(40, 40, 3)).toBe(false);
     expect(s.spawnPoints).toHaveLength(1);
+  });
+});
+
+describe('markers', () => {
+  const BAY = { kind: 'garageBay' as const, radius: 1.65, yaw: Math.PI };
+
+  it('places a garage bay seated on the ground under it', () => {
+    const s = EditSession.open(doc());
+    const bay = s.addMarker({ ...BAY, x: 6, z: -4 });
+    expect(bay.kind).toBe('garageBay');
+    expect(bay.yaw).toBe(Math.PI);
+    expect(bay.y).toBeCloseTo(Physics.sampleHeightBilinear(s.world.terrain, 6, -4), 6);
+    expect(s.markerList).toHaveLength(1);
+  });
+
+  it('numbers a blank label from the kind, so a row of bays needs no typing', () => {
+    const s = EditSession.open(doc());
+    expect(s.addMarker({ ...BAY, x: 0, z: 0 }).label).toBe('Workshop bay 1');
+    expect(s.addMarker({ ...BAY, x: 3, z: 0 }).label).toBe('Workshop bay 2');
+    expect(s.addMarker({ ...BAY, x: 6, z: 0, label: 'Long shed' }).label).toBe('Long shed');
+    // Numbered per kind, not per map.
+    expect(s.addMarker({ kind: 'checkpoint', x: 0, z: 9, radius: 6, yaw: 0 }).label)
+      .toBe('Checkpoint 1');
+  });
+
+  it('omits yaw on kinds that never read one', () => {
+    const s = EditSession.open(doc());
+    const checkpoint = s.addMarker({ kind: 'checkpoint', x: 0, z: 0, radius: 6, yaw: 1.2 });
+    expect(checkpoint.yaw).toBeUndefined();
+  });
+
+  it('deletes the nearest marker, counting its own radius as clickable', () => {
+    const s = EditSession.open(doc());
+    const bay = s.addMarker({ ...BAY, x: 0, z: 0 });
+    s.addMarker({ ...BAY, x: 30, z: 30 });
+    // 4 m out with a 1.65 m bay and a 1 m brush: nothing reaches.
+    expect(s.deleteMarkerNear(4, 0, 1)).toBeNull();
+    // Inside a 6 m checkpoint, but outside the brush — its radius wins.
+    const checkpoint = s.addMarker({ kind: 'checkpoint', x: -20, z: 0, radius: 6, yaw: 0 });
+    expect(s.deleteMarkerNear(-16, 0, 1)?.id).toBe(checkpoint.id);
+    expect(s.deleteMarkerNear(0.5, 0.5, 2)?.id).toBe(bay.id);
+    expect(s.markerList).toHaveLength(1);
+  });
+
+  it('undoes a placement and a deletion', () => {
+    const s = EditSession.open(doc());
+    s.addMarker({ ...BAY, x: 0, z: 0 });
+    s.deleteMarkerNear(0, 0, 2);
+    expect(s.markerList).toHaveLength(0);
+    expect(s.undo()).toBe(true);
+    expect(s.markerList).toHaveLength(1);
+    expect(s.undo()).toBe(true);
+    expect(s.markerList).toHaveLength(0);
+  });
+
+  it('clears markers inside a delete radius alongside objects and spawns', () => {
+    const clean = doc();
+    clean.objects.includeProcedural = false;
+    const s = EditSession.open(clean);
+    s.addMarker({ ...BAY, x: 1, z: 1 });
+    s.addMarker({ ...BAY, x: 25, z: 25 });
+    expect(s.deleteInRadius(0, 0, 6)).toEqual({ objects: 0, spawns: 0, markers: 1 });
+    expect(s.markerList).toHaveLength(1);
+  });
+
+  it('carries placed markers through the strict decoder into a loaded world', () => {
+    const s = EditSession.open(doc());
+    s.addMarker({ ...BAY, x: 6, z: -4, label: 'Depot bay' });
+
+    const parsed = Maps.decodeMapDoc(JSON.parse(Maps.encodeMapDoc(s.toDoc(doc()))));
+    const reloaded = Maps.applyMapDoc(parsed);
+    const bay = reloaded.markers.find((m) => m.label === 'Depot bay');
+    expect(bay).toBeDefined();
+    expect(bay!.kind).toBe('garageBay');
+    expect(bay!.yaw).toBe(Math.PI);
+    expect(bay!.radius).toBe(1.65);
+  });
+
+  it('keeps the ids an opened map already had, because Room leases bays by id', () => {
+    const withBay = doc();
+    withBay.markers = [
+      { id: 'service-bay-1', kind: 'garageBay', x: 0, y: 0, z: 0, yaw: 0, radius: 1.65, label: 'Bay 1' },
+    ];
+    const s = EditSession.open(withBay);
+    s.addMarker({ ...BAY, x: 8, z: 0 });
+    expect(s.toDoc(withBay).markers.map((m) => m.id)[0]).toBe('service-bay-1');
   });
 });
 

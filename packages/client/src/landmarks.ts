@@ -27,7 +27,6 @@ export class LandmarkMeshes {
     const pumpMat = new THREE.MeshStandardMaterial({ color: 0xc4421a, roughness: 0.45, metalness: 0.35 });
     const pumpDarkMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.7 });
     const glassMat = new THREE.MeshStandardMaterial({ color: 0x223344, roughness: 0.2, metalness: 0.7 });
-    const lineMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.7 });
 
     // Office building.
     const b = STATION.building;
@@ -110,32 +109,12 @@ export class LandmarkMeshes {
       root.add(nozzle);
     }
 
-    // Parking bay markings: thin white rectangles painted on the
-    // concrete to separate three parallel bays. Visual only - the
-    // physics pad is uniform concrete.
-    const park = STATION.parking;
-    const stripeY = 0.02; // sits just above the pad
-    const stripeW = 0.15;
-    const baseCx = park.cx;
-    const baseCz = park.cz;
-    // Bay separators run along Z (perpendicular to the road), 4 lines
-    // forming 3 bays.
-    for (let i = 0; i <= 3; i++) {
-      const lx = baseCx - park.w / 2 + (park.w * i) / 3;
-      const stripe = new THREE.Mesh(
-        new THREE.BoxGeometry(stripeW, 0.04, park.d * 0.95),
-        lineMat,
-      );
-      stripe.position.set(lx, stripeY, baseCz);
-      root.add(stripe);
-    }
-    // A "STOP" stripe across the back of the bays.
-    const back = new THREE.Mesh(
-      new THREE.BoxGeometry(park.w, 0.04, stripeW),
-      lineMat,
-    );
-    back.position.set(baseCx, stripeY, baseCz - park.d / 2);
-    root.add(back);
+    // The bay floor markings under this workshop are NOT drawn here. They
+    // are painted by markers.ts from the map's own garageBay markers, so
+    // the station's three bays and a bay authored anywhere else look and
+    // line up the same way. Stripes hardcoded to STATION.parking used to
+    // sit here and drifted the moment a marker was nudged: the paint said
+    // one thing and the trigger volume another.
 
     // Three-bay drive-in workshop. It is assembled from a roof, a rear
     // wall and individual posts to match the non-blocking shared colliders.

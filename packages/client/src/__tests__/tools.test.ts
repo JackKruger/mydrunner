@@ -1,9 +1,10 @@
 // The editor's tool state, where it meets the object catalog.
 
 import { describe, it, expect } from 'vitest';
-import { Physics } from '@mydrunner/shared';
+import { Maps, Physics } from '@mydrunner/shared';
 import {
-  OBJECT_YAW_STEP, applyKindDefaults, defaultToolState, objectBaseY, placeableKinds, stepYaw,
+  OBJECT_YAW_STEP, applyKindDefaults, applyMarkerKindDefaults, cursorRadius, defaultToolState,
+  objectBaseY, placeableKinds, placeableMarkerKinds, stepYaw,
 } from '../editor/tools.js';
 import { OBJECT_MESHES } from '../obstacles/registry.js';
 import { createMeshCtx } from '../obstacles/materials.js';
@@ -91,6 +92,42 @@ describe('applyKindDefaults', () => {
       expect(state.objectHeight, kind).toBeGreaterThanOrEqual(l.height[0]);
       expect(state.objectHeight, kind).toBeLessThanOrEqual(l.height[1]);
     }
+  });
+});
+
+describe('the marker palette', () => {
+  it('offers every kind the catalog knows', () => {
+    expect(placeableMarkerKinds().map((m) => m.kind).sort())
+      .toEqual([...Maps.MARKER_KINDS].sort());
+    for (const entry of placeableMarkerKinds()) {
+      expect(entry.label.length, entry.kind).toBeGreaterThan(0);
+    }
+  });
+
+  it('defaults to the garage bay, which is the only simulated kind', () => {
+    expect(defaultToolState().markerKind).toBe('garageBay');
+  });
+
+  it('reseeds the radius inside the kind limits and drops a stale label', () => {
+    const state = defaultToolState();
+    state.markerLabel = 'Workshop bay 3';
+    for (const kind of Maps.MARKER_KINDS) {
+      applyMarkerKindDefaults(state, kind);
+      const [min, max] = Maps.markerInfo(kind).radiusLimits;
+      expect(state.markerKind).toBe(kind);
+      expect(state.markerRadius, kind).toBeGreaterThanOrEqual(min);
+      expect(state.markerRadius, kind).toBeLessThanOrEqual(max);
+      expect(state.markerLabel, kind).toBe('');
+    }
+  });
+
+  it('draws the brush ring at the marker radius, not the brush radius', () => {
+    const state = defaultToolState();
+    state.radius = 12;
+    state.markerRadius = 1.65;
+    expect(cursorRadius(state)).toBe(12);
+    state.tool = 'marker';
+    expect(cursorRadius(state)).toBe(1.65);
   });
 });
 

@@ -186,6 +186,12 @@ test('keyboard and touch pressure controls adjust while stopped and explain refu
   await page.goto('/?auto=1&name=pressure-check&q=low');
   await waitConnected(page);
 
+  // Park before touching the pressure. The default map's spawn row sits on a
+  // ~1.4° grade and nothing holds a truck that is given no input, so it rolls
+  // away, crosses updatePressure's 1 km/h gate part-way through a hold, and
+  // the refusal under test becomes whichever gate fired first.
+  await page.keyboard.press('Space');
+
   const pressure = page.locator('#hud-pressure');
   await expect(pressure).toContainText(/TYRES \d+\.\d PSI · \d+–\d+/);
   const readPsi = async (): Promise<number> => {
