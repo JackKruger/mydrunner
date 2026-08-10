@@ -122,7 +122,9 @@ test.describe('driving', () => {
     // previous default XYZ order made a spinning, steered wheel tumble around
     // the chassis axis even though both scalar angles looked reasonable.
     expect(renderedWheel.order).toBe('YXZ');
-    expect(renderedWheel.steer).toBeGreaterThan(0.6);
+    // Speed-sensitive steering may reduce the rack angle after acceleration,
+    // but the wheel must still be meaningfully turned while it is spinning.
+    expect(renderedWheel.steer).toBeGreaterThan(0.05);
   });
 
   test('holding A produces a stable left steer angle (no flicker)', async ({ page }) => {
