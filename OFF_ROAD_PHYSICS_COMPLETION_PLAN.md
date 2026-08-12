@@ -11,16 +11,27 @@
 
 ## Milestone 1: allocation-free physics phases
 
-- [ ] Split `SolidAxleVehicle.preStep()` into fixed-order contact, suspension,
+- [x] Split `SolidAxleVehicle.preStep()` into fixed-order contact, suspension,
   water, engine, driveline, and tyre/soil phases.
 - [x] Capture chassis pose and velocity once in a preallocated
   `VehicleStepContext`; pass the same capture and reusable scratch state to
   every phase.
-- [ ] Remove per-tick arrays, objects, spreads, callbacks, and temporary result
+- [x] Remove per-tick arrays, objects, spreads, callbacks, and temporary result
   allocations from marked physics hot loops.
 - [x] Add a TypeScript-AST guard that rejects allocation syntax and allocating
   array helpers inside marked hot-loop methods.
 - [x] Preserve exact serialized determinism and desktop p95 below 2 ms.
+
+Measured on the container this was completed on (slower than the box the
+baseline above was taken on, so read these as before/after, not against the
+2 ms bar): owner-tick garbage fell from ~6,770 B/tick to ~4,658 B/tick, a 31%
+cut, with benchmark mean 2.27 ms -> 2.27 ms and p95 3.2 ms -> 3.2 ms — the
+step is dominated by Rapier WASM calls, so this buys GC headroom rather than
+mean throughput. The remaining ~4.7 KB is Rapier's own JS returns, which the
+AST guard cannot see and an `out` parameter cannot reach. A five-vehicle,
+1,920-tick serialized fingerprint over mixed terrain, water, braking,
+lockers, manual gears and pressure changes is bit-exact against the
+pre-refactor build.
 
 ## Milestone 2: complete axle reactions
 

@@ -58,6 +58,12 @@ export class World {
    *  lets every consumer cache terrain-derived data for the session. */
   readonly terrainBody: RAPIER.RigidBody;
   readonly terrainCollider: RAPIER.Collider;
+  /** One Ray for the per-wheel suspension casts, built with the world rather
+   *  than per cast. Rapier only reads origin/dir during a cast and owner
+   *  physics never has two casts in flight, so callers re-point its fields.
+   *  Constructing it here keeps the allocation structurally once-per-world
+   *  instead of a lazy init the hot-loop guard would have to take on faith. */
+  readonly wheelRay: RAPIER.Ray;
   private obstacleBodies: RAPIER.RigidBody[] = [];
   private landmarkBodies: RAPIER.RigidBody[] = [];
 
@@ -69,6 +75,7 @@ export class World {
     const built = this.buildTerrain(this.terrain);
     this.terrainBody = built.body;
     this.terrainCollider = built.collider;
+    this.wheelRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
     // Without a map the obstacles are deterministic from the terrain, so
     // every consumer reaches the same list from the seed alone. With one
     // they are whatever the author left, and only the document knows.

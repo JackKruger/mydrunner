@@ -23,6 +23,11 @@ export interface TireContactSemantics {
   axleAlignment: number;
 }
 
+/** How fast a sidewall deflection is allowed to release, in m/s. Exported
+ *  because the owner tick passes every argument explicitly to reach the out
+ *  parameter, and a hand-copied 1.5 there would silently drift from this. */
+export const SIDEWALL_RELEASE_RATE = 1.5;
+
 const TREAD_END = 0.35;
 const SIDEWALL_START = 0.80;
 
@@ -32,16 +37,34 @@ function clamp(v: number, lo: number, hi: number): number {
 
 /** Classify a cylinder contact from the absolute normal/axle dot product. */
 export function classifyTireContact(normalDotAxle: number): TireContactSemantics {
+  return classifyTireContactInto(
+    normalDotAxle,
+    { zone: 'tread', treadFraction: 0, axleAlignment: 0 },
+  );
+}
+
+/** `classifyTireContact` writing into a caller-owned record. @hotloop */
+export function classifyTireContactInto(
+  normalDotAxle: number,
+  out: TireContactSemantics,
+): TireContactSemantics {
   const alignment = clamp(Math.abs(normalDotAxle), 0, 1);
+  out.axleAlignment = alignment;
   if (alignment <= TREAD_END) {
-    return { zone: 'tread', treadFraction: 1, axleAlignment: alignment };
+    out.zone = 'tread';
+    out.treadFraction = 1;
+    return out;
   }
   if (alignment >= SIDEWALL_START) {
-    return { zone: 'sidewall', treadFraction: 0, axleAlignment: alignment };
+    out.zone = 'sidewall';
+    out.treadFraction = 0;
+    return out;
   }
   const x = (alignment - TREAD_END) / (SIDEWALL_START - TREAD_END);
   const smooth = x * x * (3 - 2 * x);
-  return { zone: 'shoulder', treadFraction: 1 - smooth, axleAlignment: alignment };
+  out.zone = 'shoulder';
+  out.treadFraction = 1 - smooth;
+  return out;
 }
 
 export interface SeriesSpringResult {
@@ -62,6 +85,26 @@ export function solveSeriesCompliance(
   carcassStiffness: number,
   maxCarcassDeflection: number,
 ): SeriesSpringResult {
+  return solveSeriesComplianceInto(
+    totalDeflection, suspensionStiffness, carcassStiffness, maxCarcassDeflection,
+    {
+      force: 0,
+      suspensionDeflection: 0,
+      carcassDeflection: 0,
+      suspensionForce: 0,
+      carcassForce: 0,
+    },
+  );
+}
+
+/** `solveSeriesCompliance` writing into a caller-owned result. @hotloop */
+export function solveSeriesComplianceInto(
+  totalDeflection: number,
+  suspensionStiffness: number,
+  carcassStiffness: number,
+  maxCarcassDeflection: number,
+  out: SeriesSpringResult,
+): SeriesSpringResult {
   const total = Math.max(0, totalDeflection);
   const ks = Math.max(1, suspensionStiffness);
   const kt = Math.max(1, carcassStiffness);
@@ -69,13 +112,12 @@ export function solveSeriesCompliance(
   const carcassDeflection = clamp(freeCarcass, 0, Math.max(0, maxCarcassDeflection));
   const suspensionDeflection = Math.max(0, total - carcassDeflection);
   const force = Math.max(0, Math.min(ks * suspensionDeflection, kt * carcassDeflection));
-  return {
-    force,
-    suspensionDeflection,
-    carcassDeflection,
-    suspensionForce: force,
-    carcassForce: force,
-  };
+  out.force = force;
+  out.suspensionDeflection = suspensionDeflection;
+  out.carcassDeflection = carcassDeflection;
+  out.suspensionForce = force;
+  out.carcassForce = force;
+  return out;
 }
 
 export interface SidewallConstraintResult {
@@ -95,7 +137,28 @@ export function solveSidewallConstraint(
   correctionRate = 18,
   maxCorrectionSpeed = 2.5,
   maxImpulse = 4_000,
-  releaseRate = 1.5,
+  releaseRate = SIDEWALL_RELEASE_RATE,
+): SidewallConstraintResult {
+  return solveSidewallConstraintInto(
+    penetration, normalSpeed, effectiveMass, dt, previousDeflection, maxDeflection,
+    correctionRate, maxCorrectionSpeed, maxImpulse, releaseRate,
+    { impulse: 0, correctionSpeed: 0, deflection: 0 },
+  );
+}
+
+/** `solveSidewallConstraint` writing into a caller-owned result. @hotloop */
+export function solveSidewallConstraintInto(
+  penetration: number,
+  normalSpeed: number,
+  effectiveMass: number,
+  dt: number,
+  previousDeflection: number,
+  maxDeflection: number,
+  correctionRate: number,
+  maxCorrectionSpeed: number,
+  maxImpulse: number,
+  releaseRate: number,
+  out: SidewallConstraintResult,
 ): SidewallConstraintResult {
   const step = Math.max(1e-6, dt);
   const target = clamp(penetration, 0, Math.max(0, maxDeflection));
@@ -105,7 +168,17 @@ export function solveSidewallConstraint(
     : target;
   const correctionSpeed = clamp(deflection * correctionRate, 0, maxCorrectionSpeed);
   const impulse = clamp((correctionSpeed - normalSpeed) * Math.max(0, effectiveMass), 0, maxImpulse);
-  return { impulse, correctionSpeed, deflection };
+  out.impulse = impulse;
+  out.correctionSpeed = correctionSpeed;
+  out.deflection = deflection;
+  return out;
+}
+
+export interface CarcassRates {
+  stiffness: number;
+  radialDamping: number;
+  sidewallDamping: number;
+  maxDeflection: number;
 }
 
 export function carcassRates(
@@ -114,19 +187,39 @@ export function carcassRates(
   nominalQuarterLoad: number,
   quarterMass: number,
   pressureScale = 1,
-): { stiffness: number; radialDamping: number; sidewallDamping: number; maxDeflection: number } {
-  const maxDeflection = Math.max(0.005, radius * spec.staticDeflectionRatio * 2);
-  const staticDeflection = Math.max(0.001, radius * spec.staticDeflectionRatio);
+): CarcassRates {
+  return carcassRatesInto(
+    spec.staticDeflectionRatio, spec.radialDampingRatio, spec.sidewallDampingRatio,
+    radius, nominalQuarterLoad, quarterMass, pressureScale,
+    { stiffness: 0, radialDamping: 0, sidewallDamping: 0, maxDeflection: 0 },
+  );
+}
+
+/** `carcassRates` taking the three carcass ratios as scalars and writing into a
+ *  caller-owned result. The owner tick scales two of those ratios by live
+ *  TUNING multipliers; passing them separately is what removes the per-wheel
+ *  spec spread the allocating form required. @hotloop */
+export function carcassRatesInto(
+  staticDeflectionRatio: number,
+  radialDampingRatio: number,
+  sidewallDampingRatio: number,
+  radius: number,
+  nominalQuarterLoad: number,
+  quarterMass: number,
+  pressureScale: number,
+  out: CarcassRates,
+): CarcassRates {
+  const maxDeflection = Math.max(0.005, radius * staticDeflectionRatio * 2);
+  const staticDeflection = Math.max(0.001, radius * staticDeflectionRatio);
   const stiffness = Math.max(1, nominalQuarterLoad / staticDeflection)
     * Math.max(0.55, Math.min(1.35, pressureScale));
   const critical = 2 * Math.sqrt(stiffness * Math.max(1, quarterMass));
-  const radialDamping = critical * spec.radialDampingRatio;
-  return {
-    stiffness,
-    radialDamping,
-    sidewallDamping: radialDamping * spec.sidewallDampingRatio,
-    maxDeflection,
-  };
+  const radialDamping = critical * radialDampingRatio;
+  out.stiffness = stiffness;
+  out.radialDamping = radialDamping;
+  out.sidewallDamping = radialDamping * sidewallDampingRatio;
+  out.maxDeflection = maxDeflection;
+  return out;
 }
 
 export function pressureRadialScale(pressurePsi: number, nominalPsi: number): number {

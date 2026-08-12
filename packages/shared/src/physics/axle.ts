@@ -207,9 +207,15 @@ export function applyTravelStopReactionToAxle(
  * a sway bar reacts suspension displacement, not gravity. Unsupported ends
  * cannot pass their half of the pair into the chassis, and with neither end
  * supported the bar cannot act at all. */
-export function computeAntiRollLoadTransfer(input: AntiRollLoadInput): AntiRollLoadTransfer {
+/** @hotloop */
+export function computeAntiRollLoadTransfer(
+  input: AntiRollLoadInput,
+  out: AntiRollLoadTransfer = { leftForce: 0, rightForce: 0 },
+): AntiRollLoadTransfer {
   if (!input.leftSupported && !input.rightSupported) {
-    return { leftForce: 0, rightForce: 0 };
+    out.leftForce = 0;
+    out.rightForce = 0;
+    return out;
   }
   const track = Math.max(1e-6, input.trackHalf * 2);
   const forceStiffness = input.torqueStiffness / (track * track);
@@ -224,11 +230,14 @@ export function computeAntiRollLoadTransfer(input: AntiRollLoadInput): AntiRollL
     + forceDamping * (input.leftRate - input.rightRate);
   const limit = Math.max(0, input.maxTransferForce);
   const transfer = Math.max(-limit, Math.min(limit, rawTransfer));
-  if (Math.abs(transfer) < 1e-12) return { leftForce: 0, rightForce: 0 };
-  return {
-    leftForce: input.leftSupported ? transfer : 0,
-    rightForce: input.rightSupported ? -transfer : 0,
-  };
+  if (Math.abs(transfer) < 1e-12) {
+    out.leftForce = 0;
+    out.rightForce = 0;
+    return out;
+  }
+  out.leftForce = input.leftSupported ? transfer : 0;
+  out.rightForce = input.rightSupported ? -transfer : 0;
+  return out;
 }
 
 /** Advance an AxleState one fixed timestep. The target pose comes from

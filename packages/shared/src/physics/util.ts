@@ -7,13 +7,25 @@ import type { Vec3, Quat } from '../types.js';
  *  point (wheel position, lookAt offset) needs to be transformed into
  *  world space by a rigid body's orientation. */
 export function rotateVecByQuat(v: Vec3, q: Quat): Vec3 {
-  const ix = q.w * v.x + q.y * v.z - q.z * v.y;
-  const iy = q.w * v.y + q.z * v.x - q.x * v.z;
-  const iz = q.w * v.z + q.x * v.y - q.y * v.x;
-  const iw = -q.x * v.x - q.y * v.y - q.z * v.z;
-  return {
-    x: ix * q.w + iw * -q.x + iy * -q.z - iz * -q.y,
-    y: iy * q.w + iw * -q.y + iz * -q.x - ix * -q.z,
-    z: iz * q.w + iw * -q.z + ix * -q.y - iy * -q.x,
-  };
+  return rotateVecByQuatInto(v, q, { x: 0, y: 0, z: 0 });
+}
+
+/** `rotateVecByQuat` writing into a caller-owned vector.
+ *
+ *  The owner physics tick rotates ~40 local-frame points per vehicle, so the
+ *  allocating form alone was a measurable share of the step's garbage. Aliasing
+ *  is safe: `v` is fully read into locals before `out` is written, so
+ *  `rotateVecByQuatInto(p, q, p)` rotates in place.
+ *
+ *  @hotloop */
+export function rotateVecByQuatInto(v: Vec3, q: Quat, out: Vec3): Vec3 {
+  const vx = v.x; const vy = v.y; const vz = v.z;
+  const ix = q.w * vx + q.y * vz - q.z * vy;
+  const iy = q.w * vy + q.z * vx - q.x * vz;
+  const iz = q.w * vz + q.x * vy - q.y * vx;
+  const iw = -q.x * vx - q.y * vy - q.z * vz;
+  out.x = ix * q.w + iw * -q.x + iy * -q.z - iz * -q.y;
+  out.y = iy * q.w + iw * -q.y + iz * -q.x - ix * -q.z;
+  out.z = iz * q.w + iw * -q.z + ix * -q.y - iy * -q.x;
+  return out;
 }

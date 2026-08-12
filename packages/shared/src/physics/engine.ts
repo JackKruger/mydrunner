@@ -109,6 +109,13 @@ export function gearRatio(state: EngineState): number {
  *                 gear-hunt cycle that follows.
  *  throttle:      signed input in [-1, 1].
  */
+export interface EngineOutput {
+  totalDrivelineTorque: number;
+  rpm: number;
+  gear: number;
+}
+
+/** @hotloop */
 export function stepEngine(
   state: EngineState,
   wheelAngVel: number,
@@ -117,7 +124,8 @@ export function stepEngine(
   dt: number,
   manualGear: ManualGear | null = null,
   finalDrive: number = ENGINE.finalDrive,
-): { totalDrivelineTorque: number; rpm: number; gear: number } {
+  out: EngineOutput = { totalDrivelineTorque: 0, rpm: 0, gear: 0 },
+): EngineOutput {
   // A flooded engine makes no torque and winds down to a stop. This has
   // to short-circuit before the RPM block below, which floors targetRpm
   // at idleRpm - the assumption everywhere else that the engine is
@@ -128,7 +136,10 @@ export function stepEngine(
     state.rpm = Math.max(0, state.rpm - ENGINE.idleRpm * dt * 2);
     state.gearIndex = ENGINE.neutralGear;
     state.shiftCooldown = 0;
-    return { totalDrivelineTorque: 0, rpm: state.rpm, gear: 0 };
+    out.totalDrivelineTorque = 0;
+    out.rpm = state.rpm;
+    out.gear = 0;
+    return out;
   }
 
   // Derive engine RPM from driveshaft. In neutral, RPM follows throttle
@@ -218,7 +229,10 @@ export function stepEngine(
 
   const activeRatio = ENGINE.gears[nextGear] ?? 0;
   if (activeRatio === 0) {
-    return { totalDrivelineTorque: 0, rpm, gear: signedGear(nextGear) };
+    out.totalDrivelineTorque = 0;
+    out.rpm = rpm;
+    out.gear = signedGear(nextGear);
+    return out;
   }
 
   // Engine torque this tick.
@@ -255,11 +269,10 @@ export function stepEngine(
     brakeT = (rpmBrake + speedBrake) * TUNING.engineBrakeMult * travelDir;
   }
 
-  return {
-    totalDrivelineTorque: torqueAtWheels - brakeT,
-    rpm,
-    gear: signedGear(nextGear),
-  };
+  out.totalDrivelineTorque = torqueAtWheels - brakeT;
+  out.rpm = rpm;
+  out.gear = signedGear(nextGear);
+  return out;
 }
 
 function signedGear(gIdx: number): number {

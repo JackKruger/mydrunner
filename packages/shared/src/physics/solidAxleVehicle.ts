@@ -60,13 +60,14 @@ import {
   type WaterLoad, type WaterState,
 } from './water.js';
 import {
-  createEngineState, stepEngine, stepEngineFlooding, type EngineState,
+  createEngineState, stepEngine, stepEngineFlooding,
+  type EngineOutput, type EngineState,
 } from './engine.js';
 // slipRatio / gripFromSlip kept in tire.ts for tests; not used here since
 // the impulse-clamped integrator below replaced the Pacejka groundTq path.
 // slipAngle / lateralGripFromSlipAngle ARE used to shape the lateral
 // force so the tyre breaks loose past its slip-angle peak.
-import { rotateVecByQuat } from './util.js';
+import { rotateVecByQuat, rotateVecByQuatInto } from './util.js';
 import {
   combineFrictionEllipse,
   lateralGripFromSlipAngle,
@@ -76,14 +77,18 @@ import {
   tyreFrictionCapacity,
 } from './tire.js';
 import {
-  carcassRates,
-  classifyTireContact,
+  SIDEWALL_RELEASE_RATE,
+  carcassRatesInto,
+  classifyTireContactInto,
   pressureLateralScale,
   pressureRadialScale,
   pressureRollingScale,
   sealedRoadPressureGripScale,
-  solveSeriesCompliance,
-  solveSidewallConstraint,
+  solveSeriesComplianceInto,
+  solveSidewallConstraintInto,
+  type CarcassRates,
+  type SeriesSpringResult,
+  type SidewallConstraintResult,
   type TireContactSemantics,
 } from './tireCarcass.js';
 import { geomFor, type AxleGeom, type VehicleGeom } from './vehicleGeom.js';
@@ -96,8 +101,11 @@ import {
   progressiveTravelStopForce,
   resetAxleState,
   stepAxle,
+  type AntiRollLoadInput,
+  type AntiRollLoadTransfer,
   type AxleSnap,
   type AxleState,
+  type StepAxleInputs,
 } from './axle.js';
 import {
   createWheelKinematic,
@@ -124,18 +132,25 @@ import type {
 import type { World } from './world.js';
 import { COLLISION_GROUP_OWNED_VEHICLE, COLLISION_GROUP_WHEEL_RAY } from './collisionGroups.js';
 import {
-  contactFrame,
-  cylinderRotation,
-  findSteepWheelContact,
-  wheelBasis,
+  contactFrameInto,
+  createSteepWheelContact,
+  cylinderRotationInto,
+  findSteepWheelContactInto,
+  wheelBasisInto,
+  type ContactQuat,
   type SteepWheelContact,
   type WheelBasis,
+  type WheelContactFrame,
 } from './wheelContact.js';
 import { applyCollisionDamage, createDamageState, repairDamage } from './damage.js';
 
 type Vec3 = { x: number; y: number; z: number };
 type Quat = { x: number; y: number; z: number; w: number };
 
+/** The one chassis capture every phase reads, plus the handful of scalars
+ *  phases hand forward to later phases. The vectors are written in place by
+ *  `captureStepContext`; the scalars are written by the phase named beside
+ *  them and are read-only to everything downstream. */
 interface VehicleStepContext {
   readonly dt: number;
   readonly t: Vec3;
@@ -145,6 +160,13 @@ interface VehicleStepContext {
   readonly fwd: Vec3;
   readonly right: Vec3;
   readonly up: Vec3;
+  /** phaseBegin -> phaseTyreSoil */
+  groundSpeed: number;
+  /** phaseEngine -> phaseDriveline, phaseTyreSoil */
+  totalDrivelineTorque: number;
+  /** phaseDriveline -> phaseTyreSoil */
+  frontShare: number;
+  rearShare: number;
 }
 
 function createVehicleStepContext(): VehicleStepContext {
@@ -157,7 +179,102 @@ function createVehicleStepContext(): VehicleStepContext {
     fwd: { x: 0, y: 0, z: 1 },
     right: { x: 1, y: 0, z: 0 },
     up: { x: 0, y: 1, z: 0 },
+    groundSpeed: 0,
+    totalDrivelineTorque: 0,
+    frontShare: 0,
+    rearShare: 0,
   };
+}
+
+/** Per-axle working storage for the contact and suspension phases. One
+ *  instance per axle because the wheel basis outlives its phase: the tyre
+ *  phase reads both axles' bases after each has been resolved. */
+interface AxleStepScratch {
+  localPoint: Vec3;
+  leftMountWorld: Vec3;
+  rightMountWorld: Vec3;
+  supportLookahead: Vec3;
+  rayDir: Vec3;
+  leftCenter: Vec3;
+  rightCenter: Vec3;
+  leftSupportWorld: Vec3;
+  rightSupportWorld: Vec3;
+  portalOffset: Vec3;
+  tubeCenter: Vec3;
+  housingCenter: Vec3;
+  wheelCenter: Vec3;
+  basis: WheelBasis;
+  wheelRotation: ContactQuat;
+  probeRotation: ContactQuat;
+  stepInputs: StepAxleInputs;
+  antiRollInput: AntiRollLoadInput;
+  antiRollOut: AntiRollLoadTransfer;
+  carcass: CarcassRates;
+  series: SeriesSpringResult;
+  sidewall: SidewallConstraintResult;
+}
+
+function createAxleStepScratch(): AxleStepScratch {
+  return {
+    localPoint: { x: 0, y: 0, z: 0 },
+    leftMountWorld: { x: 0, y: 0, z: 0 },
+    rightMountWorld: { x: 0, y: 0, z: 0 },
+    supportLookahead: { x: 0, y: 0, z: 0 },
+    rayDir: { x: 0, y: 0, z: 0 },
+    leftCenter: { x: 0, y: 0, z: 0 },
+    rightCenter: { x: 0, y: 0, z: 0 },
+    leftSupportWorld: { x: 0, y: 0, z: 0 },
+    rightSupportWorld: { x: 0, y: 0, z: 0 },
+    portalOffset: { x: 0, y: 0, z: 0 },
+    tubeCenter: { x: 0, y: 0, z: 0 },
+    housingCenter: { x: 0, y: 0, z: 0 },
+    wheelCenter: { x: 0, y: 0, z: 0 },
+    basis: {
+      forward: { x: 0, y: 0, z: 0 },
+      axle: { x: 0, y: 0, z: 0 },
+      up: { x: 0, y: 0, z: 0 },
+    },
+    wheelRotation: { x: 0, y: 0, z: 0, w: 1 },
+    probeRotation: { x: 0, y: 0, z: 0, w: 1 },
+    stepInputs: {
+      leftDepth: 0,
+      rightDepth: 0,
+      leftContact: false,
+      rightContact: false,
+      chassisVertVelAtAnchor: 0,
+      dt: FIXED_DT,
+      rideStiffnessMult: 1,
+      rideDampingMult: 1,
+      rollStiffnessMult: 1,
+      maxArticulationMult: 1,
+    },
+    antiRollInput: {
+      leftDepth: 0,
+      rightDepth: 0,
+      leftRate: 0,
+      rightRate: 0,
+      leftSupported: false,
+      rightSupported: false,
+      trackHalf: 0,
+      torqueStiffness: 0,
+      torqueDamping: 0,
+      maxTransferForce: 0,
+    },
+    antiRollOut: { leftForce: 0, rightForce: 0 },
+    carcass: { stiffness: 0, radialDamping: 0, sidewallDamping: 0, maxDeflection: 0 },
+    series: {
+      force: 0,
+      suspensionDeflection: 0,
+      carcassDeflection: 0,
+      suspensionForce: 0,
+      carcassForce: 0,
+    },
+    sidewall: { impulse: 0, correctionSpeed: 0, deflection: 0 },
+  };
+}
+
+function createWheelContactFrame(): WheelContactFrame {
+  return { longitudinal: { x: 0, y: 0, z: 0 }, lateral: { x: 0, y: 0, z: 0 } };
 }
 
 interface ContactPatchSample {
@@ -362,6 +479,45 @@ export class SolidAxleVehicle implements VehicleLike {
     { wheel: null, localX: 0, world: { x: 0, y: 0, z: 0 }, supported: false, comp: 0, compRate: 0, force: 0 },
     { wheel: null, localX: 0, world: { x: 0, y: 0, z: 0 }, supported: false, comp: 0, compRate: 0, force: 0 },
   ];
+  private readonly _axleScratch: [AxleStepScratch, AxleStepScratch] = [
+    createAxleStepScratch(), createAxleStepScratch(),
+  ];
+  /** One reusable steep/sidewall contact per wheel. The tyre phase reads the
+   *  contact its wheel resolved, so these cannot be a single shared slot. */
+  private readonly _ledgeStorage: [
+    SteepWheelContact, SteepWheelContact, SteepWheelContact, SteepWheelContact,
+  ] = [
+    createSteepWheelContact(), createSteepWheelContact(),
+    createSteepWheelContact(), createSteepWheelContact(),
+  ];
+  private readonly _ledgeSemanticsStorage: [
+    TireContactSemantics, TireContactSemantics, TireContactSemantics, TireContactSemantics,
+  ] = [
+    { zone: 'tread', treadFraction: 0, axleAlignment: 0 },
+    { zone: 'tread', treadFraction: 0, axleAlignment: 0 },
+    { zone: 'tread', treadFraction: 0, axleAlignment: 0 },
+    { zone: 'tread', treadFraction: 0, axleAlignment: 0 },
+  ];
+  private readonly _contactFrames: [
+    WheelContactFrame, WheelContactFrame, WheelContactFrame, WheelContactFrame,
+  ] = [
+    createWheelContactFrame(), createWheelContactFrame(),
+    createWheelContactFrame(), createWheelContactFrame(),
+  ];
+  private readonly _supportFrames: [
+    WheelContactFrame, WheelContactFrame, WheelContactFrame, WheelContactFrame,
+  ] = [
+    createWheelContactFrame(), createWheelContactFrame(),
+    createWheelContactFrame(), createWheelContactFrame(),
+  ];
+  private readonly _engineOut: EngineOutput = { totalDrivelineTorque: 0, rpm: 0, gear: 0 };
+  /** Re-pointed at the step context each tick; computeWaterLoad only reads it. */
+  private readonly _waterPose: { t: Vec3; r: Quat; lv: Vec3; av: Vec3 } = {
+    t: { x: 0, y: 0, z: 0 },
+    r: { x: 0, y: 0, z: 0, w: 1 },
+    lv: { x: 0, y: 0, z: 0 },
+    av: { x: 0, y: 0, z: 0 },
+  };
   private readonly externalPointLoads: ExternalPointLoad[] = [];
 
   constructor(
@@ -538,7 +694,30 @@ export class SolidAxleVehicle implements VehicleLike {
     return context;
   }
 
+  /** The fixed phase order the whole model depends on.
+   *
+   *  Every phase reads the one chassis capture `phaseBegin` takes and passes
+   *  its results forward through `VehicleStepContext` and the preallocated
+   *  scratch on this class; none of them re-reads the body mid-tick
+   *  (determinism rule 1). Contact is resolved for one axle before that same
+   *  axle's suspension runs, in fixed [front, rear] order: splitting these
+   *  into two whole-vehicle passes would reorder the impulses each axle
+   *  applies to the chassis, which is a different simulation, not a
+   *  refactor. */
   preStep(): void {
+    const ctx = this.phaseBegin();
+    for (let aIdx = 0; aIdx < 2; aIdx++) {
+      this.phaseContact(ctx, aIdx);
+      this.phaseSuspension(ctx, aIdx);
+    }
+    this.phaseWater(ctx);
+    this.phaseEngine(ctx);
+    this.phaseDriveline(ctx);
+    this.phaseTyreSoil(ctx);
+  }
+
+  /** Capture, force reset, driver controls and steering. @hotloop */
+  private phaseBegin(): VehicleStepContext {
     const stepContext = this.captureStepContext();
     const dt = stepContext.dt;
 
@@ -548,19 +727,14 @@ export class SolidAxleVehicle implements VehicleLike {
     // ticks of contact. Reset here so each tick's force is fresh.
     this.body.resetForces(false);
     this.body.resetTorques(false);
-    for (const load of this.externalPointLoads) {
+    for (let i = 0; i < this.externalPointLoads.length; i++) {
+      const load = this.externalPointLoads[i]!;
       this.body.addForceAtPoint(load.force, load.point, true);
     }
     this.externalPointLoads.length = 0;
 
     // 1. Capture chassis pose ONCE (determinism rule).
-    const t = stepContext.t;
-    const r = stepContext.r;
     const lv = stepContext.lv;
-    const av = stepContext.av;
-    const fwd = stepContext.fwd;
-    const right = stepContext.right;
-    const up = stepContext.up;
     if (this.debugVelocityInitialized) {
       this.debugAcceleration.x = (lv.x - this.debugPreviousLinVel.x) / dt;
       this.debugAcceleration.y = (lv.y - this.debugPreviousLinVel.y) / dt;
@@ -575,6 +749,7 @@ export class SolidAxleVehicle implements VehicleLike {
     this.debugPreviousLinVel.y = lv.y;
     this.debugPreviousLinVel.z = lv.z;
     const groundSpeed = Math.hypot(lv.x, lv.z);
+    stepContext.groundSpeed = groundSpeed;
     this.impactSpeed = groundSpeed;
     this.updateDrivetrainControls(groundSpeed);
     this.updatePressure(groundSpeed, dt);
@@ -613,660 +788,715 @@ export class SolidAxleVehicle implements VehicleLike {
       -activeSteerLimit,
       activeSteerLimit,
     );
+    return stepContext;
+  }
 
-    // 3. Per axle: exactly two deterministic contact iterations. Both solve
-    //    from the state captured at tick start; only the second contact result
-    //    is committed to the axle integrator below.
-    for (let aIdx = 0; aIdx < 2; aIdx++) {
-      const axle = this.axles[aIdx]!;
-      const ag = axle.geom;
-      // Runtime scalars on this axle's compile-time rates. Multipliers,
-      // not overrides, so the per-kind differences baked into ag (the
-      // Hilux's softer rear, say) survive a slider move.
-      const at = aIdx === 0 ? TUNING.axleFront : TUNING.axleRear;
+  /** 3. One axle's contact resolution: exactly two deterministic contact
+   *  iterations, the axle-beam probes, the rut/water/surface reads and the
+   *  volumetric tyre query with its carcass and sidewall response. Both
+   *  iterations solve from the state captured at tick start; only the second
+   *  contact result is committed to the axle integrator. @hotloop */
+  private phaseContact(ctx: VehicleStepContext, aIdx: number): void {
+    const dt = ctx.dt;
+    const t = ctx.t;
+    const r = ctx.r;
+    const lv = ctx.lv;
+    const av = ctx.av;
+    const fwd = ctx.fwd;
+    const right = ctx.right;
+    const up = ctx.up;
+    const wheelBases = this._wheelBases;
+    const ledgeContacts = this._ledgeContacts;
+    const ledgeSemantics = this._ledgeSemantics;
+    const ledgeLoads = this._ledgeLoads;
+    const scratch = this._axleScratch[aIdx]!;
+    const local = scratch.localPoint;
 
-      const wIdxL = aIdx * 2;
-      const wIdxR = aIdx * 2 + 1;
-      const wL = this.wheels[wIdxL]!;
-      const wR = this.wheels[wIdxR]!;
+    const axle = this.axles[aIdx]!;
+    const ag = axle.geom;
+    // Runtime scalars on this axle's compile-time rates. Multipliers,
+    // not overrides, so the per-kind differences baked into ag (the
+    // Hilux's softer rear, say) survive a slider move.
+    const at = aIdx === 0 ? TUNING.axleFront : TUNING.axleRear;
 
-      const rayLift = SUSPENSION.rayLift;
-      const leftMountWorld = addVec(t, rotateVecByQuat(
-        { x: -ag.trackHalf, y: ag.centerLocalY, z: ag.centerLocalZ }, r,
-      ));
-      const rightMountWorld = addVec(t, rotateVecByQuat(
-        { x: +ag.trackHalf, y: ag.centerLocalY, z: ag.centerLocalZ }, r,
-      ));
-      const supportLookahead = {
-        x: lv.x * dt * SUSPENSION.supportLookaheadTicks,
-        y: 0,
-        z: lv.z * dt * SUSPENSION.supportLookaheadTicks,
-      };
-      const rayDirLocal: Vec3 = { x: 0, y: -1, z: 0 };
-      const rayDir = rotateVecByQuat(rayDirLocal, r);
-      const maxToi = rayLift + ag.suspensionRestLength + ag.droopMax;
-      const visualMax = ag.suspensionRestLength * 0.85;
-      let candidateRide = clamp(
-        axle.rideY + axle.rideVelY * dt,
-        -ag.droopMax,
-        visualMax,
-      );
-      let candidateRoll = clamp(
-        axle.rollAngle + axle.rollVel * dt,
-        -ag.maxArticulation * at.maxArticulationMult,
-        ag.maxArticulation * at.maxArticulationMult,
-      );
-      let basis = wheelBasis(fwd, right, up, candidateRoll, ag.hasSteering ? -this.currentSteer : 0);
-      let wheelRotation = cylinderRotation(basis.axle);
-      let sinCandidate = Math.sin(candidateRoll);
-      let leftCandidateDepth = candidateRide - ag.trackHalf * sinCandidate;
-      let rightCandidateDepth = candidateRide + ag.trackHalf * sinCandidate;
-      let leftCenter = wheelCenterWorldPose(t, r, ag, candidateRide, candidateRoll, -ag.trackHalf);
-      let rightCenter = wheelCenterWorldPose(t, r, ag, candidateRide, candidateRoll, +ag.trackHalf);
-      let leftSupportWorld = {
-        x: leftCenter.x - rayDir.x * rayLift + supportLookahead.x,
-        y: leftCenter.y - rayDir.y * rayLift,
-        z: leftCenter.z - rayDir.z * rayLift + supportLookahead.z,
-      };
-      let rightSupportWorld = {
-        x: rightCenter.x - rayDir.x * rayLift + supportLookahead.x,
-        y: rightCenter.y - rayDir.y * rayLift,
-        z: rightCenter.z - rayDir.z * rayLift + supportLookahead.z,
-      };
-      castWheelSupport(
-        this.world,
-        this.body,
+    const wIdxL = aIdx * 2;
+    const wIdxR = aIdx * 2 + 1;
+    const wL = this.wheels[wIdxL]!;
+    const wR = this.wheels[wIdxR]!;
+
+    const rayLift = SUSPENSION.rayLift;
+    const leftMountWorld = scratch.leftMountWorld;
+    local.x = -ag.trackHalf; local.y = ag.centerLocalY; local.z = ag.centerLocalZ;
+    rotateVecByQuatInto(local, r, leftMountWorld);
+    leftMountWorld.x += t.x; leftMountWorld.y += t.y; leftMountWorld.z += t.z;
+    const rightMountWorld = scratch.rightMountWorld;
+    local.x = +ag.trackHalf; local.y = ag.centerLocalY; local.z = ag.centerLocalZ;
+    rotateVecByQuatInto(local, r, rightMountWorld);
+    rightMountWorld.x += t.x; rightMountWorld.y += t.y; rightMountWorld.z += t.z;
+    const supportLookahead = scratch.supportLookahead;
+    supportLookahead.x = lv.x * dt * SUSPENSION.supportLookaheadTicks;
+    supportLookahead.y = 0;
+    supportLookahead.z = lv.z * dt * SUSPENSION.supportLookaheadTicks;
+    const rayDir = scratch.rayDir;
+    local.x = 0; local.y = -1; local.z = 0;
+    rotateVecByQuatInto(local, r, rayDir);
+    const maxToi = rayLift + ag.suspensionRestLength + ag.droopMax;
+    const visualMax = ag.suspensionRestLength * 0.85;
+    let candidateRide = clamp(
+      axle.rideY + axle.rideVelY * dt,
+      -ag.droopMax,
+      visualMax,
+    );
+    let candidateRoll = clamp(
+      axle.rollAngle + axle.rollVel * dt,
+      -ag.maxArticulation * at.maxArticulationMult,
+      ag.maxArticulation * at.maxArticulationMult,
+    );
+    const basis = wheelBasisInto(
+      fwd, right, up, candidateRoll, ag.hasSteering ? -this.currentSteer : 0, scratch.basis,
+    );
+    const wheelRotation = cylinderRotationInto(basis.axle, scratch.wheelRotation);
+    let sinCandidate = Math.sin(candidateRoll);
+    let leftCandidateDepth = candidateRide - ag.trackHalf * sinCandidate;
+    let rightCandidateDepth = candidateRide + ag.trackHalf * sinCandidate;
+    const leftCenter = scratch.leftCenter;
+    const rightCenter = scratch.rightCenter;
+    wheelCenterWorldPoseInto(t, r, ag, candidateRide, candidateRoll, -ag.trackHalf, local, leftCenter);
+    wheelCenterWorldPoseInto(t, r, ag, candidateRide, candidateRoll, +ag.trackHalf, local, rightCenter);
+    const leftSupportWorld = scratch.leftSupportWorld;
+    leftSupportWorld.x = leftCenter.x - rayDir.x * rayLift + supportLookahead.x;
+    leftSupportWorld.y = leftCenter.y - rayDir.y * rayLift;
+    leftSupportWorld.z = leftCenter.z - rayDir.z * rayLift + supportLookahead.z;
+    const rightSupportWorld = scratch.rightSupportWorld;
+    rightSupportWorld.x = rightCenter.x - rayDir.x * rayLift + supportLookahead.x;
+    rightSupportWorld.y = rightCenter.y - rayDir.y * rayLift;
+    rightSupportWorld.z = rightCenter.z - rayDir.z * rayLift + supportLookahead.z;
+    castWheelSupport(
+      this.world,
+      this.body,
+      this.wheelShape,
+      wheelRotation,
+      leftSupportWorld,
+      rayDir,
+      maxToi,
+      leftCandidateDepth + rayLift,
+      this.geom.wheelRadius,
+      this.geom.wheelWidth / 2,
+      basis.axle,
+      wL,
+    );
+    castWheelSupport(
+      this.world,
+      this.body,
+      this.wheelShape,
+      wheelRotation,
+      rightSupportWorld,
+      rayDir,
+      maxToi,
+      rightCandidateDepth + rayLift,
+      this.geom.wheelRadius,
+      this.geom.wheelWidth / 2,
+      basis.axle,
+      wR,
+    );
+    const leftFirstDepth = wL.contact ? wL.contactDepth : -ag.droopMax;
+    const rightFirstDepth = wR.contact ? wR.contactDepth : -ag.droopMax;
+    const correctedRide = clamp(0.5 * (leftFirstDepth + rightFirstDepth), -ag.droopMax, visualMax);
+    const correctedRoll = clamp(
+      Math.atan2(rightFirstDepth - leftFirstDepth, 2 * ag.trackHalf),
+      -ag.maxArticulation * at.maxArticulationMult,
+      ag.maxArticulation * at.maxArticulationMult,
+    );
+    candidateRide = moveToward(candidateRide, correctedRide, 0.025);
+    candidateRoll = moveToward(candidateRoll, correctedRoll, 0.025 / Math.max(0.1, ag.trackHalf));
+
+    // Corrector query: rebuild both centres from the corrected beam pose,
+    // then overwrite the predictor contacts. No predictor state is kept.
+    wheelBasisInto(
+      fwd, right, up, candidateRoll, ag.hasSteering ? -this.currentSteer : 0, basis,
+    );
+    cylinderRotationInto(basis.axle, wheelRotation);
+    wheelBases[wIdxL] = basis;
+    wheelBases[wIdxR] = basis;
+    sinCandidate = Math.sin(candidateRoll);
+    leftCandidateDepth = candidateRide - ag.trackHalf * sinCandidate;
+    rightCandidateDepth = candidateRide + ag.trackHalf * sinCandidate;
+    wheelCenterWorldPoseInto(t, r, ag, candidateRide, candidateRoll, -ag.trackHalf, local, leftCenter);
+    wheelCenterWorldPoseInto(t, r, ag, candidateRide, candidateRoll, +ag.trackHalf, local, rightCenter);
+    leftSupportWorld.x = leftCenter.x - rayDir.x * rayLift + supportLookahead.x;
+    leftSupportWorld.y = leftCenter.y - rayDir.y * rayLift;
+    leftSupportWorld.z = leftCenter.z - rayDir.z * rayLift + supportLookahead.z;
+    rightSupportWorld.x = rightCenter.x - rayDir.x * rayLift + supportLookahead.x;
+    rightSupportWorld.y = rightCenter.y - rayDir.y * rayLift;
+    rightSupportWorld.z = rightCenter.z - rayDir.z * rayLift + supportLookahead.z;
+    castWheelSupport(
+      this.world, this.body, this.wheelShape, wheelRotation,
+      leftSupportWorld, rayDir, maxToi, leftCandidateDepth + rayLift,
+      this.geom.wheelRadius, this.geom.wheelWidth / 2, basis.axle, wL,
+    );
+    castWheelSupport(
+      this.world, this.body, this.wheelShape, wheelRotation,
+      rightSupportWorld, rayDir, maxToi, rightCandidateDepth + rayLift,
+      this.geom.wheelRadius, this.geom.wheelWidth / 2, basis.axle, wR,
+    );
+    const leftSecondDepth = wL.contact ? wL.contactDepth : -ag.droopMax;
+    const rightSecondDepth = wR.contact ? wR.contactDepth : -ag.droopMax;
+    const axleDebug = this.axleDebug[aIdx]!;
+    axleDebug.iterationResidual = Math.max(
+      Math.abs(leftSecondDepth - leftFirstDepth),
+      Math.abs(rightSecondDepth - rightFirstDepth),
+    );
+    axleDebug.tubeContact = false;
+    axleDebug.housingContact = false;
+    const probeRotation = axleBeamRotationInto(r, candidateRoll, scratch.probeRotation);
+    const portalOffset = scratch.portalOffset;
+    local.x = 0; local.y = ag.probe.verticalOffset; local.z = 0;
+    rotateVecByQuatInto(local, r, portalOffset);
+    const tubeCenter = scratch.tubeCenter;
+    const housingCenter = scratch.housingCenter;
+    wheelCenterWorldPoseInto(t, r, ag, candidateRide, candidateRoll, 0, local, tubeCenter);
+    wheelCenterWorldPoseInto(t, r, ag, candidateRide, candidateRoll, 0, local, housingCenter);
+    tubeCenter.x += portalOffset.x; tubeCenter.y += portalOffset.y; tubeCenter.z += portalOffset.z;
+    housingCenter.x += portalOffset.x; housingCenter.y += portalOffset.y; housingCenter.z += portalOffset.z;
+    const probeSurface = sampleSurface(this.world.terrain, housingCenter.x, housingCenter.z);
+    const probeDry = !this.worldHasWater
+      || sampleWaterDepth(this.world.terrain, housingCenter.x, housingCenter.z) <= 0;
+    if (up.y > 0.9 && probeDry
+      && surfaceInfo(probeSurface).traction.soil === 'none') {
+      this.applyAxleProbe(aIdx, false, this.axleTubeShapes[aIdx]!, tubeCenter, probeRotation, t, lv, av, dt);
+      this.applyAxleProbe(aIdx, true, this.axleHousingShapes[aIdx]!, housingCenter, probeRotation, t, lv, av, dt);
+    }
+    const debugLeft = this.wheelDebug[wIdxL]!;
+    const debugRight = this.wheelDebug[wIdxR]!;
+    setSuspensionDebug(debugLeft, leftSupportWorld, rayDir, maxToi, ag);
+    setSuspensionDebug(debugRight, rightSupportWorld, rayDir, maxToi, ag);
+    // Lookahead is only for choosing next-frame support depth/normal. Tire
+    // and spring reactions still act at the current wheel patch; leaving the
+    // point one tick ahead adds an artificial moment arm during cornering.
+    wL.contactPoint.x -= supportLookahead.x;
+    wL.contactPoint.z -= supportLookahead.z;
+    wR.contactPoint.x -= supportLookahead.x;
+    wR.contactPoint.z -= supportLookahead.z;
+    if (wL.contact && wL.sinkDepth > 0) {
+      wL.contactDepth = Math.max(0, wL.contactDepth - wL.sinkDepth);
+      wL.contactPoint.y -= wL.sinkDepth;
+    }
+    if (wR.contact && wR.sinkDepth > 0) {
+      wR.contactDepth = Math.max(0, wR.contactDepth - wR.sinkDepth);
+      wR.contactPoint.y -= wR.sinkDepth;
+    }
+    if (wL.contact) {
+      const rutDepth = this.world.ruts.sampleDepth(wL.contactPoint.x, wL.contactPoint.z);
+      wL.contactDepth = Math.max(0, wL.contactDepth - rutDepth);
+      wL.contactPoint.y -= rutDepth;
+    }
+    if (wR.contact) {
+      const rutDepth = this.world.ruts.sampleDepth(wR.contactPoint.x, wR.contactPoint.z);
+      wR.contactDepth = Math.max(0, wR.contactDepth - rutDepth);
+      wR.contactPoint.y -= rutDepth;
+    }
+
+    wL.surface = sampleSurface(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
+    wR.surface = sampleSurface(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
+    wL.supportGrip = wL.supportIsTerrain ? surfaceGrip(wL.surface, this.geom) : wL.supportColliderFriction;
+    wR.supportGrip = wR.supportIsTerrain ? surfaceGrip(wR.surface, this.geom) : wR.supportColliderFriction;
+
+    // Water between the tread and the bed, on top of whatever the bed
+    // itself grips at. Keeping the bed surface is the reason water is
+    // its own grid rather than a Surface: a gravel ford and a
+    // mud-bottom crossing should not feel the same.
+    if (this.worldHasWater) {
+      wL.waterDepth = sampleWaterDepth(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
+      wR.waterDepth = sampleWaterDepth(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
+      wL.supportGrip *= wetGripMult(wL.waterDepth, this.geom.wheelRadius) * this.geom.spec.grip.wet;
+      wR.supportGrip *= wetGripMult(wR.waterDepth, this.geom.wheelRadius) * this.geom.spec.grip.wet;
+    }
+
+    // A second, volumetric query catches faces the suspension-axis ray
+    // cannot see. It is based on the previous axle pose so the tyre starts
+    // touching a ledge when its circumference reaches it, not when the
+    // wheel centre has already crossed the face.
+    for (let volumeSideIndex = 0; volumeSideIndex < 2; volumeSideIndex++) {
+      const wheelIndex = volumeSideIndex === 0 ? wIdxL : wIdxR;
+      const w = volumeSideIndex === 0 ? wL : wR;
+      const localX = volumeSideIndex === 0 ? -ag.trackHalf : ag.trackHalf;
+      const center = scratch.wheelCenter;
+      wheelCenterWorldPoseInto(t, r, ag, candidateRide, candidateRoll, localX, local, center);
+      const debug = this.wheelDebug[wheelIndex]!;
+      debug.wheelCenter.x = center.x;
+      debug.wheelCenter.y = center.y;
+      debug.wheelCenter.z = center.z;
+      // Exact upward terrain support already accounts for the tyre volume.
+      // Running the steep-face path as well would replace its raw depth with
+      // the intentionally slow ledge-climb handoff, leaving the visible axle
+      // behind the ground it is already supported by.
+      let ledge = w.volumeSupport ? null : findSteepWheelContactInto(
+        this.world.world,
         this.wheelShape,
+        w.hasPreviousCenter ? w.previousCenter : null,
+        center,
         wheelRotation,
-        leftSupportWorld,
-        rayDir,
-        maxToi,
-        leftCandidateDepth + rayLift,
         this.geom.wheelRadius,
         this.geom.wheelWidth / 2,
+        LEDGE_CONTACT.prediction,
+        LEDGE_CONTACT.maxSupportNormalY,
+        LEDGE_CONTACT.maxClimbHeight,
+        LEDGE_CONTACT.edgeAdvance,
+        basis.forward,
+        COLLISION_GROUP_WHEEL_RAY,
+        this._ledgeStorage[wheelIndex]!,
         basis.axle,
-        wL,
       );
-      castWheelSupport(
-        this.world,
-        this.body,
-        this.wheelShape,
-        wheelRotation,
-        rightSupportWorld,
-        rayDir,
-        maxToi,
-        rightCandidateDepth + rayLift,
-        this.geom.wheelRadius,
-        this.geom.wheelWidth / 2,
-        basis.axle,
-        wR,
-      );
-      const leftFirstDepth = wL.contact ? wL.contactDepth : -ag.droopMax;
-      const rightFirstDepth = wR.contact ? wR.contactDepth : -ag.droopMax;
-      const correctedRide = clamp(0.5 * (leftFirstDepth + rightFirstDepth), -ag.droopMax, visualMax);
-      const correctedRoll = clamp(
-        Math.atan2(rightFirstDepth - leftFirstDepth, 2 * ag.trackHalf),
-        -ag.maxArticulation * at.maxArticulationMult,
-        ag.maxArticulation * at.maxArticulationMult,
-      );
-      candidateRide = moveToward(candidateRide, correctedRide, 0.025);
-      candidateRoll = moveToward(candidateRoll, correctedRoll, 0.025 / Math.max(0.1, ag.trackHalf));
-
-      // Corrector query: rebuild both centres from the corrected beam pose,
-      // then overwrite the predictor contacts. No predictor state is kept.
-      basis = wheelBasis(fwd, right, up, candidateRoll, ag.hasSteering ? -this.currentSteer : 0);
-      wheelRotation = cylinderRotation(basis.axle);
-      wheelBases[wIdxL] = basis;
-      wheelBases[wIdxR] = basis;
-      sinCandidate = Math.sin(candidateRoll);
-      leftCandidateDepth = candidateRide - ag.trackHalf * sinCandidate;
-      rightCandidateDepth = candidateRide + ag.trackHalf * sinCandidate;
-      leftCenter = wheelCenterWorldPose(t, r, ag, candidateRide, candidateRoll, -ag.trackHalf);
-      rightCenter = wheelCenterWorldPose(t, r, ag, candidateRide, candidateRoll, +ag.trackHalf);
-      leftSupportWorld = {
-        x: leftCenter.x - rayDir.x * rayLift + supportLookahead.x,
-        y: leftCenter.y - rayDir.y * rayLift,
-        z: leftCenter.z - rayDir.z * rayLift + supportLookahead.z,
-      };
-      rightSupportWorld = {
-        x: rightCenter.x - rayDir.x * rayLift + supportLookahead.x,
-        y: rightCenter.y - rayDir.y * rayLift,
-        z: rightCenter.z - rayDir.z * rayLift + supportLookahead.z,
-      };
-      castWheelSupport(
-        this.world, this.body, this.wheelShape, wheelRotation,
-        leftSupportWorld, rayDir, maxToi, leftCandidateDepth + rayLift,
-        this.geom.wheelRadius, this.geom.wheelWidth / 2, basis.axle, wL,
-      );
-      castWheelSupport(
-        this.world, this.body, this.wheelShape, wheelRotation,
-        rightSupportWorld, rayDir, maxToi, rightCandidateDepth + rayLift,
-        this.geom.wheelRadius, this.geom.wheelWidth / 2, basis.axle, wR,
-      );
-      const leftSecondDepth = wL.contact ? wL.contactDepth : -ag.droopMax;
-      const rightSecondDepth = wR.contact ? wR.contactDepth : -ag.droopMax;
-      const axleDebug = this.axleDebug[aIdx]!;
-      axleDebug.iterationResidual = Math.max(
-        Math.abs(leftSecondDepth - leftFirstDepth),
-        Math.abs(rightSecondDepth - rightFirstDepth),
-      );
-      axleDebug.tubeContact = false;
-      axleDebug.housingContact = false;
-      const probeRotation = axleBeamRotation(r, candidateRoll);
-      const portalOffset = rotateVecByQuat({ x: 0, y: ag.probe.verticalOffset, z: 0 }, r);
-      const tubeCenter = wheelCenterWorldPose(t, r, ag, candidateRide, candidateRoll, 0);
-      const housingCenter = wheelCenterWorldPose(t, r, ag, candidateRide, candidateRoll, 0);
-      tubeCenter.x += portalOffset.x; tubeCenter.y += portalOffset.y; tubeCenter.z += portalOffset.z;
-      housingCenter.x += portalOffset.x; housingCenter.y += portalOffset.y; housingCenter.z += portalOffset.z;
-      const probeSurface = sampleSurface(this.world.terrain, housingCenter.x, housingCenter.z);
-      const probeDry = !this.worldHasWater
-        || sampleWaterDepth(this.world.terrain, housingCenter.x, housingCenter.z) <= 0;
-      if (up.y > 0.9 && probeDry
-        && surfaceInfo(probeSurface).traction.soil === 'none') {
-        this.applyAxleProbe(aIdx, false, this.axleTubeShapes[aIdx]!, tubeCenter, probeRotation, t, lv, av, dt);
-        this.applyAxleProbe(aIdx, true, this.axleHousingShapes[aIdx]!, housingCenter, probeRotation, t, lv, av, dt);
-      }
-      const debugLeft = this.wheelDebug[wIdxL]!;
-      const debugRight = this.wheelDebug[wIdxR]!;
-      setSuspensionDebug(debugLeft, leftSupportWorld, rayDir, maxToi, ag);
-      setSuspensionDebug(debugRight, rightSupportWorld, rayDir, maxToi, ag);
-      // Lookahead is only for choosing next-frame support depth/normal. Tire
-      // and spring reactions still act at the current wheel patch; leaving the
-      // point one tick ahead adds an artificial moment arm during cornering.
-      wL.contactPoint.x -= supportLookahead.x;
-      wL.contactPoint.z -= supportLookahead.z;
-      wR.contactPoint.x -= supportLookahead.x;
-      wR.contactPoint.z -= supportLookahead.z;
-      if (wL.contact && wL.sinkDepth > 0) {
-        wL.contactDepth = Math.max(0, wL.contactDepth - wL.sinkDepth);
-        wL.contactPoint.y -= wL.sinkDepth;
-      }
-      if (wR.contact && wR.sinkDepth > 0) {
-        wR.contactDepth = Math.max(0, wR.contactDepth - wR.sinkDepth);
-        wR.contactPoint.y -= wR.sinkDepth;
-      }
-      if (wL.contact) {
-        const rutDepth = this.world.ruts.sampleDepth(wL.contactPoint.x, wL.contactPoint.z);
-        wL.contactDepth = Math.max(0, wL.contactDepth - rutDepth);
-        wL.contactPoint.y -= rutDepth;
-      }
-      if (wR.contact) {
-        const rutDepth = this.world.ruts.sampleDepth(wR.contactPoint.x, wR.contactPoint.z);
-        wR.contactDepth = Math.max(0, wR.contactDepth - rutDepth);
-        wR.contactPoint.y -= rutDepth;
-      }
-
-      wL.surface = sampleSurface(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
-      wR.surface = sampleSurface(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
-      wL.supportGrip = wL.supportIsTerrain ? surfaceGrip(wL.surface, this.geom) : wL.supportColliderFriction;
-      wR.supportGrip = wR.supportIsTerrain ? surfaceGrip(wR.surface, this.geom) : wR.supportColliderFriction;
-
-      // Water between the tread and the bed, on top of whatever the bed
-      // itself grips at. Keeping the bed surface is the reason water is
-      // its own grid rather than a Surface: a gravel ford and a
-      // mud-bottom crossing should not feel the same.
-      if (this.worldHasWater) {
-        wL.waterDepth = sampleWaterDepth(this.world.terrain, wL.contactPoint.x, wL.contactPoint.z);
-        wR.waterDepth = sampleWaterDepth(this.world.terrain, wR.contactPoint.x, wR.contactPoint.z);
-        wL.supportGrip *= wetGripMult(wL.waterDepth, this.geom.wheelRadius) * this.geom.spec.grip.wet;
-        wR.supportGrip *= wetGripMult(wR.waterDepth, this.geom.wheelRadius) * this.geom.spec.grip.wet;
-      }
-
-      // A second, volumetric query catches faces the suspension-axis ray
-      // cannot see. It is based on the previous axle pose so the tyre starts
-      // touching a ledge when its circumference reaches it, not when the
-      // wheel centre has already crossed the face.
-      for (let volumeSideIndex = 0; volumeSideIndex < 2; volumeSideIndex++) {
-        const wheelIndex = volumeSideIndex === 0 ? wIdxL : wIdxR;
-        const w = volumeSideIndex === 0 ? wL : wR;
-        const localX = volumeSideIndex === 0 ? -ag.trackHalf : ag.trackHalf;
-        const center = wheelCenterWorldPose(t, r, ag, candidateRide, candidateRoll, localX);
-        const debug = this.wheelDebug[wheelIndex]!;
-        debug.wheelCenter.x = center.x;
-        debug.wheelCenter.y = center.y;
-        debug.wheelCenter.z = center.z;
-        // Exact upward terrain support already accounts for the tyre volume.
-        // Running the steep-face path as well would replace its raw depth with
-        // the intentionally slow ledge-climb handoff, leaving the visible axle
-        // behind the ground it is already supported by.
-        let ledge = w.volumeSupport ? null : findSteepWheelContact(
-          this.world.world,
-          this.wheelShape,
-          w.hasPreviousCenter ? w.previousCenter : null,
+      if (!ledge && !w.contact) {
+        ledge = findTerrainSidewallContactInto(
+          this.world,
           center,
-          wheelRotation,
+          basis.axle,
           this.geom.wheelRadius,
           this.geom.wheelWidth / 2,
           LEDGE_CONTACT.prediction,
-          LEDGE_CONTACT.maxSupportNormalY,
-          LEDGE_CONTACT.maxClimbHeight,
-          LEDGE_CONTACT.edgeAdvance,
-          basis.forward,
-          COLLISION_GROUP_WHEEL_RAY,
-          basis.axle,
+          this._ledgeStorage[wheelIndex]!,
         );
-        if (!ledge && !w.contact) {
-          ledge = findTerrainSidewallContact(
-            this.world,
-            center,
-            basis.axle,
-            this.geom.wheelRadius,
-            this.geom.wheelWidth / 2,
-            LEDGE_CONTACT.prediction,
-          );
-        }
-        ledgeContacts[wheelIndex] = ledge;
-        const semantics = ledge
-          ? classifyTireContact(
-            ledge.normal.x * basis.axle.x
-            + ledge.normal.y * basis.axle.y
-            + ledge.normal.z * basis.axle.z,
-          )
-          : null;
-        ledgeSemantics[wheelIndex] = semantics;
-        w.ledgeContact = ledge !== null;
-        w.ledgeNormalForce = 0;
-        w.ledgeLongForce = 0;
-        w.previousCenter.x = center.x;
-        w.previousCenter.y = center.y;
-        w.previousCenter.z = center.z;
-        w.hasPreviousCenter = true;
+      }
+      ledgeContacts[wheelIndex] = ledge;
+      const semantics = ledge
+        ? classifyTireContactInto(
+          ledge.normal.x * basis.axle.x
+          + ledge.normal.y * basis.axle.y
+          + ledge.normal.z * basis.axle.z,
+          this._ledgeSemanticsStorage[wheelIndex]!,
+        )
+        : null;
+      ledgeSemantics[wheelIndex] = semantics;
+      w.ledgeContact = ledge !== null;
+      w.ledgeNormalForce = 0;
+      w.ledgeLongForce = 0;
+      w.previousCenter.x = center.x;
+      w.previousCenter.y = center.y;
+      w.previousCenter.z = center.z;
+      w.hasPreviousCenter = true;
 
-        const quarterMass = this.geom.spec.massKg * 0.25;
-        const carcass = carcassRates(
-          {
-            ...this.geom.spec.tireCarcass,
-            staticDeflectionRatio: this.geom.spec.tireCarcass.staticDeflectionRatio
-              * TUNING.tireCarcassComplianceMult,
-            radialDampingRatio: this.geom.spec.tireCarcass.radialDampingRatio
-              * TUNING.tireRadialDampingMult,
-          },
-          this.geom.wheelRadius,
-          quarterMass * Math.abs(GRAVITY_Y),
-          quarterMass,
-          pressureRadialScale(
-            this.tirePressurePsi,
-            this.geom.spec.tireCarcass.nominalPressurePsi,
-          ),
-        );
-        const series = solveSeriesCompliance(
-          w.contact ? Math.max(0, w.contactDepth) : 0,
-          0.5 * ag.rideStiffness * at.rideStiffnessMult,
-          carcass.stiffness,
-          carcass.maxDeflection,
-        );
-        let bridgeActive = false;
-        if (ledge && (semantics?.treadFraction ?? 0) > 0) {
-          w.ledgeHandoff = true;
-          w.ledgeHandoffGrace = LEDGE_CONTACT.handoffGraceTicks;
+      const quarterMass = this.geom.spec.massKg * 0.25;
+      const carcass = carcassRatesInto(
+        this.geom.spec.tireCarcass.staticDeflectionRatio * TUNING.tireCarcassComplianceMult,
+        this.geom.spec.tireCarcass.radialDampingRatio * TUNING.tireRadialDampingMult,
+        this.geom.spec.tireCarcass.sidewallDampingRatio,
+        this.geom.wheelRadius,
+        quarterMass * Math.abs(GRAVITY_Y),
+        quarterMass,
+        pressureRadialScale(
+          this.tirePressurePsi,
+          this.geom.spec.tireCarcass.nominalPressurePsi,
+        ),
+        scratch.carcass,
+      );
+      const series = solveSeriesComplianceInto(
+        w.contact ? Math.max(0, w.contactDepth) : 0,
+        0.5 * ag.rideStiffness * at.rideStiffnessMult,
+        carcass.stiffness,
+        carcass.maxDeflection,
+        scratch.series,
+      );
+      let bridgeActive = false;
+      if (ledge && (semantics?.treadFraction ?? 0) > 0) {
+        w.ledgeHandoff = true;
+        w.ledgeHandoffGrace = LEDGE_CONTACT.handoffGraceTicks;
+        bridgeActive = true;
+      } else if (w.ledgeHandoff) {
+        if (w.contact) bridgeActive = true;
+        else if (w.ledgeHandoffGrace > 0) {
+          w.ledgeHandoffGrace--;
           bridgeActive = true;
-        } else if (w.ledgeHandoff) {
-          if (w.contact) bridgeActive = true;
-          else if (w.ledgeHandoffGrace > 0) {
-            w.ledgeHandoffGrace--;
-            bridgeActive = true;
-          }
         }
-        w.resolvedDepth = w.resolvedDepthInitialized && bridgeActive
-          ? moveToward(w.resolvedDepth, series.suspensionDeflection, LEDGE_CONTACT.depthCatchupRate * dt)
-          : series.suspensionDeflection;
-        w.resolvedDepthInitialized = true;
-        if (w.ledgeHandoff && (
-          !bridgeActive
-          || (w.contact && Math.abs(w.resolvedDepth - series.suspensionDeflection) < 1e-6)
-        )) w.ledgeHandoff = false;
-        w.tireDeflection = w.contact
-          ? series.carcassDeflection
-          : Math.max(0, w.previousTireDeflection - 1.5 * dt);
-        w.tireDeflectionRate = (w.tireDeflection - w.previousTireDeflection) / dt;
-        w.carcassForce = w.contact
-          ? Math.max(0, Math.min(
-            LEDGE_CONTACT.maxForce,
-            carcass.stiffness * w.tireDeflection
-              + carcass.radialDamping * w.tireDeflectionRate,
-          ))
-          : 0;
-        w.contactZone = w.contact ? (w.contactZone === 'air' ? 'tread' : w.contactZone) : 'air';
-        w.treadFraction = w.contact ? w.treadFraction : 0;
-        if (w.contact) {
-          w.tireContactNormal.x = w.contactNormal.x;
-          w.tireContactNormal.y = w.contactNormal.y;
-          w.tireContactNormal.z = w.contactNormal.z;
+      }
+      w.resolvedDepth = w.resolvedDepthInitialized && bridgeActive
+        ? moveToward(w.resolvedDepth, series.suspensionDeflection, LEDGE_CONTACT.depthCatchupRate * dt)
+        : series.suspensionDeflection;
+      w.resolvedDepthInitialized = true;
+      if (w.ledgeHandoff && (
+        !bridgeActive
+        || (w.contact && Math.abs(w.resolvedDepth - series.suspensionDeflection) < 1e-6)
+      )) w.ledgeHandoff = false;
+      w.tireDeflection = w.contact
+        ? series.carcassDeflection
+        : Math.max(0, w.previousTireDeflection - 1.5 * dt);
+      w.tireDeflectionRate = (w.tireDeflection - w.previousTireDeflection) / dt;
+      w.carcassForce = w.contact
+        ? Math.max(0, Math.min(
+          LEDGE_CONTACT.maxForce,
+          carcass.stiffness * w.tireDeflection
+            + carcass.radialDamping * w.tireDeflectionRate,
+        ))
+        : 0;
+      w.contactZone = w.contact ? (w.contactZone === 'air' ? 'tread' : w.contactZone) : 'air';
+      w.treadFraction = w.contact ? w.treadFraction : 0;
+      if (w.contact) {
+        w.tireContactNormal.x = w.contactNormal.x;
+        w.tireContactNormal.y = w.contactNormal.y;
+        w.tireContactNormal.z = w.contactNormal.z;
+      }
+      if (ledge) {
+        const normalSpeed = pointVelocityDot(lv, av, t, ledge.point, ledge.normal);
+        const constraint = solveSidewallConstraintInto(
+          ledge.penetration,
+          normalSpeed,
+          (VEHICLE.mass * this.geom.massMult) * LEDGE_CONTACT.normalMassFraction,
+          dt,
+          w.previousTireDeflection,
+          carcass.maxDeflection,
+          LEDGE_CONTACT.normalCorrectionRate * TUNING.tireSidewallCorrectionMult,
+          LEDGE_CONTACT.maxNormalCorrectionSpeed * TUNING.tireSidewallCorrectionMult,
+          LEDGE_CONTACT.maxForce * dt,
+          SIDEWALL_RELEASE_RATE,
+          scratch.sidewall,
+        );
+        const normalForce = constraint.impulse / dt;
+        ledgeLoads[wheelIndex] = normalForce;
+        w.ledgeNormalForce = normalForce;
+        if (!w.contact || constraint.deflection > w.tireDeflection) {
+          w.tireDeflection = constraint.deflection;
+          w.tireContactNormal.x = ledge.normal.x;
+          w.tireContactNormal.y = ledge.normal.y;
+          w.tireContactNormal.z = ledge.normal.z;
+          w.contactZone = semantics?.zone ?? 'sidewall';
+          w.treadFraction = semantics?.treadFraction ?? 0;
+          w.suspensionAxisAlignment = Math.max(0, -(
+            ledge.normal.x * rayDir.x + ledge.normal.y * rayDir.y + ledge.normal.z * rayDir.z
+          ));
         }
-        if (ledge) {
-          const normalSpeed = pointVelocityDot(lv, av, t, ledge.point, ledge.normal);
-          const constraint = solveSidewallConstraint(
-            ledge.penetration,
-            normalSpeed,
-            (VEHICLE.mass * this.geom.massMult) * LEDGE_CONTACT.normalMassFraction,
-            dt,
-            w.previousTireDeflection,
-            carcass.maxDeflection,
-            LEDGE_CONTACT.normalCorrectionRate * TUNING.tireSidewallCorrectionMult,
-            LEDGE_CONTACT.maxNormalCorrectionSpeed * TUNING.tireSidewallCorrectionMult,
-            LEDGE_CONTACT.maxForce * dt,
-          );
-          const normalForce = constraint.impulse / dt;
-          ledgeLoads[wheelIndex] = normalForce;
-          w.ledgeNormalForce = normalForce;
-          if (!w.contact || constraint.deflection > w.tireDeflection) {
-            w.tireDeflection = constraint.deflection;
-            w.tireContactNormal.x = ledge.normal.x;
-            w.tireContactNormal.y = ledge.normal.y;
-            w.tireContactNormal.z = ledge.normal.z;
-            w.contactZone = semantics?.zone ?? 'sidewall';
-            w.treadFraction = semantics?.treadFraction ?? 0;
-            w.suspensionAxisAlignment = Math.max(0, -(
-              ledge.normal.x * rayDir.x + ledge.normal.y * rayDir.y + ledge.normal.z * rayDir.z
-            ));
-          }
-          if (normalForce > 0) {
-            const sf = this._scratchForce;
-            sf.x = ledge.normal.x * constraint.impulse;
-            sf.y = ledge.normal.y * constraint.impulse;
-            sf.z = ledge.normal.z * constraint.impulse;
-            if (semantics?.zone === 'tread') this.body.applyImpulse(sf, true);
-            else this.body.applyImpulseAtPoint(sf, ledge.point, true);
-            // A pure sidewall has ordinary carcass scrub, but no rolling
-            // frame and therefore no drive/brake torque. Apply that scrub as
-            // a bounded chassis impulse at the physical patch.
-            if (semantics?.treadFraction === 0) {
-              const armX = ledge.point.x - t.x;
-              const armY = ledge.point.y - t.y;
-              const armZ = ledge.point.z - t.z;
-              const vx = lv.x + av.y * armZ - av.z * armY;
-              const vy = lv.y + av.z * armX - av.x * armZ;
-              const vz = lv.z + av.x * armY - av.y * armX;
-              const normalV = vx * ledge.normal.x + vy * ledge.normal.y + vz * ledge.normal.z;
-              const tx = vx - ledge.normal.x * normalV;
-              const ty = vy - ledge.normal.y * normalV;
-              const tz = vz - ledge.normal.z * normalV;
-              const tangentSpeed = Math.hypot(tx, ty, tz);
-              if (tangentSpeed > 1e-6) {
-                const tangentImpulse = Math.min(
-                  tangentSpeed * quarterMass,
-                  constraint.impulse
-                    * this.geom.spec.tireCarcass.sidewallFrictionRatio
-                    * TUNING.tireSidewallFrictionMult,
-                );
-                sf.x = -tx / tangentSpeed * tangentImpulse;
-                sf.y = -ty / tangentSpeed * tangentImpulse;
-                sf.z = -tz / tangentSpeed * tangentImpulse;
-                this.body.applyImpulseAtPoint(sf, ledge.point, true);
-              }
+        if (normalForce > 0) {
+          const sf = this._scratchForce;
+          sf.x = ledge.normal.x * constraint.impulse;
+          sf.y = ledge.normal.y * constraint.impulse;
+          sf.z = ledge.normal.z * constraint.impulse;
+          if (semantics?.zone === 'tread') this.body.applyImpulse(sf, true);
+          else this.body.applyImpulseAtPoint(sf, ledge.point, true);
+          // A pure sidewall has ordinary carcass scrub, but no rolling
+          // frame and therefore no drive/brake torque. Apply that scrub as
+          // a bounded chassis impulse at the physical patch.
+          if (semantics?.treadFraction === 0) {
+            const armX = ledge.point.x - t.x;
+            const armY = ledge.point.y - t.y;
+            const armZ = ledge.point.z - t.z;
+            const vx = lv.x + av.y * armZ - av.z * armY;
+            const vy = lv.y + av.z * armX - av.x * armZ;
+            const vz = lv.z + av.x * armY - av.y * armX;
+            const normalV = vx * ledge.normal.x + vy * ledge.normal.y + vz * ledge.normal.z;
+            const tx = vx - ledge.normal.x * normalV;
+            const ty = vy - ledge.normal.y * normalV;
+            const tz = vz - ledge.normal.z * normalV;
+            const tangentSpeed = Math.hypot(tx, ty, tz);
+            if (tangentSpeed > 1e-6) {
+              const tangentImpulse = Math.min(
+                tangentSpeed * quarterMass,
+                constraint.impulse
+                  * this.geom.spec.tireCarcass.sidewallFrictionRatio
+                  * TUNING.tireSidewallFrictionMult,
+              );
+              sf.x = -tx / tangentSpeed * tangentImpulse;
+              sf.y = -ty / tangentSpeed * tangentImpulse;
+              sf.z = -tz / tangentSpeed * tangentImpulse;
+              this.body.applyImpulseAtPoint(sf, ledge.point, true);
             }
           }
         }
-        w.previousTireDeflection = w.tireDeflection;
       }
+      w.previousTireDeflection = w.tireDeflection;
+    }
+  }
 
-      // Update axle state (rideY tracks avgComp, rollAngle tracks slope).
-      // We still use stepAxle for the kinematic axle bookkeeping that
-      // feeds visuals + snapshots, but we IGNORE its chassisRideForce
-      // and instead apply per-wheel-end ride forces below. The reason:
-      // applying a single ride force at the axle CENTER (chassis-local
-      // x=0) gives no roll-restoring torque when the chassis tips - both
-      // wheels' contributions sum at x=0 and just push the chassis
-      // straight up regardless of tilt, so any small roll perturbation
-      // grows unchecked. Splitting the ride force into per-wheel-end
-      // components at +/- trackHalf naturally creates the righting
-      // moment that solid-axle vehicles get from their leaf-spring or
-      // coilover mounts being attached at the axle ends, not the diff.
-      const result = stepAxle(axle, {
-        leftDepth: wL.resolvedDepth,
-        rightDepth: wR.resolvedDepth,
-        leftContact: hasSuspensionSupport(wL),
-        rightContact: hasSuspensionSupport(wR),
-        chassisVertVelAtAnchor: 0, // unused now; per-wheel damping below
-        dt,
-        rideStiffnessMult: at.rideStiffnessMult,
-        rideDampingMult: at.rideDampingMult,
-        rollStiffnessMult: at.rollStiffnessMult,
-        maxArticulationMult: at.maxArticulationMult,
-      }, axle.stepResult);
-      const finalRollSin = Math.sin(axle.rollAngle);
-      const leftStop = progressiveTravelStopForce(
-        axle.rideY - ag.trackHalf * finalRollSin,
-        ag.bumpMax,
-        ag.droopMax,
-        0.5 * ag.rideStiffness * at.rideStiffnessMult,
-        axle.travelStops[0],
-      );
-      const rightStop = progressiveTravelStopForce(
-        axle.rideY + ag.trackHalf * finalRollSin,
-        ag.bumpMax,
-        ag.droopMax,
-        0.5 * ag.rideStiffness * at.rideStiffnessMult,
-        axle.travelStops[1],
-      );
+  /** 3a. One axle's suspension: beam integration, per-wheel-end ride forces,
+   *  the sway bar, the mechanical travel stops and the roll-torque dump past
+   *  the articulation cap. @hotloop */
+  private phaseSuspension(ctx: VehicleStepContext, aIdx: number): void {
+    const dt = ctx.dt;
+    const fwd = ctx.fwd;
+    const up = ctx.up;
+    const scratch = this._axleScratch[aIdx]!;
+    const axle = this.axles[aIdx]!;
+    const ag = axle.geom;
+    const at = aIdx === 0 ? TUNING.axleFront : TUNING.axleRear;
+    const wL = this.wheels[aIdx * 2]!;
+    const wR = this.wheels[aIdx * 2 + 1]!;
+    const leftMountWorld = scratch.leftMountWorld;
+    const rightMountWorld = scratch.rightMountWorld;
 
-      // Per-wheel-end ride forces. Compression is read directly from
-      // each wheel's raycast (capped at bumpMax to mirror the axle's
-      // travel limit). Damping scales with an engagement curve that
-      // ramps from 0 to 1 over the first ~80 mm of compression - so a
-      // wheel just kissing ground still feels soft, but typical
-      // equilibrium (~87 mm of compression under chassis weight) is
-      // already at full damping. The earlier `comp / restLength` curve
-      // only reached 16% engagement at equilibrium, leaving the
-      // chassis vertical mode at ~12% critical - that's the source of
-      // the visible 1.7 Hz body bob the user reported as stutter while
-      // driving. Saturating earlier brings it to ~critical without
-      // hardening the first-contact response.
-      const sides = this._suspensionSides;
-      sides[0].wheel = wL;
-      sides[0].localX = -ag.trackHalf;
-      sides[0].world.x = leftMountWorld.x;
-      sides[0].world.y = leftMountWorld.y;
-      sides[0].world.z = leftMountWorld.z;
-      sides[1].wheel = wR;
-      sides[1].localX = ag.trackHalf;
-      sides[1].world.x = rightMountWorld.x;
-      sides[1].world.y = rightMountWorld.y;
-      sides[1].world.z = rightMountWorld.z;
-      for (let sideIndex = 0; sideIndex < 2; sideIndex++) {
-        const side = sides[sideIndex]!;
-        side.supported = false;
-        side.comp = 0;
-        side.compRate = 0;
-        side.force = 0;
+    // Update axle state (rideY tracks avgComp, rollAngle tracks slope).
+    // We still use stepAxle for the kinematic axle bookkeeping that
+    // feeds visuals + snapshots, but we IGNORE its chassisRideForce
+    // and instead apply per-wheel-end ride forces below. The reason:
+    // applying a single ride force at the axle CENTER (chassis-local
+    // x=0) gives no roll-restoring torque when the chassis tips - both
+    // wheels' contributions sum at x=0 and just push the chassis
+    // straight up regardless of tilt, so any small roll perturbation
+    // grows unchecked. Splitting the ride force into per-wheel-end
+    // components at +/- trackHalf naturally creates the righting
+    // moment that solid-axle vehicles get from their leaf-spring or
+    // coilover mounts being attached at the axle ends, not the diff.
+    const stepInputs = scratch.stepInputs;
+    stepInputs.leftDepth = wL.resolvedDepth;
+    stepInputs.rightDepth = wR.resolvedDepth;
+    stepInputs.leftContact = hasSuspensionSupport(wL);
+    stepInputs.rightContact = hasSuspensionSupport(wR);
+    stepInputs.chassisVertVelAtAnchor = 0; // unused now; per-wheel damping below
+    stepInputs.dt = dt;
+    stepInputs.rideStiffnessMult = at.rideStiffnessMult;
+    stepInputs.rideDampingMult = at.rideDampingMult;
+    stepInputs.rollStiffnessMult = at.rollStiffnessMult;
+    stepInputs.maxArticulationMult = at.maxArticulationMult;
+    const result = stepAxle(axle, stepInputs, axle.stepResult);
+    const finalRollSin = Math.sin(axle.rollAngle);
+    const leftStop = progressiveTravelStopForce(
+      axle.rideY - ag.trackHalf * finalRollSin,
+      ag.bumpMax,
+      ag.droopMax,
+      0.5 * ag.rideStiffness * at.rideStiffnessMult,
+      axle.travelStops[0],
+    );
+    const rightStop = progressiveTravelStopForce(
+      axle.rideY + ag.trackHalf * finalRollSin,
+      ag.bumpMax,
+      ag.droopMax,
+      0.5 * ag.rideStiffness * at.rideStiffnessMult,
+      axle.travelStops[1],
+    );
+
+    // Per-wheel-end ride forces. Compression is read directly from
+    // each wheel's raycast (capped at bumpMax to mirror the axle's
+    // travel limit). Damping scales with an engagement curve that
+    // ramps from 0 to 1 over the first ~80 mm of compression - so a
+    // wheel just kissing ground still feels soft, but typical
+    // equilibrium (~87 mm of compression under chassis weight) is
+    // already at full damping. The earlier `comp / restLength` curve
+    // only reached 16% engagement at equilibrium, leaving the
+    // chassis vertical mode at ~12% critical - that's the source of
+    // the visible 1.7 Hz body bob the user reported as stutter while
+    // driving. Saturating earlier brings it to ~critical without
+    // hardening the first-contact response.
+    const sides = this._suspensionSides;
+    sides[0].wheel = wL;
+    sides[0].localX = -ag.trackHalf;
+    sides[0].world.x = leftMountWorld.x;
+    sides[0].world.y = leftMountWorld.y;
+    sides[0].world.z = leftMountWorld.z;
+    sides[1].wheel = wR;
+    sides[1].localX = ag.trackHalf;
+    sides[1].world.x = rightMountWorld.x;
+    sides[1].world.y = rightMountWorld.y;
+    sides[1].world.z = rightMountWorld.z;
+    for (let sideIndex = 0; sideIndex < 2; sideIndex++) {
+      const side = sides[sideIndex]!;
+      side.supported = false;
+      side.comp = 0;
+      side.compRate = 0;
+      side.force = 0;
+    }
+    for (let suspensionSideIndex = 0; suspensionSideIndex < 2; suspensionSideIndex++) {
+      const side = sides[suspensionSideIndex]!;
+      const w = side.wheel!;
+      const stop = axle.travelStops[suspensionSideIndex]!;
+      w.lastForce = 0;
+      w.suspensionForce = 0;
+      if (!w.contact) {
+        w.prevContactDepth = -1;
+        continue;
       }
-      let suspensionSideIndex = 0;
-      for (const side of sides) {
-        const w = side.wheel!;
-        const stop = axle.travelStops[suspensionSideIndex++]!;
-        w.lastForce = 0;
-        w.suspensionForce = 0;
-        if (!w.contact) {
-          w.prevContactDepth = -1;
-          continue;
-        }
-        // Spring is linear in compression. NO bumpMax saturation here:
-        // capping spring force at bumpMax was the original cause of the
-        // wheel-phasing bug. On a rising slope the ray reports comp >>
-        // bumpMax (the slope crest sits above where the wheel-as-point
-        // would contact), and a saturated spring can't lift the chassis
-        // fast enough — the wheel mesh visibly buries before the chassis
-        // catches up. Letting the spring stay linear past bumpMax just
-        // makes it a stiffer-than-equilibrium response that drives the
-        // chassis off the slope quickly. Capped at restLength to bound
-        // the force on degenerate ray reads (e.g. wheel-ray hitting a
-        // vertical wall).
-        const travel = clamp(w.resolvedDepth, -ag.droopMax, ag.suspensionRestLength);
-        const comp = Math.max(0, travel);
-        if (comp <= 0) {
-          w.prevContactDepth = -1;
-          continue;
-        }
-        side.supported = true;
-        side.comp = comp;
-        // Compression-rate damping. Why: the previous formulation damped
-        // chassis vertical velocity at the wheel-end (vpY). On a rising
-        // slope the chassis MUST lift to follow the slope; vertVel
-        // damping then applies a *downward* force during the lift,
-        // fighting the spring exactly when it's saturated against the
-        // bumpstop. The chassis can't keep up, the chassis collider
-        // wedges into the slope, and the truck stalls until friction
-        // grinds it back out (the user's wheel-phasing report).
-        //
-        // Compression rate captures the *suspension* velocity (rate at
-        // which the spring is compressing) independent of chassis
-        // motion. On a rising slope the wheel is pushed up faster than
-        // the chassis lifts → comp increases → compRate > 0 → damping
-        // adds force in the same direction as the spring (helps lift).
-        // On flat ground at rest, compRate ≈ -vpY (ground stationary),
-        // so the damping behaviour matches the old formulation and
-        // settling/rollover stability are preserved.
-        if (w.prevContactDepth < 0) w.prevContactDepth = comp;
-        const rawRate = (comp - w.prevContactDepth) / dt;
-        // Clamp: per-tick rate spikes (e.g. ray jumping over a sharp
-        // edge) would otherwise produce damping forces that exceed the
-        // spring saturation force and destabilise the integrator.
-        const compRate = clamp(rawRate, -3, 3);
-        side.compRate = compRate;
-        // Engagement ramps from 0→1 as compression reaches the engage
-        // depth. Suspension only exerts force while compressed (comp > 0).
-        const engagement = Math.min(1, comp / SUSPENSION.dampingEngageComp);
-        // Per-wheel-end stiffness is HALF the axle's total.
-        // Carcass and suspension are a series path: apply their shared
-        // spring load once, plus the suspension damper. The carcass damper
-        // is already included in w.carcassForce above.
-        let F = comp > 0
-          ? w.carcassForce
-            + 0.5 * ag.rideDamping * at.rideDampingMult * engagement * compRate
-          : 0;
-        side.force = clamp(F, 0, LEDGE_CONTACT.maxForce - stop.bumpForce);
-        w.suspensionForce = side.force;
+      // Spring is linear in compression. NO bumpMax saturation here:
+      // capping spring force at bumpMax was the original cause of the
+      // wheel-phasing bug. On a rising slope the ray reports comp >>
+      // bumpMax (the slope crest sits above where the wheel-as-point
+      // would contact), and a saturated spring can't lift the chassis
+      // fast enough — the wheel mesh visibly buries before the chassis
+      // catches up. Letting the spring stay linear past bumpMax just
+      // makes it a stiffer-than-equilibrium response that drives the
+      // chassis off the slope quickly. Capped at restLength to bound
+      // the force on degenerate ray reads (e.g. wheel-ray hitting a
+      // vertical wall).
+      const travel = clamp(w.resolvedDepth, -ag.droopMax, ag.suspensionRestLength);
+      const comp = Math.max(0, travel);
+      if (comp <= 0) {
+        w.prevContactDepth = -1;
+        continue;
       }
-
-      // A sway bar transfers load between the two suspension ends. It is
-      // driven by their relative travel/rate, not the chassis's angle to
-      // world-up. Unsupported ends sit at full droop for bar deflection,
-      // while forces can only enter the chassis through supported ends.
-      const frontBarShare = clamp(TUNING.antiRollFrontShare, 0, 1);
-      const barShare = aIdx === 0 ? frontBarShare : 1 - frontBarShare;
-      const axleMassShare = aIdx === 0 ? 0.52 : 0.48;
-      const bar = computeAntiRollLoadTransfer({
-        leftDepth: sides[0]!.supported ? sides[0]!.comp : -ag.droopMax,
-        rightDepth: sides[1]!.supported ? sides[1]!.comp : -ag.droopMax,
-        leftRate: sides[0]!.supported ? sides[0]!.compRate : 0,
-        rightRate: sides[1]!.supported ? sides[1]!.compRate : 0,
-        leftSupported: sides[0]!.supported,
-        rightSupported: sides[1]!.supported,
-        trackHalf: ag.trackHalf,
-        torqueStiffness: ANTI_ROLL.torqueStiffness * barShare * TUNING.antiRollStiffnessMult,
-        torqueDamping: ANTI_ROLL.torqueDamping * barShare * TUNING.antiRollDampingMult,
-        maxTransferForce: this.geom.spec.massKg * Math.abs(GRAVITY_Y)
-          * axleMassShare * ANTI_ROLL.maxStaticLoadTransfer,
-      });
-      sides[0]!.force = clamp(
-        sides[0]!.force + bar.leftForce,
-        0,
-        LEDGE_CONTACT.maxForce,
-      );
-      sides[1]!.force = clamp(
-        sides[1]!.force + bar.rightForce,
-        0,
-        LEDGE_CONTACT.maxForce,
-      );
-
-      for (const side of sides) {
-        if (!side.supported) continue;
-        const w = side.wheel!;
-        w.suspensionForce = side.force;
-        // Apply the suspension-side resultant once. Carcass reaction is
-        // retained separately for diagnostics; applying it again here would
-        // double-count the same series load.
-        const F = side.force;
-        w.lastForce = Math.max(0, F);
-        // Apply spring force along the CONTACT NORMAL (the direction the
-        // ground actually pushes on the wheel), not chassis-up or world-up.
-        //   - Flat ground: normal = world-up, so no horizontal component
-        //     at any chassis pitch. Earlier chassis-up version creeped
-        //     ~0.9 m / 4 s under tan(pitch)*F at any settled pitch; this
-        //     formulation has zero creep because the normal IS world-up
-        //     when the ground is flat, regardless of how the chassis
-        //     itself is oriented.
-        //   - Cross-slope: contact normals on both sides point
-        //     up-and-uphill (slope perpendicular). The asymmetric
-        //     compression (downhill wheel compressed more, uphill less)
-        //     produces a chassis roll moment so the body tilts WITH the
-        //     slope - fixes the "stays flat" complaint.
-        //   - Going up a hill: forward tilt of the chassis is matched by
-        //     a slope-normal force that has a backward component
-        //     opposing gravity's downhill pull. Net force is
-        //     slope-perpendicular - same as a real wheel.
-        const n = w.contactNormal;
-        const sf = this._scratchForce;
-        sf.x = n.x * F; sf.y = n.y * F; sf.z = n.z * F;
-        this.body.addForceAtPoint(sf, side.world, true);
-        w.prevContactDepth = side.comp;
-      }
-
-      // Mechanical travel stops act between the chassis mount and beam, not
-      // between the chassis and terrain. Apply their chassis half along the
-      // suspension axis at each final mount and feed the equal/opposite
-      // generalized reaction into the axle's unsprung heave/roll state.
-      // The Rapier chassis owns total vehicle mass, including the abstract
-      // beam. With no ground support an internal stop may move the relative
-      // axle DOF, but must not accelerate that total-mass rigid body.
-      const leftStopForce = hasSuspensionSupport(wL)
-        ? clamp(leftStop.totalForce, -LEDGE_CONTACT.maxForce, LEDGE_CONTACT.maxForce)
+      side.supported = true;
+      side.comp = comp;
+      // Compression-rate damping. Why: the previous formulation damped
+      // chassis vertical velocity at the wheel-end (vpY). On a rising
+      // slope the chassis MUST lift to follow the slope; vertVel
+      // damping then applies a *downward* force during the lift,
+      // fighting the spring exactly when it's saturated against the
+      // bumpstop. The chassis can't keep up, the chassis collider
+      // wedges into the slope, and the truck stalls until friction
+      // grinds it back out (the user's wheel-phasing report).
+      //
+      // Compression rate captures the *suspension* velocity (rate at
+      // which the spring is compressing) independent of chassis
+      // motion. On a rising slope the wheel is pushed up faster than
+      // the chassis lifts → comp increases → compRate > 0 → damping
+      // adds force in the same direction as the spring (helps lift).
+      // On flat ground at rest, compRate ≈ -vpY (ground stationary),
+      // so the damping behaviour matches the old formulation and
+      // settling/rollover stability are preserved.
+      if (w.prevContactDepth < 0) w.prevContactDepth = comp;
+      const rawRate = (comp - w.prevContactDepth) / dt;
+      // Clamp: per-tick rate spikes (e.g. ray jumping over a sharp
+      // edge) would otherwise produce damping forces that exceed the
+      // spring saturation force and destabilise the integrator.
+      const compRate = clamp(rawRate, -3, 3);
+      side.compRate = compRate;
+      // Engagement ramps from 0→1 as compression reaches the engage
+      // depth. Suspension only exerts force while compressed (comp > 0).
+      const engagement = Math.min(1, comp / SUSPENSION.dampingEngageComp);
+      // Per-wheel-end stiffness is HALF the axle's total.
+      // Carcass and suspension are a series path: apply their shared
+      // spring load once, plus the suspension damper. The carcass damper
+      // is already included in w.carcassForce above.
+      const F = comp > 0
+        ? w.carcassForce
+          + 0.5 * ag.rideDamping * at.rideDampingMult * engagement * compRate
         : 0;
-      const rightStopForce = hasSuspensionSupport(wR)
-        ? clamp(rightStop.totalForce, -LEDGE_CONTACT.maxForce, LEDGE_CONTACT.maxForce)
-        : 0;
-      if (leftStopForce !== 0) {
-        const sf = this._scratchForce;
-        sf.x = up.x * leftStopForce; sf.y = up.y * leftStopForce; sf.z = up.z * leftStopForce;
-        this.body.addForceAtPoint(sf, leftMountWorld, true);
-      }
-      if (rightStopForce !== 0) {
-        const sf = this._scratchForce;
-        sf.x = up.x * rightStopForce; sf.y = up.y * rightStopForce; sf.z = up.z * rightStopForce;
-        this.body.addForceAtPoint(sf, rightMountWorld, true);
-      }
-      applyTravelStopReactionToAxle(axle, leftStopForce, rightStopForce, dt);
-      wL.suspensionForce += Math.max(0, leftStopForce);
-      wR.suspensionForce += Math.max(0, rightStopForce);
-
-      // Roll torque dump when terrain demands more articulation than the
-      // axle can absorb. Below the cap the per-wheel-end forces above
-      // already provide the correct chassis-axle coupling; past the cap
-      // the axle has bottomed against its mechanical stop and the
-      // surplus has to lever the chassis itself - that's the body-lean-
-      // over-a-rock behaviour.
-      if (Math.abs(result.chassisRollTorque) > 1e-6) {
-        const tq = result.chassisRollTorque;
-        const sf = this._scratchForce;
-        sf.x = fwd.x * tq; sf.y = fwd.y * tq; sf.z = fwd.z * tq;
-        this.body.addTorque(sf, true);
-      }
+      side.force = clamp(F, 0, LEDGE_CONTACT.maxForce - stop.bumpForce);
+      w.suspensionForce = side.force;
     }
 
-    // 3b. Water: buoyancy, drag and current.
-    //
-    //     Sits here, after the suspension and anti-roll and before the
-    //     engine, for two reasons. The chassis pose, lv, av and the
-    //     basis vectors are all already in scope from the single read at
-    //     the top of preStep (determinism rule 1), and the engine has
-    //     not run yet, so a drowned intake can cut the drive before any
-    //     torque is computed rather than after.
-    //
-    //     Buoyancy is applied as four separate corner forces rather than
-    //     one resultant at the centre of buoyancy. Unequal corner lift
-    //     IS the righting moment, so pitch and roll response fall out
-    //     for free and there is no second torque term to keep in sync.
-    //
-    //     Nothing here unloads the springs by hand: the suspension force
-    //     computed above becomes the tyre's normal load further down, so
-    //     a chassis being lifted by water automatically loses grip.
+    // A sway bar transfers load between the two suspension ends. It is
+    // driven by their relative travel/rate, not the chassis's angle to
+    // world-up. Unsupported ends sit at full droop for bar deflection,
+    // while forces can only enter the chassis through supported ends.
+    const frontBarShare = clamp(TUNING.antiRollFrontShare, 0, 1);
+    const barShare = aIdx === 0 ? frontBarShare : 1 - frontBarShare;
+    const axleMassShare = aIdx === 0 ? 0.52 : 0.48;
+    const antiRollInput = scratch.antiRollInput;
+    antiRollInput.leftDepth = sides[0]!.supported ? sides[0]!.comp : -ag.droopMax;
+    antiRollInput.rightDepth = sides[1]!.supported ? sides[1]!.comp : -ag.droopMax;
+    antiRollInput.leftRate = sides[0]!.supported ? sides[0]!.compRate : 0;
+    antiRollInput.rightRate = sides[1]!.supported ? sides[1]!.compRate : 0;
+    antiRollInput.leftSupported = sides[0]!.supported;
+    antiRollInput.rightSupported = sides[1]!.supported;
+    antiRollInput.trackHalf = ag.trackHalf;
+    antiRollInput.torqueStiffness = ANTI_ROLL.torqueStiffness * barShare * TUNING.antiRollStiffnessMult;
+    antiRollInput.torqueDamping = ANTI_ROLL.torqueDamping * barShare * TUNING.antiRollDampingMult;
+    antiRollInput.maxTransferForce = this.geom.spec.massKg * Math.abs(GRAVITY_Y)
+      * axleMassShare * ANTI_ROLL.maxStaticLoadTransfer;
+    const bar = computeAntiRollLoadTransfer(antiRollInput, scratch.antiRollOut);
+    sides[0]!.force = clamp(
+      sides[0]!.force + bar.leftForce,
+      0,
+      LEDGE_CONTACT.maxForce,
+    );
+    sides[1]!.force = clamp(
+      sides[1]!.force + bar.rightForce,
+      0,
+      LEDGE_CONTACT.maxForce,
+    );
+
+    for (let sideIndex = 0; sideIndex < 2; sideIndex++) {
+      const side = sides[sideIndex]!;
+      if (!side.supported) continue;
+      const w = side.wheel!;
+      w.suspensionForce = side.force;
+      // Apply the suspension-side resultant once. Carcass reaction is
+      // retained separately for diagnostics; applying it again here would
+      // double-count the same series load.
+      const F = side.force;
+      w.lastForce = Math.max(0, F);
+      // Apply spring force along the CONTACT NORMAL (the direction the
+      // ground actually pushes on the wheel), not chassis-up or world-up.
+      //   - Flat ground: normal = world-up, so no horizontal component
+      //     at any chassis pitch. Earlier chassis-up version creeped
+      //     ~0.9 m / 4 s under tan(pitch)*F at any settled pitch; this
+      //     formulation has zero creep because the normal IS world-up
+      //     when the ground is flat, regardless of how the chassis
+      //     itself is oriented.
+      //   - Cross-slope: contact normals on both sides point
+      //     up-and-uphill (slope perpendicular). The asymmetric
+      //     compression (downhill wheel compressed more, uphill less)
+      //     produces a chassis roll moment so the body tilts WITH the
+      //     slope - fixes the "stays flat" complaint.
+      //   - Going up a hill: forward tilt of the chassis is matched by
+      //     a slope-normal force that has a backward component
+      //     opposing gravity's downhill pull. Net force is
+      //     slope-perpendicular - same as a real wheel.
+      const n = w.contactNormal;
+      const sf = this._scratchForce;
+      sf.x = n.x * F; sf.y = n.y * F; sf.z = n.z * F;
+      this.body.addForceAtPoint(sf, side.world, true);
+      w.prevContactDepth = side.comp;
+    }
+
+    // Mechanical travel stops act between the chassis mount and beam, not
+    // between the chassis and terrain. Apply their chassis half along the
+    // suspension axis at each final mount and feed the equal/opposite
+    // generalized reaction into the axle's unsprung heave/roll state.
+    // The Rapier chassis owns total vehicle mass, including the abstract
+    // beam. With no ground support an internal stop may move the relative
+    // axle DOF, but must not accelerate that total-mass rigid body.
+    const leftStopForce = hasSuspensionSupport(wL)
+      ? clamp(leftStop.totalForce, -LEDGE_CONTACT.maxForce, LEDGE_CONTACT.maxForce)
+      : 0;
+    const rightStopForce = hasSuspensionSupport(wR)
+      ? clamp(rightStop.totalForce, -LEDGE_CONTACT.maxForce, LEDGE_CONTACT.maxForce)
+      : 0;
+    if (leftStopForce !== 0) {
+      const sf = this._scratchForce;
+      sf.x = up.x * leftStopForce; sf.y = up.y * leftStopForce; sf.z = up.z * leftStopForce;
+      this.body.addForceAtPoint(sf, leftMountWorld, true);
+    }
+    if (rightStopForce !== 0) {
+      const sf = this._scratchForce;
+      sf.x = up.x * rightStopForce; sf.y = up.y * rightStopForce; sf.z = up.z * rightStopForce;
+      this.body.addForceAtPoint(sf, rightMountWorld, true);
+    }
+    applyTravelStopReactionToAxle(axle, leftStopForce, rightStopForce, dt);
+    wL.suspensionForce += Math.max(0, leftStopForce);
+    wR.suspensionForce += Math.max(0, rightStopForce);
+
+    // Roll torque dump when terrain demands more articulation than the
+    // axle can absorb. Below the cap the per-wheel-end forces above
+    // already provide the correct chassis-axle coupling; past the cap
+    // the axle has bottomed against its mechanical stop and the
+    // surplus has to lever the chassis itself - that's the body-lean-
+    // over-a-rock behaviour.
+    if (Math.abs(result.chassisRollTorque) > 1e-6) {
+      const tq = result.chassisRollTorque;
+      const sf = this._scratchForce;
+      sf.x = fwd.x * tq; sf.y = fwd.y * tq; sf.z = fwd.z * tq;
+      this.body.addTorque(sf, true);
+    }
+  }
+
+  /** 3b. Water: buoyancy, drag and current.
+   *
+   *  Sits here, after the suspension and anti-roll and before the
+   *  engine, for two reasons. The chassis pose, lv, av and the
+   *  basis vectors are all already in scope from the single read at
+   *  the top of preStep (determinism rule 1), and the engine has
+   *  not run yet, so a drowned intake can cut the drive before any
+   *  torque is computed rather than after.
+   *
+   *  Buoyancy is applied as four separate corner forces rather than
+   *  one resultant at the centre of buoyancy. Unequal corner lift
+   *  IS the righting moment, so pitch and roll response fall out
+   *  for free and there is no second torque term to keep in sync.
+   *
+   *  Nothing here unloads the springs by hand: the suspension force
+   *  computed above becomes the tyre's normal load further down, so
+   *  a chassis being lifted by water automatically loses grip.
+   *  @hotloop */
+  private phaseWater(ctx: VehicleStepContext): void {
     if (this.worldHasWater) {
+      const pose = this._waterPose;
+      pose.t = ctx.t;
+      pose.r = ctx.r;
+      pose.lv = ctx.lv;
+      pose.av = ctx.av;
       const wl = computeWaterLoad(
         this.world.terrain, this.geom, this.water,
-        { t, r, lv, av }, dt, this.waterLoad,
+        pose, ctx.dt, this.waterLoad,
       );
       if (wl.submergedFrac > 0) {
-        for (const s of wl.samples) {
+        for (let i = 0; i < wl.samples.length; i++) {
+          const s = wl.samples[i]!;
           if (s.force.y === 0) continue;
           this.body.addForceAtPoint(s.force, s.point, true);
         }
@@ -1282,10 +1512,16 @@ export class SolidAxleVehicle implements VehicleLike {
       this.waterLoad.intakeSubmerged = false;
       this.waterLoad.drowned = false;
     }
+  }
 
-    // 3d. Flood / restart state machine. Must run before the engine so a
-    //     drowning cuts the drive on the tick it happens, and so a
-    //     successful crank restores idle RPM before stepEngine reads it.
+  /** 3d/4. Flood-restart state machine, then the engine and gearbox. The
+   *  flood machine must run first so a drowning cuts the drive on the tick
+   *  it happens, and so a successful crank restores idle RPM before
+   *  stepEngine reads it. @hotloop */
+  private phaseEngine(ctx: VehicleStepContext): void {
+    const dt = ctx.dt;
+    const lv = ctx.lv;
+    const fwd = ctx.fwd;
     stepEngineFlooding(
       this.engine,
       this.waterLoad.intakeSubmerged,
@@ -1295,7 +1531,6 @@ export class SolidAxleVehicle implements VehicleLike {
     if (this.engine.drowned) this.damage.stoppedCause = 'flooding';
     else if (this.damage.stoppedCause === 'flooding') this.damage.stoppedCause = 'none';
 
-    // 4. Engine + gearbox.
     const frontCarrier = differentialCarrierSpeed(this.wheels[0]!.angVel, this.wheels[1]!.angVel);
     const rearCarrier = differentialCarrierSpeed(this.wheels[2]!.angVel, this.wheels[3]!.angVel);
     const drivenCarrier = drivenCarrierSpeed(this.drivetrain.transferCase, frontCarrier, rearCarrier);
@@ -1318,7 +1553,7 @@ export class SolidAxleVehicle implements VehicleLike {
       && longSpeed * Math.sign(engineThrottle) < 0
       ? 0
       : signedCarrier;
-    let engineOut = stepEngine(
+    const engineOut = stepEngine(
       this.engine,
       carrierForEngine,
       vehicleAngVel,
@@ -1327,9 +1562,12 @@ export class SolidAxleVehicle implements VehicleLike {
       this.input.manualGear,
       ENGINE.finalDrive * this.geom.spec.finalDriveMult
         * (this.drivetrain.transferCase === '4l' ? this.geom.spec.lowRangeRatio : 1),
+      this._engineOut,
     );
     if (this.damage.engine <= 0.08) {
-      engineOut = { totalDrivelineTorque: 0, rpm: Math.max(0, this.lastRpm - 900 * dt), gear: 0 };
+      engineOut.totalDrivelineTorque = 0;
+      engineOut.rpm = Math.max(0, this.lastRpm - 900 * dt);
+      engineOut.gear = 0;
       this.damage.stoppedCause = 'collision';
     }
     this.lastRpm = engineOut.rpm;
@@ -1337,13 +1575,26 @@ export class SolidAxleVehicle implements VehicleLike {
     const engineHealthMult = 0.38 + this.damage.engine * 0.62;
     const totalDrivelineTorque = engineOut.totalDrivelineTorque * this.geom.powerMult
       * engineHealthMult;
+    ctx.totalDrivelineTorque = totalDrivelineTorque;
     this.debugDriveTorque = totalDrivelineTorque;
     this.debugDrivenCarrierRpm = Math.abs(drivenCarrier) * 60 / (2 * Math.PI);
+  }
 
-    const driveSplit = transferCaseDriveSplit(this.drivetrain.transferCase);
-    const frontShare = driveSplit.front;
-    const rearShare = driveSplit.rear;
-    // 5. Axle differential impulses (fixed front/rear order, before slip).
+  /** 5. Axle differential impulses in fixed front/rear order, then the
+   *  centre transfer. Runs before slip so the tyre phase reads the locked
+   *  angular velocities. @hotloop */
+  private phaseDriveline(ctx: VehicleStepContext): void {
+    const dt = ctx.dt;
+    const totalDrivelineTorque = ctx.totalDrivelineTorque;
+    // transferCaseDriveSplit's shape, read field by field: the exported
+    // helper copies VEHICLE.driveSplit so its caller cannot mutate the
+    // constant, and that copy is exactly the allocation this phase must not
+    // make 60 times a second.
+    const mode = this.drivetrain.transferCase;
+    const frontShare = mode === '2h' ? 0 : VEHICLE.driveSplit.front;
+    const rearShare = mode === '2h' ? 1 : VEHICLE.driveSplit.rear;
+    ctx.frontShare = frontShare;
+    ctx.rearShare = rearShare;
     this.debugDifferentialReactionTorque = 0;
     for (let axleIndex = 0; axleIndex < 2; axleIndex++) {
       const left = this.wheels[axleIndex * 2]!;
@@ -1354,14 +1605,14 @@ export class SolidAxleVehicle implements VehicleLike {
       const selectedLock = this.geom.spec.drivetrain !== 'fixed-rwd' && (axleIndex === 0
         ? TUNING.diffLockFront || this.drivetrain.frontLocked
         : TUNING.diffLockRear || this.drivetrain.rearLocked);
-      const mode = selectedLock ? 'locked' : spec.mode === 'lsd' ? 'lsd' : 'open';
+      const diffMode = selectedLock ? 'locked' : spec.mode === 'lsd' ? 'lsd' : 'open';
       const axleTorque = totalDrivelineTorque * (axleIndex === 0 ? frontShare : rearShare);
       const solved = solveDifferentialAngularImpulse(
         left.angVel,
         rightWheel.angVel,
         this.geom.spec.wheelInertiaKgM2,
         dt,
-        mode,
+        diffMode,
         axleTorque,
         spec.torqueBiasRatio,
         spec.preloadNm,
@@ -1389,13 +1640,31 @@ export class SolidAxleVehicle implements VehicleLike {
       this.wheels[3]!.angVel += rearDelta;
       this.debugDifferentialReactionTorque += Math.abs(center.reactionTorque);
     }
-    // 6. Per wheel tyre forces + spin integration.
-    // A locked wheel is a tangential contact constraint, not merely a wheel
-    // whose angular velocity happens to be zero. Split the chassis mass among
-    // the braked contact patches by normal load so the solver below can drive
-    // their patch velocity to zero and cancel gravity along the slope. The
-    // previous wheel-inertia-only force allowed a constant downhill creep:
-    // gravity first had to create slip before the tyre produced any reaction.
+  }
+
+  /** 6. Per-wheel tyre forces, soil response and spin integration.
+   *
+   *  A locked wheel is a tangential contact constraint, not merely a wheel
+   *  whose angular velocity happens to be zero. Split the chassis mass among
+   *  the braked contact patches by normal load so the solver below can drive
+   *  their patch velocity to zero and cancel gravity along the slope. The
+   *  previous wheel-inertia-only force allowed a constant downhill creep:
+   *  gravity first had to create slip before the tyre produced any reaction.
+   *  @hotloop */
+  private phaseTyreSoil(ctx: VehicleStepContext): void {
+    const dt = ctx.dt;
+    const t = ctx.t;
+    const lv = ctx.lv;
+    const av = ctx.av;
+    const groundSpeed = ctx.groundSpeed;
+    const totalDrivelineTorque = ctx.totalDrivelineTorque;
+    const frontShare = ctx.frontShare;
+    const rearShare = ctx.rearShare;
+    const wheelBases = this._wheelBases;
+    const ledgeContacts = this._ledgeContacts;
+    const ledgeSemantics = this._ledgeSemantics;
+    const ledgeLoads = this._ledgeLoads;
+
     let supportedNormalLoadTotal = 0;
     let brakedNormalLoadTotal = 0;
     for (let wIdx = 0; wIdx < 4; wIdx++) {
@@ -1407,7 +1676,7 @@ export class SolidAxleVehicle implements VehicleLike {
       const basis = wheelBases[wIdx]!;
       const ledge = ledgeContacts[wIdx];
       const ledgeFrame = ledge
-        ? contactFrame(ledge.normal, basis.axle, basis.forward)
+        ? contactFrameInto(ledge.normal, basis.axle, basis.forward, this._contactFrames[wIdx]!)
         : null;
       let contactLoad = 0;
       const ledgeTreadFraction = ledgeSemantics[wIdx]?.treadFraction ?? 0;
@@ -1489,7 +1758,7 @@ export class SolidAxleVehicle implements VehicleLike {
       debug.groundTorque = 0;
       const ledge = ledgeContacts[wIdx];
       const ledgeFrame = ledge
-        ? contactFrame(ledge.normal, basis.axle, basis.forward)
+        ? contactFrameInto(ledge.normal, basis.axle, basis.forward, this._contactFrames[wIdx]!)
         : null;
       const treadFraction = ledgeSemantics[wIdx]?.treadFraction ?? 0;
       if (ledge && ledgeFrame && treadFraction > 0) {
@@ -1499,7 +1768,9 @@ export class SolidAxleVehicle implements VehicleLike {
         surfMult = clamp(ledge.friction, 0, 2) * LEDGE_CONTACT.tractionMultiplier * treadFraction;
         normalLoad = Math.max(0, ledgeLoads[wIdx]!);
       } else if (w.contact) {
-        const supportFrame = contactFrame(w.contactNormal, basis.axle, basis.forward);
+        const supportFrame = contactFrameInto(
+          w.contactNormal, basis.axle, basis.forward, this._supportFrames[wIdx]!,
+        );
         cp = w.contactPoint;
         tireLong = supportFrame?.longitudinal ?? basis.forward;
         tireLat = supportFrame?.lateral ?? basis.axle;
@@ -1510,6 +1781,7 @@ export class SolidAxleVehicle implements VehicleLike {
         stepSoftGround(
           w, 'none', 0, this.tirePressurePsi,
           this.geom.wheelWidth, this.geom.wheelRadius, 0, 0, dt,
+          w.soilResult,
         );
         debug.driveTorque = 0;
         debug.contact = false;
@@ -1766,8 +2038,6 @@ export class SolidAxleVehicle implements VehicleLike {
       staticLateralHold.y += tireLat.y * staticLatForce;
       staticLateralHold.z += tireLat.z * staticLatForce;
 
-      const longMax = longGripCap;
-      const latMax = longGripCap * TUNING.tireLateralGripRatio;
       const utilization = combinedForce.utilization;
       debug.contact = true;
       debug.contactPoint.x = cp.x;
@@ -2276,10 +2546,11 @@ function castWheelSupport(
     out,
   );
   if (out.contact) {
-    const semantics = classifyTireContact(
+    const semantics = classifyTireContactInto(
       out.contactNormal.x * wheelAxle.x
       + out.contactNormal.y * wheelAxle.y
       + out.contactNormal.z * wheelAxle.z,
+      _castSemantics,
     );
     const approach = Math.max(0, -(
       out.contactNormal.x * dir.x
@@ -2310,11 +2581,10 @@ function castWheelSupport(
     ownBody,
   );
   if (hit) {
-    const center = {
-      x: origin.x + dir.x * hit.time_of_impact,
-      y: origin.y + dir.y * hit.time_of_impact,
-      z: origin.z + dir.z * hit.time_of_impact,
-    };
+    const center = _castCenter;
+    center.x = origin.x + dir.x * hit.time_of_impact;
+    center.y = origin.y + dir.y * hit.time_of_impact;
+    center.z = origin.z + dir.z * hit.time_of_impact;
     const normal = hit.normal1;
     if (
       hit.collider.handle === world.terrainCollider.handle
@@ -2333,32 +2603,29 @@ function castWheelSupport(
       // Rapier 0.14 exposes shape-cast witnesses in shape-local frames. Build
       // the world-space cylinder support point explicitly instead: radial
       // tread support plus the appropriate sidewall-cap offset.
-      const axle = rotateVecByQuat({ x: 0, y: 1, z: 0 }, rotation);
+      const axle = _castAxle;
+      _castUp.x = 0; _castUp.y = 1; _castUp.z = 0;
+      rotateVecByQuatInto(_castUp, rotation, axle);
       const axialDot = normal.x * axle.x + normal.y * axle.y + normal.z * axle.z;
-      const radial = {
-        x: normal.x - axle.x * axialDot,
-        y: normal.y - axle.y * axialDot,
-        z: normal.z - axle.z * axialDot,
-      };
+      const radial = _castRadial;
+      radial.x = normal.x - axle.x * axialDot;
+      radial.y = normal.y - axle.y * axialDot;
+      radial.z = normal.z - axle.z * axialDot;
       const radialLength = Math.hypot(radial.x, radial.y, radial.z);
       const radialScale = radialLength > 1e-8 ? wheelRadius / radialLength : 0;
       const capScale = Math.sign(axialDot) * wheelHalfWidth;
       out.contact = true;
       out.contactDepth = restLength - hit.time_of_impact;
-      out.contactPoint = {
-        x: center.x - radial.x * radialScale - axle.x * capScale,
-        y: center.y - radial.y * radialScale - axle.y * capScale,
-        z: center.z - radial.z * radialScale - axle.z * capScale,
-      };
-      out.contactNormal = {
-        x: normal.x,
-        y: normal.y,
-        z: normal.z,
-      };
+      out.contactPoint.x = center.x - radial.x * radialScale - axle.x * capScale;
+      out.contactPoint.y = center.y - radial.y * radialScale - axle.y * capScale;
+      out.contactPoint.z = center.z - radial.z * radialScale - axle.z * capScale;
+      out.contactNormal.x = normal.x;
+      out.contactNormal.y = normal.y;
+      out.contactNormal.z = normal.z;
       out.supportIsTerrain = true;
       out.supportColliderFriction = hit.collider.friction();
       out.volumeSupport = true;
-      const semantics = classifyTireContact(axialDot);
+      const semantics = classifyTireContactInto(axialDot, _castSemantics);
       const approach = Math.max(0, -(normal.x * dir.x + normal.y * dir.y + normal.z * dir.z));
       if (semantics.treadFraction <= 0 || approach < 0.25) {
         out.contact = false;
@@ -2385,7 +2652,10 @@ function castWheelRayFallback(
   out: WheelKinematic,
 ): void {
   out.volumeSupport = false;
-  const ray = new world.rapier.Ray(origin, dir);
+  // The world's single Ray, re-pointed rather than reallocated per wheel.
+  const ray = world.wheelRay;
+  ray.origin = origin;
+  ray.dir = dir;
   let hit = world.world.castRayAndGetNormal(
     ray,
     maxToi,
@@ -2418,59 +2688,80 @@ function castWheelRayFallback(
     out.contact = true;
     // Depth can be negative when the ground is below restLength (droop).
     out.contactDepth = restLength - (toi - wheelRadius);
-    out.contactPoint = {
-      x: origin.x + dir.x * toi,
-      y: origin.y + dir.y * toi,
-      z: origin.z + dir.z * toi,
-    };
-    out.contactNormal = { x: hit.normal.x, y: hit.normal.y, z: hit.normal.z };
+    out.contactPoint.x = origin.x + dir.x * toi;
+    out.contactPoint.y = origin.y + dir.y * toi;
+    out.contactPoint.z = origin.z + dir.z * toi;
+    out.contactNormal.x = hit.normal.x;
+    out.contactNormal.y = hit.normal.y;
+    out.contactNormal.z = hit.normal.z;
     out.supportIsTerrain = hit.collider.handle === world.terrainCollider.handle;
     out.supportColliderFriction = hit.collider.friction();
   } else {
     out.contact = false;
     out.contactDepth = 0;
-    out.contactPoint = {
-      x: origin.x + dir.x * maxToi,
-      y: origin.y + dir.y * maxToi,
-      z: origin.z + dir.z * maxToi,
-    };
-    out.contactNormal = { x: 0, y: 1, z: 0 };
+    out.contactPoint.x = origin.x + dir.x * maxToi;
+    out.contactPoint.y = origin.y + dir.y * maxToi;
+    out.contactPoint.z = origin.z + dir.z * maxToi;
+    out.contactNormal.x = 0;
+    out.contactNormal.y = 1;
+    out.contactNormal.z = 0;
     out.supportIsTerrain = true;
     out.supportColliderFriction = 1;
   }
 }
 
-function wheelCenterWorldPose(
+// Scratch for the two cast helpers above and the sidewall fallback below.
+// Module-level rather than per-vehicle: their lifetime is a single call, and
+// owner physics steps one vehicle at a time.
+const _castCenter: Vec3 = { x: 0, y: 0, z: 0 };
+const _castAxle: Vec3 = { x: 0, y: 0, z: 0 };
+const _castUp: Vec3 = { x: 0, y: 0, z: 0 };
+const _castRadial: Vec3 = { x: 0, y: 0, z: 0 };
+const _castSemantics: TireContactSemantics = {
+  zone: 'tread', treadFraction: 0, axleAlignment: 0,
+};
+const _sidewallSemantics: TireContactSemantics = {
+  zone: 'tread', treadFraction: 0, axleAlignment: 0,
+};
+
+/** @hotloop */
+function wheelCenterWorldPoseInto(
   bodyPosition: Vec3,
   bodyRotation: { x: number; y: number; z: number; w: number },
   geom: AxleGeom,
   rideY: number,
   rollAngle: number,
   localX: number,
+  local: Vec3,
+  out: Vec3,
 ): Vec3 {
   const cr = Math.cos(rollAngle);
   const sr = Math.sin(rollAngle);
-  const local = {
-    x: localX * cr,
-    y: geom.centerLocalY - geom.suspensionRestLength + rideY + localX * sr,
-    z: geom.centerLocalZ,
-  };
-  return addVec(bodyPosition, rotateVecByQuat(local, bodyRotation));
+  local.x = localX * cr;
+  local.y = geom.centerLocalY - geom.suspensionRestLength + rideY + localX * sr;
+  local.z = geom.centerLocalZ;
+  rotateVecByQuatInto(local, bodyRotation, out);
+  out.x += bodyPosition.x;
+  out.y += bodyPosition.y;
+  out.z += bodyPosition.z;
+  return out;
 }
 
-function axleBeamRotation(
+/** @hotloop */
+function axleBeamRotationInto(
   chassis: { x: number; y: number; z: number; w: number },
   rollAngle: number,
+  out: { x: number; y: number; z: number; w: number },
 ): { x: number; y: number; z: number; w: number } {
   const half = rollAngle * 0.5;
   const z = Math.sin(half);
   const w = Math.cos(half);
-  return {
-    x: chassis.x * w + chassis.y * z,
-    y: chassis.y * w - chassis.x * z,
-    z: chassis.z * w + chassis.w * z,
-    w: chassis.w * w - chassis.z * z,
-  };
+  const cx = chassis.x; const cy = chassis.y; const cz = chassis.z; const cw = chassis.w;
+  out.x = cx * w + cy * z;
+  out.y = cy * w - cx * z;
+  out.z = cz * w + cw * z;
+  out.w = cw * w - cz * z;
+  return out;
 }
 
 function pointVelocityDot(
@@ -2514,13 +2805,15 @@ function worldNormalToLocal(
 /** Analytic terrain fallback for a tyre lying on its side. Heightfield shape
  * contact queries are one-sided and may return no manifold once the cylinder
  * centre crosses below the surface; the support extent remains well-defined. */
-function findTerrainSidewallContact(
+/** @hotloop */
+function findTerrainSidewallContactInto(
   world: World,
   center: Vec3,
   axle: Vec3,
   radius: number,
   halfWidth: number,
   prediction: number,
+  out: SteepWheelContact,
 ): SteepWheelContact | null {
   const h = 0.08;
   const height = sampleHeightBilinear(world.terrain, center.x, center.z);
@@ -2529,32 +2822,27 @@ function findTerrainSidewallContact(
   const dz = (sampleHeightBilinear(world.terrain, center.x, center.z + h)
     - sampleHeightBilinear(world.terrain, center.x, center.z - h)) / (2 * h);
   const inv = 1 / (Math.hypot(dx, 1, dz) || 1);
-  const normal = { x: -dx * inv, y: inv, z: -dz * inv };
-  const axial = normal.x * axle.x + normal.y * axle.y + normal.z * axle.z;
-  const semantics = classifyTireContact(axial);
+  const normalX = -dx * inv; const normalY = inv; const normalZ = -dz * inv;
+  const axial = normalX * axle.x + normalY * axle.y + normalZ * axle.z;
+  const semantics = classifyTireContactInto(axial, _sidewallSemantics);
   if (semantics.zone !== 'sidewall') return null;
   const extent = halfWidth * Math.abs(axial)
     + radius * Math.sqrt(Math.max(0, 1 - axial * axial));
-  const distance = (center.y - height) * normal.y - extent;
+  const distance = (center.y - height) * normalY - extent;
   if (distance > prediction) return null;
-  return {
-    point: {
-      x: center.x - normal.x * extent,
-      y: center.y - normal.y * extent,
-      z: center.z - normal.z * extent,
-    },
-    normal,
-    climbDirection: null,
-    climbTopY: null,
-    distance,
-    penetration: Math.max(0, -distance),
-    friction: world.terrainCollider.friction(),
-    timeOfImpact: 0,
-  };
-}
-
-function addVec(a: Vec3, b: Vec3): Vec3 {
-  return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+  out.point.x = center.x - normalX * extent;
+  out.point.y = center.y - normalY * extent;
+  out.point.z = center.z - normalZ * extent;
+  out.normal.x = normalX;
+  out.normal.y = normalY;
+  out.normal.z = normalZ;
+  out.climbDirection = null;
+  out.climbTopY = null;
+  out.distance = distance;
+  out.penetration = Math.max(0, -distance);
+  out.friction = world.terrainCollider.friction();
+  out.timeOfImpact = 0;
+  return out;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
