@@ -41,8 +41,32 @@ pre-refactor build.
   reaction.
 - [x] Preserve the 0.025 m/tick positional correction and bounded contact-force
   limit.
-- [ ] Add unsupported-droop, landing, articulation, alternating 0.6 m step,
+- [x] Add unsupported-droop, landing, articulation, alternating 0.6 m step,
   portal-clearance, and angular-momentum regressions.
+
+`axleRegressions.test.ts` runs these against a real Rapier world rather than
+the pure functions, because each is a property of how the contact and
+suspension phases compose. Two notes from writing them:
+
+- **The 0.6 m step is not traversable, and should not be.** The crawler's hub
+  is 0.508 m, so a 0.6 m face meets the tyre above its centre and no geometry
+  climbs it — being stopped is correct. That case now asserts it stalls
+  *safely* (upright, no launch, no depth launch), and a 0.35 m step carries
+  the traversal assertions: forward progress plus articulation in both
+  directions, within the cap.
+- **Angular momentum is covered in three places, not one.** The internal
+  impulse pair is pinned per-axle in `travelStops.test.ts`, the driveline
+  carriers in `differential.test.ts` (milestone 4), and the vehicle-level
+  claim — an internal travel stop must not accelerate the chassis that
+  already owns the beam's mass — by the free-fall test here.
+
+Each of the five was verified by mutation: removing the travel-stop support
+gate, pinning the corrected beam roll to zero, feeding the beam averaged
+left/right depths, quartering the wheel-end ride force, and deleting the
+portal housing lift each fail at least one test. The portal case is why the
+assertion is a near-zero contact count rather than "fewer than standard" —
+the weaker form passed with the lift deleted, because the smaller portal
+probe alone still beats a standard axle.
 
 ## Milestone 3: sparse rut GPU ownership
 
