@@ -277,6 +277,10 @@ describe('solid axle: repeated steps', () => {
   }
 
   it('crosses alternating 0.35 m steps, articulating both ways', () => {
+    // 0.35 m at 0.45 throttle covers ~13 m in ten seconds. The nearest cliff
+    // in the swept height x throttle grid is 0.40 m at the same throttle,
+    // which manages ~1 m, so the bar below has real margin — and a change
+    // that halves this crawler's step-climbing genuinely should fail here.
     const run = traverse(0.35);
     expect(run.progress).toBeGreaterThan(8);
     // Both signs: the beam has to answer a left-side rise and a right-side
@@ -291,11 +295,24 @@ describe('solid axle: repeated steps', () => {
   }, 20_000);
 
   it('stalls against alternating 0.6 m steps without launching or rolling', () => {
-    // 0.6 m is above this crawler's 0.508 m hub, so the tyre meets the face
-    // above its centre and there is no geometry that climbs it — being stopped
-    // is the correct outcome. What must not happen is the contact phase
-    // resolving that face into a launch or a rollover, which is the failure
-    // mode the volumetric tyre query exists to avoid.
+    // Being stopped is the correct outcome, and the reason is the wheel
+    // radius. A *one-sided* face taller than the hub meets the tyre at or
+    // above its centre, so the edge reaction on that wheel has no upward
+    // component, and the wheel on the flat opposite side offers nothing to
+    // lift with. Swept across height x throttle, the ceiling sits between
+    // 0.45 m (climbs, but only at 0.7 throttle) and 0.50 m (never climbs at
+    // any throttle) — which brackets this crawler's 0.508 m radius.
+    //
+    // The limit is that one-sidedness, not the height alone: the same 0.6 m
+    // step run across the full width is climbable at 0.7 throttle, because
+    // both wheels of the axle contact together and the chassis pitches up.
+    // Nor is it drive: lockers cut the wheel-speed spread from 642 to 7 rad/s
+    // and the truck still does not climb it. LEDGE_CONTACT.maxClimbHeight is
+    // 0.9 m, so the ledge system is not rejecting the face either.
+    //
+    // What must not happen is the contact phase resolving that face into a
+    // launch or a rollover — the failure mode the volumetric tyre query
+    // exists to avoid.
     const run = traverse(0.6);
     expect(run.progress).toBeLessThan(3);
     expect(run.worstUp).toBeGreaterThan(0.8);

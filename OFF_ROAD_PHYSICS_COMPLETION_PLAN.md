@@ -48,12 +48,20 @@ pre-refactor build.
 the pure functions, because each is a property of how the contact and
 suspension phases compose. Two notes from writing them:
 
-- **The 0.6 m step is not traversable, and should not be.** The crawler's hub
-  is 0.508 m, so a 0.6 m face meets the tyre above its centre and no geometry
-  climbs it — being stopped is correct. That case now asserts it stalls
-  *safely* (upright, no launch, no depth launch), and a 0.35 m step carries
-  the traversal assertions: forward progress plus articulation in both
-  directions, within the cap.
+- **The 0.6 m step is not traversable *one-sided*, and should not be.** Swept
+  across height x throttle, the ceiling for a one-sided face sits between
+  0.45 m (climbs, but only at 0.7 throttle) and 0.50 m (never climbs at any
+  throttle), which brackets the crawler's 0.508 m wheel radius: a face at or
+  above the hub meets the tyre at or above its centre, so the edge reaction on
+  that wheel has no upward component and the wheel on the flat opposite side
+  offers nothing to lift with. The limit is the one-sidedness, not the height
+  — the same 0.6 m step across the full width *is* climbable at 0.7 throttle,
+  because both wheels contact together and the chassis pitches up. It is not
+  drive either: lockers cut the wheel-speed spread from 642 to 7 rad/s and it
+  still does not climb. That case now asserts it stalls *safely* (upright, no
+  launch, no depth launch), and a 0.35 m step carries the traversal
+  assertions: forward progress plus articulation in both directions, within
+  the cap.
 - **Angular momentum is covered in three places, not one.** The internal
   impulse pair is pinned per-axle in `travelStops.test.ts`, the driveline
   carriers in `differential.test.ts` (milestone 4), and the vehicle-level
