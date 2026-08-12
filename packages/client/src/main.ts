@@ -58,6 +58,7 @@ import { readPreview } from './previewHandoff.js';
 import { WorkshopUI } from './workshop.js';
 import { WinchController } from './winchController.js';
 import { activeQuality } from './quality.js';
+import { wireCanvasPointerControls } from './canvasControls.js';
 
 function getServerUrl(): string {
   const explicit = import.meta.env.VITE_SERVER_URL as string | undefined;
@@ -352,37 +353,11 @@ function wireCameraControls(): void {
   // camera back to the chase pose. Works for both touch and mouse via
   // pointer events.
   const canvas = scene.renderer.domElement;
-  let dragId: number | null = null;
-  let lastX = 0;
-  let lastY = 0;
-  // Tunable: pixels of drag → radians of camera motion.
-  const PX_PER_RAD = 220;
-  canvas.addEventListener('pointerdown', (e) => {
-    if (e.target !== canvas) return;
-    e.preventDefault();
-    dragId = e.pointerId;
-    lastX = e.clientX;
-    lastY = e.clientY;
-    canvas.setPointerCapture(e.pointerId);
-    scene.cameraDragBegin();
+  wireCanvasPointerControls(canvas, winchController, {
+    begin: () => scene.cameraDragBegin(),
+    drag: (yaw, pitch) => scene.cameraDrag(yaw, pitch),
+    end: () => scene.cameraDragEnd(),
   });
-  canvas.addEventListener('pointermove', (e) => {
-    if (e.pointerId !== dragId) return;
-    const dx = e.clientX - lastX;
-    const dy = e.clientY - lastY;
-    lastX = e.clientX;
-    lastY = e.clientY;
-    // Inverted "natural" feel: dragging the world tugs it under your
-    // finger, which is the same as the camera moving the opposite way.
-    scene.cameraDrag(-dx / PX_PER_RAD, dy / PX_PER_RAD);
-  });
-  const endDrag = (e: PointerEvent): void => {
-    if (e.pointerId !== dragId) return;
-    dragId = null;
-    scene.cameraDragEnd();
-  };
-  canvas.addEventListener('pointerup', endDrag);
-  canvas.addEventListener('pointercancel', endDrag);
 }
 
 /** Drive the map the editor stashed, offline.

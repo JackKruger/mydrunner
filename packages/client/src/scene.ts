@@ -263,9 +263,9 @@ export class Scene {
     this.winchView.setTarget(point, valid);
   }
 
-  pickWinchTarget(): WinchPick | null {
+  pickWinchTarget(ndc: THREE.Vector2 = new THREE.Vector2(0, 0)): WinchPick | null {
     if (!this.localId || !this.mapWorld) return null;
-    this.winchRaycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
+    this.winchRaycaster.setFromCamera(ndc, this.camera);
     this.winchRaycaster.far = 80;
     const roots: THREE.Object3D[] = [];
     if (this.view.obstacleGroup) roots.push(this.view.obstacleGroup);

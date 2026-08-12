@@ -3,6 +3,7 @@ import type { WinchAttachTarget } from '@mydrunner/shared/net';
 import type { LocalSimulation } from './localSimulation.js';
 import type { NetClient } from './net.js';
 import type { Scene } from './scene.js';
+import type { Vector2 } from 'three';
 
 interface Options {
   simulation(): LocalSimulation | null;
@@ -23,6 +24,7 @@ export class WinchController {
   private notice = '';
   private noticeUntil = 0;
   private targetLabel = '';
+  private pointerNdc: Vector2 | undefined;
   private pendingOwnedLink: WinchLinkSnapshot | null = null;
   private breakCue = false;
   private readonly reticle: HTMLElement;
@@ -51,7 +53,9 @@ export class WinchController {
     this.build = build;
     this.links = [];
     this.targeting = false;
+    this.pointerNdc = undefined;
     this.reticle.classList.remove('visible', 'valid');
+    this.scene.renderer.domElement.classList.remove('winch-targeting', 'winch-target-valid');
     this.pending.clear();
     this.pendingOwnedLink = null;
     this.scene.setWinchTarget(null);
@@ -104,22 +108,37 @@ export class WinchController {
     if (!this.isEquipped()) { this.showNotice('FIT A STEEL WINCH BAR AND RECOVERY WINCH'); return; }
     if (!this.targeting) {
       this.targeting = true;
+      this.pointerNdc = undefined;
       this.reticle.classList.add('visible');
+      this.scene.renderer.domElement.classList.add('winch-targeting');
       this.showNotice('AIM AT A RECOVERY POINT · G TO ATTACH');
       return;
     }
     const pick = this.scene.pickWinchTarget();
     if (!pick) { this.showNotice('NO VALID RECOVERY POINT'); return; }
-    this.targeting = false;
-    this.reticle.classList.remove('visible');
-    this.scene.setWinchTarget(null);
-    if (this.options.online()) {
-      const seq = ++this.commandSeq;
-      this.pending.set(seq, 'attach');
-      this.options.net()?.sendWinchCommand(seq, 'attach', pick.target);
-    } else {
-      this.attachOffline(pick.target, pick.point);
-    }
+    this.attachPick(pick);
+  }
+
+  /** True while canvas pointer events belong to winch selection, not the camera. */
+  isTargeting(): boolean { return this.targeting; }
+
+  /** Update the world-space hover marker from a mouse/pen position. */
+  pointerMove(ndc: Vector2): boolean {
+    if (!this.targeting) return false;
+    this.pointerNdc = ndc.clone();
+    this.noticeUntil = 0;
+    this.updateTargetPick();
+    return true;
+  }
+
+  /** Attach only when a primary click lands on an already-valid recovery target. */
+  primaryClick(ndc: Vector2): boolean {
+    if (!this.targeting) return false;
+    this.pointerNdc = ndc.clone();
+    const pick = this.updateTargetPick();
+    if (!pick) { this.showNotice('NO VALID RECOVERY POINT'); return true; }
+    this.attachPick(pick);
+    return true;
   }
 
   detach(): void {
@@ -147,10 +166,7 @@ export class WinchController {
       return;
     }
     if (this.targeting) {
-      const pick = this.scene.pickWinchTarget();
-      this.targetLabel = pick?.label ?? '';
-      this.reticle.classList.toggle('valid', Boolean(pick));
-      this.scene.setWinchTarget(pick?.point ?? null, Boolean(pick));
+      this.updateTargetPick();
     }
     const motor: WinchMotor = (this.reelIn || touchIn) && !(this.reelOut || touchOut)
       ? 1 : (this.reelOut || touchOut) && !(this.reelIn || touchIn) ? -1 : 0;
@@ -185,7 +201,10 @@ export class WinchController {
 
   statusText(): string {
     if (performance.now() < this.noticeUntil) return this.notice;
-    if (this.targeting) return this.targetLabel ? `TARGET ${this.targetLabel.toUpperCase()} · G TO ATTACH` : 'AIM AT A RECOVERY POINT';
+    if (this.targeting && this.pointerNdc) return this.targetLabel
+      ? `TARGET ${this.targetLabel.toUpperCase()} · CLICK TO ATTACH`
+      : 'CLICK A RECOVERY POINT';
+    if (this.targeting) return this.targetLabel ? `TARGET ${this.targetLabel.toUpperCase()} · G TO ATTACH` : 'AIM AT A RECOVERY POINT · G TO ATTACH';
     const telemetry = this.options.simulation()?.winchTelemetry();
     if (!telemetry?.attached) return '';
     const load = Math.round(telemetry.tension / WINCH.ratedPull * 100);
@@ -225,8 +244,32 @@ export class WinchController {
   private cancelTargeting(): void {
     this.targeting = false;
     this.targetLabel = '';
+    this.pointerNdc = undefined;
     this.reticle.classList.remove('visible', 'valid');
+    this.scene.renderer.domElement.classList.remove('winch-targeting', 'winch-target-valid');
     this.scene.setWinchTarget(null);
+  }
+  private updateTargetPick() {
+    const pick = this.scene.pickWinchTarget(this.pointerNdc);
+    this.targetLabel = pick?.label ?? '';
+    this.reticle.classList.toggle('valid', Boolean(pick));
+    this.scene.renderer.domElement.classList.toggle('winch-target-valid', Boolean(pick));
+    this.scene.setWinchTarget(pick?.point ?? null, Boolean(pick));
+    return pick;
+  }
+  private attachPick(pick: NonNullable<ReturnType<Scene['pickWinchTarget']>>): void {
+    this.targeting = false;
+    this.pointerNdc = undefined;
+    this.reticle.classList.remove('visible', 'valid');
+    this.scene.renderer.domElement.classList.remove('winch-targeting', 'winch-target-valid');
+    this.scene.setWinchTarget(null);
+    if (this.options.online()) {
+      const seq = ++this.commandSeq;
+      this.pending.set(seq, 'attach');
+      this.options.net()?.sendWinchCommand(seq, 'attach', pick.target);
+    } else {
+      this.attachOffline(pick.target, pick.point);
+    }
   }
   private showNotice(text: string): void { this.notice = text; this.noticeUntil = performance.now() + 2200; }
   private sync(): void {
