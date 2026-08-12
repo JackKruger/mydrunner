@@ -7,6 +7,10 @@
 //   - dedicated handbrake button
 //   - aux buttons: cam, reset, mute (edge-triggered events)
 //   - starter, held to crank a flooded engine back to life
+//
+// The aux buttons are split into a trail group that is always on screen and a
+// pit group behind `#aux-more-btn`. That split is a layout decision, but it is
+// bound here because this module already owns every control in the tray.
 
 type Edge = 'cam' | 'reset' | 'mute' | 'chat' | 'winch';
 
@@ -93,6 +97,18 @@ function bindToggleButton(el: HTMLElement, key: 'handbrake'): void {
   el.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
+/** Expand / collapse the pit half of the aux tray. Pure UI state: it feeds no
+ *  `PlayerInput` field, so it never touches `state`. */
+function bindTrayToggle(el: HTMLElement, tray: HTMLElement): void {
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const open = tray.classList.toggle('open');
+    el.classList.toggle('pressed', open);
+    el.setAttribute('aria-expanded', String(open));
+  });
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
 function bindEdgeButton(el: HTMLElement, name: Edge): void {
   el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -172,6 +188,8 @@ export function initTouchInput(): void {
   const winchOut = document.getElementById('winch-out-btn');
   const airDown = document.getElementById('air-down-btn');
   const inflate = document.getElementById('inflate-btn');
+  const tray = document.getElementById('aux-tray');
+  const trayToggle = document.getElementById('aux-more-btn');
 
   if (pad && knob) bindSteerPad(pad, knob);
   if (throttle) bindHoldButton(throttle, 'throttle');
@@ -192,6 +210,7 @@ export function initTouchInput(): void {
   if (winch) bindEdgeButton(winch, 'winch');
   if (winchIn) bindHoldButton(winchIn, 'winchIn');
   if (winchOut) bindHoldButton(winchOut, 'winchOut');
+  if (tray && trayToggle) bindTrayToggle(trayToggle, tray);
 
   // Stop the page from rubber-banding when the player drags on the controls.
   document.getElementById('touch-controls')?.addEventListener(

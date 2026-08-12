@@ -154,7 +154,7 @@ test('desktop and touch layouts keep instruments and controls separated', async 
   expect(await boxesOverlap(cluster, shifter)).toBe(false);
   expect(await boxesOverlap(shifter, page.locator('#pedal-stack'))).toBe(false);
 
-  for (const id of ['#cam-btn', '#reset-btn', '#mute-btn', '#chat-btn']) {
+  for (const id of ['#cam-btn', '#winch-btn', '#aux-more-btn']) {
     const box = await page.locator(id).boundingBox();
     expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
@@ -167,19 +167,125 @@ test('desktop and touch layouts keep instruments and controls separated', async 
   await handbrake.dispatchEvent('pointerdown', { pointerId: 1 });
   await expect(handbrake).toHaveAttribute('aria-pressed', 'false');
 
-  await page.setViewportSize({ width: 844, height: 390 });
-  expect(await boxesOverlap(cluster, page.locator('#steer-pad'))).toBe(false);
-  expect(await boxesOverlap(cluster, page.locator('#pedal-stack'))).toBe(false);
-  expect(await boxesOverlap(page.locator('#aux-row'), menuButton)).toBe(false);
-  expect(await boxesOverlap(cluster, shifter)).toBe(false);
-  expect(await boxesOverlap(shifter, page.locator('#pedal-stack'))).toBe(false);
-
   const transitionMs = await page.locator('#steer-knob').evaluate((el) => {
     const duration = getComputedStyle(el).transitionDuration.split(',')[0]!.trim();
     const value = Number.parseFloat(duration);
     return duration.endsWith('ms') ? value : value * 1000;
   });
   expect(transitionMs).toBeLessThanOrEqual(0.01);
+});
+
+// A landscape phone is the tightest layout the game ships: the instrument
+// dock, the transmission panel and the aux tray all want the middle of a
+// ~390px-tall viewport. Every one of these panels is centred, and a centred
+// panel that grows spreads both ways — so the regression this pins is not
+// "the shifter moved", it is "two panels found each other".
+const TOUCH_PANELS = [
+  '.hud-cluster', '#hud-shifter', '#aux-tray', '#steer-pad',
+  '#pedal-stack', '#handbrake-btn', '#minimap-wrap', '#chat-log',
+] as const;
+
+// One round trip for every rect: the pairwise form needed ~700 boundingBox
+// calls across the viewport matrix and spent longer in CDP than in layout.
+async function expectNoPanelOverlaps(page: Page, label: string): Promise<void> {
+  const faults = await page.evaluate((selectors: string[]) => {
+    const visible = selectors
+      .map((selector) => {
+        const el = document.querySelector(selector);
+        if (!el) return null;
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return null;
+        if (getComputedStyle(el).visibility === 'hidden') return null;
+        return { selector, rect };
+      })
+      .filter((entry): entry is { selector: string; rect: DOMRect } => entry !== null);
+
+    const round = (r: DOMRect): string =>
+      `x${Math.round(r.x)} y${Math.round(r.y)} w${Math.round(r.width)} h${Math.round(r.height)}`;
+    const found: string[] = [];
+    for (let i = 0; i < visible.length; i += 1) {
+      const a = visible[i]!;
+      // Nothing may hang off an edge either: that is how the drivetrain and
+      // tyre-pressure lines went missing, clipped under the viewport bottom.
+      if (a.rect.bottom > innerHeight + 0.5 || a.rect.right > innerWidth + 0.5
+        || a.rect.top < -0.5 || a.rect.left < -0.5) {
+        found.push(`${a.selector} off screen (${round(a.rect)})`);
+      }
+      for (let j = i + 1; j < visible.length; j += 1) {
+        const b = visible[j]!;
+        if (a.rect.left < b.rect.right && a.rect.right > b.rect.left
+          && a.rect.top < b.rect.bottom && a.rect.bottom > b.rect.top) {
+          found.push(`${a.selector} (${round(a.rect)}) overlaps ${b.selector} (${round(b.rect)})`);
+        }
+      }
+    }
+    return found;
+  }, [...TOUCH_PANELS]);
+
+  expect(faults, label).toEqual([]);
+}
+
+test('touch HUD keeps its panels apart across phone viewports', async ({ page }) => {
+  // Six viewports x two panel states on top of a cold Rapier boot.
+  test.setTimeout(180_000);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 851, height: 393 });
+  await page.goto('/?auto=1&name=phone-layout&q=low');
+  await waitConnected(page);
+  await page.evaluate(() => document.body.classList.add('touch'));
+
+  const tray = page.locator('#aux-tray');
+  const trayToggle = page.locator('#aux-more-btn');
+  const shifter = page.locator('#hud-shifter');
+
+  // Landscape phones, plus the two smallest still worth supporting.
+  const viewports = [
+    { width: 851, height: 393 },
+    { width: 844, height: 390 },
+    { width: 740, height: 360 },
+    { width: 667, height: 375 },
+    { width: 568, height: 320 },
+    { width: 393, height: 851 },
+  ];
+
+  for (const viewport of viewports) {
+    const label = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+    await expectNoPanelOverlaps(page, `${label} collapsed`);
+
+    // Both toggles open at once is the worst case, and the one the panels
+    // have to survive: the tray grows a second row downward while the
+    // shifter grows a gate upward.
+    await trayToggle.dispatchEvent('pointerdown', { pointerId: 3 });
+    await expect(tray).toHaveClass(/open/);
+    await page.locator('#shifter-collapse').click();
+    await expect(shifter).toHaveClass(/expanded/);
+    await expectNoPanelOverlaps(page, `${label} expanded`);
+
+    await trayToggle.dispatchEvent('pointerdown', { pointerId: 3 });
+    await expect(tray).not.toHaveClass(/open/);
+    await page.locator('#shifter-collapse').click();
+    await expect(shifter).not.toHaveClass(/expanded/);
+  }
+
+  await page.setViewportSize({ width: 851, height: 393 });
+
+  // Collapsed, the shifter still has to say what gear and range are engaged —
+  // it is the only readout of either while the gates are hidden.
+  await expect(page.locator('#shifter-summary')).toHaveText(/[NR1-5] · (2H|4H|4L|RWD)/);
+  await expect(page.locator('#gear-gate')).toBeHidden();
+  await page.locator('#shifter-collapse').click();
+  await expect(page.locator('#gear-gate')).toBeVisible();
+  await page.getByRole('button', { name: 'Four wheel drive low' }).click();
+  await expect(page.locator('#shifter-summary')).toHaveText(/[NR1-5] · 4L/);
+  await page.locator('#shifter-collapse').click();
+
+  // The pit half is hidden until asked for, and the trail half never is.
+  await expect(page.locator('#starter-btn')).toBeHidden();
+  await expect(page.locator('#cam-btn')).toBeVisible();
+  await trayToggle.dispatchEvent('pointerdown', { pointerId: 4 });
+  await expect(page.locator('#starter-btn')).toBeVisible();
+  await expect(trayToggle).toHaveAttribute('aria-expanded', 'true');
 });
 
 test('keyboard and touch pressure controls adjust while stopped and explain refusals', async ({ page }) => {
@@ -209,6 +315,8 @@ test('keyboard and touch pressure controls adjust while stopped and explain refu
   const airedDown = await readPsi();
 
   await page.evaluate(() => document.body.classList.add('touch'));
+  // Tyre pressure lives in the tray's pit half, so reaching it is two taps.
+  await page.locator('#aux-more-btn').dispatchEvent('pointerdown', { pointerId: 6 });
   const inflate = page.getByRole('button', { name: 'Hold to inflate tyres' });
   await inflate.dispatchEvent('pointerdown', { pointerId: 7 });
   await expect(inflate).toHaveAttribute('aria-pressed', 'true');

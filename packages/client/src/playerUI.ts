@@ -121,6 +121,8 @@ export class PlayerUI {
   private readonly gearGate: HTMLElement;
   private readonly gearKnob: HTMLElement;
   private readonly transmissionModeButton: HTMLButtonElement;
+  private readonly shifterCollapseButton: HTMLButtonElement;
+  private readonly shifterSummary: HTMLElement;
   private readonly transferGate: HTMLElement;
   private readonly transferKnob: HTMLElement;
   private readonly transferSlots: readonly HTMLButtonElement[];
@@ -178,7 +180,57 @@ export class PlayerUI {
         connecting…
       </div>
 
+      <!-- One bottom-centre stack. These four panels used to be four
+           absolutely positioned elements with hand-tuned offsets repeated in
+           every media query, so any size change re-collided them; the dock
+           makes "these never overlap each other" a layout property. -->
+      <div class="hud-dock">
+      <section id="hud-diagnostics" class="hud-diagnostics instrument-panel" aria-label="Development diagnostics"${options.development ? '' : ' hidden'}>
+        <span id="hud-tick">tick=0</span>
+        <span id="hud-fps">0 FPS</span>
+        <span id="version">build ${options.version}</span>
+        <span id="hud-preview-diagnostic"></span>
+      </section>
+
       <div id="hud-engine-status" class="hud-engine-status instrument-panel" role="status" aria-live="assertive"></div>
+
+      <section id="hud-shifter" class="hud-shifter instrument-panel" aria-label="Transmission selector" data-mode="auto">
+        <header class="hud-shifter-header">
+          <span class="hud-field-label">TRANSMISSION</span>
+          <button id="shifter-collapse" class="shifter-collapse" type="button" aria-expanded="false" aria-controls="shifter-body">
+            <span class="hud-field-label">TRANS</span>
+            <strong id="shifter-summary">N · 4H</strong>
+            <span class="shifter-chevron" aria-hidden="true">▾</span>
+          </button>
+          <button id="transmission-mode" type="button" aria-pressed="false">AUTO</button>
+        </header>
+        <div id="shifter-body" class="hud-shifter-body">
+          <div id="gear-gate" class="gear-gate" aria-label="H-pattern gear selector" role="group">
+            <span class="gear-gate-line gear-gate-line-horizontal" aria-hidden="true"></span>
+            <span class="gear-gate-line gear-gate-line-left" aria-hidden="true"></span>
+            <span class="gear-gate-line gear-gate-line-centre" aria-hidden="true"></span>
+            <span class="gear-gate-line gear-gate-line-right" aria-hidden="true"></span>
+            <button class="gear-slot gear-slot-1" type="button" data-gear="1" aria-label="First gear">1</button>
+            <button class="gear-slot gear-slot-2" type="button" data-gear="2" aria-label="Second gear">2</button>
+            <button class="gear-slot gear-slot-3" type="button" data-gear="3" aria-label="Third gear">3</button>
+            <button class="gear-slot gear-slot-4" type="button" data-gear="4" aria-label="Fourth gear">4</button>
+            <button class="gear-slot gear-slot-5" type="button" data-gear="5" aria-label="Fifth gear">5</button>
+            <button class="gear-slot gear-slot-r" type="button" data-gear="-1" aria-label="Reverse gear">R</button>
+            <span class="gear-neutral-label" aria-hidden="true">N</span>
+            <span id="gear-knob" class="gear-knob" aria-hidden="true"></span>
+          </div>
+          <div id="transfer-gate" class="transfer-gate" aria-label="Transfer-case selector" role="group">
+            <span class="transfer-label">TRANSFER</span>
+            <span class="transfer-gate-line" aria-hidden="true"></span>
+            <button class="transfer-slot transfer-slot-2h" type="button" data-transfer="2h" aria-label="Two wheel drive high">2H</button>
+            <button class="transfer-slot transfer-slot-4h" type="button" data-transfer="4h" aria-label="Four wheel drive high">4H</button>
+            <button class="transfer-slot transfer-slot-4l" type="button" data-transfer="4l" aria-label="Four wheel drive low">4L</button>
+            <span id="transfer-knob" class="transfer-knob" aria-hidden="true">4H</span>
+          </div>
+          <div id="gear-mode-hint" class="gear-mode-hint">AUTO SHIFT</div>
+          <div id="transfer-mode-hint" class="transfer-mode-hint">4WD HIGH</div>
+        </div>
+      </section>
 
       <section class="hud-cluster instrument-panel" aria-label="Vehicle telemetry">
         <div class="hud-speed">
@@ -204,44 +256,7 @@ export class PlayerUI {
         <div id="hud-winch" class="hud-winch" role="status" aria-live="polite"></div>
         <div id="hud-pressure" class="hud-pressure" role="status" aria-live="polite">TYRES — PSI</div>
       </section>
-
-      <section id="hud-shifter" class="hud-shifter instrument-panel" aria-label="Transmission selector" data-mode="auto">
-        <header class="hud-shifter-header">
-          <span class="hud-field-label">TRANSMISSION</span>
-          <button id="transmission-mode" type="button" aria-pressed="false">AUTO</button>
-        </header>
-        <div id="gear-gate" class="gear-gate" aria-label="H-pattern gear selector" role="group">
-          <span class="gear-gate-line gear-gate-line-horizontal" aria-hidden="true"></span>
-          <span class="gear-gate-line gear-gate-line-left" aria-hidden="true"></span>
-          <span class="gear-gate-line gear-gate-line-centre" aria-hidden="true"></span>
-          <span class="gear-gate-line gear-gate-line-right" aria-hidden="true"></span>
-          <button class="gear-slot gear-slot-1" type="button" data-gear="1" aria-label="First gear">1</button>
-          <button class="gear-slot gear-slot-2" type="button" data-gear="2" aria-label="Second gear">2</button>
-          <button class="gear-slot gear-slot-3" type="button" data-gear="3" aria-label="Third gear">3</button>
-          <button class="gear-slot gear-slot-4" type="button" data-gear="4" aria-label="Fourth gear">4</button>
-          <button class="gear-slot gear-slot-5" type="button" data-gear="5" aria-label="Fifth gear">5</button>
-          <button class="gear-slot gear-slot-r" type="button" data-gear="-1" aria-label="Reverse gear">R</button>
-          <span class="gear-neutral-label" aria-hidden="true">N</span>
-          <span id="gear-knob" class="gear-knob" aria-hidden="true"></span>
-        </div>
-        <div id="transfer-gate" class="transfer-gate" aria-label="Transfer-case selector" role="group">
-          <span class="transfer-label">TRANSFER</span>
-          <span class="transfer-gate-line" aria-hidden="true"></span>
-          <button class="transfer-slot transfer-slot-2h" type="button" data-transfer="2h" aria-label="Two wheel drive high">2H</button>
-          <button class="transfer-slot transfer-slot-4h" type="button" data-transfer="4h" aria-label="Four wheel drive high">4H</button>
-          <button class="transfer-slot transfer-slot-4l" type="button" data-transfer="4l" aria-label="Four wheel drive low">4L</button>
-          <span id="transfer-knob" class="transfer-knob" aria-hidden="true">4H</span>
-        </div>
-        <div id="gear-mode-hint" class="gear-mode-hint">AUTO SHIFT</div>
-        <div id="transfer-mode-hint" class="transfer-mode-hint">4WD HIGH</div>
-      </section>
-
-      <section id="hud-diagnostics" class="hud-diagnostics instrument-panel" aria-label="Development diagnostics"${options.development ? '' : ' hidden'}>
-        <span id="hud-tick">tick=0</span>
-        <span id="hud-fps">0 FPS</span>
-        <span id="version">build ${options.version}</span>
-        <span id="hud-preview-diagnostic"></span>
-      </section>
+      </div>
     `;
 
     this.connectionText = root.querySelector('#hud-connection-text')!;
@@ -266,6 +281,8 @@ export class PlayerUI {
     this.gearGate = root.querySelector('#gear-gate')!;
     this.gearKnob = root.querySelector('#gear-knob')!;
     this.transmissionModeButton = root.querySelector('#transmission-mode')!;
+    this.shifterCollapseButton = root.querySelector('#shifter-collapse')!;
+    this.shifterSummary = root.querySelector('#shifter-summary')!;
     this.transferGate = root.querySelector('#transfer-gate')!;
     this.transferKnob = root.querySelector('#transfer-knob')!;
     // Resolved once. These slots are static markup, and renderTelemetry runs
@@ -273,6 +290,7 @@ export class PlayerUI {
     this.transferSlots = [...this.transferGate.querySelectorAll<HTMLButtonElement>('[data-transfer]')];
 
     this.bindShifter();
+    this.bindShifterCollapse();
     this.bindTransferCase();
     this.renderConnection();
     this.renderTelemetry();
@@ -350,6 +368,9 @@ export class PlayerUI {
       if (slot.disabled !== fixedRwd) slot.disabled = fixedRwd;
     }
     this.positionTransferKnob(transferCase);
+    // The collapsed shifter is a header and nothing else, so the header has to
+    // carry what the gates would otherwise show.
+    setText(this.shifterSummary, `${formatGear(this.state.gear)} · ${fixedRwd ? 'RWD' : transferCase.toUpperCase()}`);
     const locks = [this.state.rearLocked ? 'R LOCK' : '', this.state.frontLocked ? 'F LOCK' : ''].filter(Boolean).join(' · ');
     const drivetrain = this.state.drivetrainNotice
       ? this.state.drivetrainNotice
@@ -409,6 +430,22 @@ export class PlayerUI {
     };
     this.gearGate.addEventListener('pointerup', finish);
     this.gearGate.addEventListener('pointercancel', finish);
+  }
+
+  /** The H-gate is 240x138 — a quarter of a landscape phone. Touch layouts
+   *  collapse it to its header and this expands it again; the collapsed state
+   *  is CSS-default rather than set here, so desktop never depends on JS
+   *  having run to show a full shifter. */
+  private bindShifterCollapse(): void {
+    this.shifterCollapseButton.addEventListener('click', () => {
+      const expanded = this.shifter.classList.toggle('expanded');
+      this.shifterCollapseButton.setAttribute('aria-expanded', String(expanded));
+      // The aux tray reads this to get out of the way in landscape. A body
+      // class rather than a call into `touchInput`: the two panels are laid
+      // out against each other, which is a stylesheet's business, not a
+      // dependency between an input module and a presenter.
+      document.body.classList.toggle('shifter-open', expanded);
+    });
   }
 
   private bindTransferCase(): void {

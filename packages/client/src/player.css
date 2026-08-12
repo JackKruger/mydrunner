@@ -235,17 +235,43 @@ input:focus-visible,
   background: rgba(50, 17, 14, 0.94);
 }
 
-.hud-cluster {
+/* The bottom-centre stack: diagnostics, engine status, shifter (touch only)
+   and the instrument cluster, in one column.
+   Each of these used to be positioned against the viewport with its own
+   hand-tuned offset, repeated in three media queries — so growing any panel
+   silently overlapped its neighbour, and a phone found the collision before a
+   test did. Stacking them means the gap is declared once. */
+.hud-dock {
   position: absolute;
   bottom: calc(var(--ui-safe-bottom) + 2px);
   left: 50%;
+  display: flex;
+  width: max-content;
+  max-width: calc(100vw - var(--ui-safe-left) - var(--ui-safe-right));
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  transform: translateX(-50%);
+}
+
+.hud-cluster {
   display: grid;
   grid-template-columns: 136px 72px 186px;
   grid-template-rows: 76px 22px;
   width: 414px;
-  height: 112px;
-  padding: 8px 10px;
-  transform: translateX(-50%);
+  max-width: 100%;
+  padding: 8px 10px 10px;
+}
+
+/* The status lines are `grid-column: 1/-1` rows below the fixed two, so a
+   fixed panel height pushed them out through the bottom border and off the
+   viewport. Auto height keeps them inside the panel; :empty keeps the panel
+   from reserving four rows to say nothing. */
+.hud-drivetrain:empty,
+.hud-condition:empty,
+.hud-winch:empty,
+.hud-pressure:empty {
+  display: none;
 }
 
 .hud-speed {
@@ -291,12 +317,13 @@ input:focus-visible,
 
 /* ── H-pattern transmission selector ───────────────────────────── */
 
+/* Parked beside the dock rather than at a viewport offset, so it follows the
+   cluster instead of having to be re-aimed at it in every media query. */
 .hud-shifter {
   position: absolute;
-  bottom: calc(var(--ui-safe-bottom) + 2px);
-  left: calc(50% + 222px);
+  bottom: 0;
+  left: calc(100% + 10px);
   width: 250px;
-  height: 164px;
   padding: 9px 12px 8px;
   pointer-events: auto;
   user-select: none;
@@ -308,6 +335,40 @@ input:focus-visible,
   align-items: center;
   justify-content: space-between;
   min-height: 22px;
+}
+
+/* Everything the collapse toggle hides. Positioned, so the gates anchor to
+   the gate area rather than to the panel — the panel can then grow a taller
+   header on touch without the transfer gate sliding under it. */
+.hud-shifter-body {
+  position: relative;
+  height: 122px;
+}
+
+.shifter-collapse {
+  display: none;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text);
+  cursor: pointer;
+}
+
+.shifter-collapse strong {
+  color: var(--ui-amber-bright);
+  font: 900 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.shifter-chevron {
+  color: var(--ui-muted);
+  font-size: 11px;
+  transition: transform 120ms ease;
+}
+
+.hud-shifter.expanded .shifter-chevron {
+  transform: rotate(180deg);
 }
 
 #transmission-mode {
@@ -448,8 +509,8 @@ input:focus-visible,
 
 .transfer-gate {
   position: absolute;
-  top: 38px;
-  right: 12px;
+  top: 10px;
+  right: 0;
   width: 72px;
   height: 96px;
   cursor: grab;
@@ -550,8 +611,8 @@ input:focus-visible,
 
 .transfer-mode-hint {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
+  right: 0;
+  bottom: 0;
   width: 82px;
   color: var(--ui-blue);
   font: 800 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -618,7 +679,7 @@ input:focus-visible,
   box-shadow: inset 0 0 12px rgba(241, 91, 78, 0.12);
 }
 
-/* Its own centred slot just above the instrument cluster.
+/* Its own slot in the dock, just above the instrument cluster.
    Two earlier homes were both wrong and both only showed up in a
    screenshot: stacked under the handbrake indicator it ran off the
    bottom of the viewport, and inside the session panel it was covered by
@@ -626,10 +687,6 @@ input:focus-visible,
    to press, so it cannot be clipped or overlapped. */
 .hud-engine-status {
   display: none;
-  position: absolute;
-  bottom: calc(var(--ui-safe-bottom) + 152px);
-  left: 50%;
-  transform: translateX(-50%);
   padding: 7px 14px;
   border-color: var(--ui-red);
   background: rgba(241, 91, 78, 0.2);
@@ -645,10 +702,8 @@ input:focus-visible,
 }
 
 .hud-diagnostics {
-  position: absolute;
-  bottom: calc(var(--ui-safe-bottom) + 126px);
-  left: 50%;
   display: flex;
+  max-width: 100%;
   gap: 13px;
   align-items: center;
   min-height: 25px;
@@ -658,7 +713,6 @@ input:focus-visible,
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  transform: translateX(-50%);
 }
 
 .hud-diagnostics > * + *::before {
@@ -903,10 +957,13 @@ body.minimal-hud .hud-shifter { display: none; }
   color: var(--ui-muted);
 }
 
+/* Clears the dock. The cluster used to be a fixed 112px with its status lines
+   spilling out through the bottom border; now that it sizes to them — and the
+   dev diagnostics panel sits above it — the radio has to start higher. */
 #chat-input-wrap {
   position: fixed;
   right: 50%;
-  bottom: calc(var(--ui-safe-bottom) + 134px + var(--chat-keyboard-offset));
+  bottom: calc(var(--ui-safe-bottom) + 200px + var(--chat-keyboard-offset));
   z-index: 60;
   display: none;
   width: min(560px, calc(100vw - 28px));
@@ -1780,16 +1837,41 @@ body.touch #help {
   transform: translateY(2px);
 }
 
-#aux-row {
+/* `width: max-content` is load-bearing. An absolutely positioned box with
+   `left: 50%` and auto width shrink-to-fits into the space to its *right* —
+   half the viewport — so the tray wrapped to two rows on an 851px-wide phone
+   and the second row landed on top of the transmission panel. max-content
+   sizes it to its buttons, and max-width does the wrapping deliberately. */
+#aux-tray {
   position: absolute;
   top: var(--ui-safe-top);
   left: 50%;
   display: flex;
+  width: max-content;
   max-width: calc(100vw - var(--ui-safe-left) - var(--ui-safe-right) - 20px);
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  transform: translateX(-50%);
+}
+
+.aux-group {
+  display: flex;
+  max-width: 100%;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 7px;
-  transform: translateX(-50%);
+  gap: 6px;
+}
+
+/* The pit half — starter, reset, tyre pressure, radio, mute — is behind the
+   toggle. Thirteen always-on buttons covered the horizon on a phone, and the
+   ones you actually reach for mid-bog are the seven that stay. */
+#aux-pit {
+  display: none;
+}
+
+#aux-tray.open #aux-pit {
+  display: flex;
 }
 
 .aux-btn {
@@ -1801,12 +1883,52 @@ body.touch #help {
   font-size: 9px;
 }
 
+.aux-toggle {
+  border-color: rgba(242, 165, 41, 0.5);
+  color: var(--ui-amber-bright);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
 .aux-btn.pressed,
 .aux-btn[aria-pressed="true"] {
   border-color: var(--ui-amber-bright);
   background: rgba(177, 104, 16, 0.9);
   color: var(--ui-text);
   transform: translateY(1px);
+}
+
+/* ── Touch HUD ───────────────────────────────────────────────────── */
+
+/* On touch the shifter joins the dock column instead of parking beside it:
+   there is no room to its right once the pedals are down there, and it is
+   collapsed to its header by default because the H-gate is a quarter of a
+   landscape phone. */
+body.touch .hud-shifter {
+  position: static;
+  width: min(250px, 100%);
+}
+
+body.touch .hud-shifter-header > .hud-field-label {
+  display: none;
+}
+
+body.touch .shifter-collapse {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+}
+
+body.touch .hud-shifter:not(.expanded) {
+  padding: 4px 10px;
+}
+
+body.touch .hud-shifter:not(.expanded) .hud-shifter-body {
+  display: none;
+}
+
+body.touch #transmission-mode {
+  min-height: 34px;
 }
 
 /* ── Responsive layouts ──────────────────────────────────────────── */
@@ -1822,6 +1944,15 @@ body.touch #help {
 
   #chat-log {
     top: calc(var(--ui-safe-top) + 180px);
+  }
+}
+
+/* Below this the cluster plus a 250px shifter beside it no longer fits
+   between the viewport edges, so the shifter drops into the dock column. */
+@media (max-width: 940px) {
+  .hud-shifter {
+    position: static;
+    width: min(250px, 100%);
   }
 }
 
@@ -1887,13 +2018,6 @@ body.touch #help {
     width: min(220px, calc(100vw - 178px));
     min-width: 178px;
   }
-
-  .hud-shifter {
-    right: 10px;
-    bottom: calc(var(--ui-safe-bottom) + 128px);
-    left: auto;
-    width: 250px;
-  }
 }
 
 @media (max-width: 540px) and (orientation: portrait) {
@@ -1940,33 +2064,31 @@ body.touch #help {
     padding: 10px 16px;
   }
 
-  .hud-cluster {
-    top: 220px;
+  /* Portrait has no room beside the controls, so the dock hangs from the top
+     under the alert instead of sitting between the steer pad and the pedals. */
+  .hud-dock {
+    top: 216px;
     bottom: auto;
+    max-width: calc(100vw - 16px);
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  #hud[data-connection="connected"] .hud-dock,
+  #hud[data-connection="preview"] .hud-dock {
+    top: 186px;
+  }
+
+  .hud-cluster {
     grid-template-columns: 78px 50px 1fr;
     grid-template-rows: 51px 18px;
     width: min(250px, calc(100vw - 20px));
-    height: 82px;
-    padding: 6px 8px;
-  }
-
-  #hud[data-connection="connected"] .hud-cluster,
-  #hud[data-connection="preview"] .hud-cluster {
-    top: 190px;
+    padding: 6px 8px 8px;
   }
 
   .hud-shifter {
-    top: 282px;
-    right: 8px;
-    bottom: auto;
-    width: 240px;
-    height: 154px;
     padding-right: 9px;
     padding-left: 9px;
-  }
-
-  .gear-gate {
-    height: 95px;
   }
 
   .hud-speed {
@@ -2013,9 +2135,6 @@ body.touch #help {
   }
 
   .hud-diagnostics {
-    top: 312px;
-    bottom: auto;
-    max-width: calc(100vw - 16px);
     gap: 7px;
     padding: 5px 8px;
     font-size: 8px;
@@ -2026,11 +2145,14 @@ body.touch #help {
     margin-right: 7px;
   }
 
+  /* Above the instruments rather than below them. Portrait stacks the dock,
+     the aux tray and the controls down the lower two thirds, and with the
+     gate open there is no gap left down there for the log to sit in. */
   #chat-log {
-    top: 314px;
+    top: 68px;
     left: 8px;
     width: calc(100vw - 16px);
-    max-height: 150px;
+    max-height: 90px;
   }
 
   #chat-input-wrap {
@@ -2077,13 +2199,18 @@ body.touch #help {
     font-size: 9px;
   }
 
-  #aux-row {
+  /* Above the pedal stack: 82 + 7 + 66 of pedals on a 2px offset, plus a
+     gap. The old 154px offset put the tray's bottom row on top of the
+     throttle. */
+  #aux-tray {
     top: auto;
-    bottom: calc(var(--ui-safe-bottom) + 154px);
-    left: 10px;
-    width: calc(100vw - 20px);
+    bottom: calc(var(--ui-safe-bottom) + 166px);
+    max-width: calc(100vw - 20px);
     gap: 5px;
-    transform: none;
+  }
+
+  .aux-group {
+    gap: 5px;
   }
 
   .aux-btn {
@@ -2132,27 +2259,23 @@ body.touch #help {
     width: min(300px, calc(100vw - 166px));
   }
 
-  .hud-cluster {
+  /* Half of this width has to clear the steer pad on the left and the
+     handbrake plus pedals on the right — 168px of controls each side. */
+  .hud-dock {
     bottom: 8px;
-    grid-template-columns: 85px 52px 116px;
+    max-width: calc(100vw - 336px);
+    gap: 6px;
+  }
+
+  .hud-cluster {
+    grid-template-columns: minmax(70px, 85px) 50px minmax(92px, 1fr);
     grid-template-rows: 54px 18px;
-    width: 273px;
-    height: 86px;
-    padding: 6px;
+    width: min(273px, 100%);
+    padding: 6px 6px 7px;
   }
 
   .hud-shifter {
-    right: 174px;
-    top: 74px;
-    bottom: auto;
-    left: auto;
-    width: 240px;
-    height: 138px;
     padding: 7px 9px 6px;
-  }
-
-  .gear-gate {
-    height: 83px;
   }
 
   .hud-speed-value {
@@ -2184,17 +2307,25 @@ body.touch #help {
     font-size: 8px;
   }
 
-  .hud-diagnostics {
-    bottom: 101px;
-  }
-
+  /* Below the aux tray with its pit half open (two 44px rows), so opening the
+     tray never lands buttons on the log. */
+  /* Stops at the dock's left edge — the dock is centred and at most
+     `100vw - 336px` wide, so half of that plus the log's own margin is the
+     most it can take without printing chat over the instruments. */
   #chat-log {
     top: 118px;
-    width: min(310px, calc(100vw - 330px));
+    width: min(310px, calc(50vw - 140px));
+    /* Stops above the steer pad, which is 128px tall on an 8px bottom
+       margin — on a 320px-tall phone that leaves room for one line, and one
+       line is better than a line drawn over the thumb pad. */
+    max-height: min(128px, calc(100vh - 262px));
   }
 
+  /* Landscape has no room above the dock for the radio, and the on-screen
+     keyboard owns the bottom half anyway, so it sits over the instruments
+     while open rather than being squeezed into a strip. */
   #chat-input-wrap {
-    bottom: calc(var(--ui-safe-bottom) + 94px + var(--chat-keyboard-offset));
+    bottom: calc(var(--ui-safe-bottom) + 8px + var(--chat-keyboard-offset));
     width: min(430px, calc(100vw - 28px));
   }
 
@@ -2234,13 +2365,63 @@ body.touch #help {
     height: 58px;
   }
 
-  #aux-row {
+  /* Anchored left, not centred: a centred row has to reserve the minimap's
+     150px on *both* sides, which cost it a whole extra row of wrapping on a
+     small phone. The top-left corner is free — the session panel it would
+     otherwise clash with is never shown. */
+  #aux-tray {
     top: 8px;
+    left: 8px;
+    max-width: calc(100vw - 166px);
+    align-items: flex-start;
+    transform: none;
+  }
+
+  .aux-group {
+    justify-content: flex-start;
+  }
+
+  /* The gate and the tray both want the band above the dock, and on a 320px
+     tall phone only one of them fits. The gate is a deliberate mode you enter
+     stopped, so it takes the space for as long as it is open. */
+  body.touch.shifter-open #aux-tray {
+    display: none;
   }
 
   .aux-btn {
     width: 44px;
     height: 44px;
+  }
+}
+
+/* The shortest landscape phones. With the gate open the dock is the whole
+   height budget: dev diagnostics + gate + cluster came to 330px inside 320px
+   of viewport, and the top of it went off screen. Trimming the gate and the
+   speed row is what buys those thirty pixels back. */
+@media (max-height: 380px) and (orientation: landscape) {
+  .hud-shifter-body {
+    height: 100px;
+  }
+
+  .gear-gate {
+    height: 86px;
+  }
+
+  .transfer-gate {
+    top: 6px;
+    height: 84px;
+  }
+
+  .hud-cluster {
+    grid-template-rows: 46px 18px;
+  }
+
+  .hud-speed-value {
+    font-size: 34px;
+  }
+
+  .hud-gear strong {
+    font-size: 25px;
   }
 }
 

@@ -17,20 +17,30 @@
         <button class="pedal" id="throttle-btn" type="button" aria-pressed="false">gas</button>
         <button class="pedal" id="brake-btn" type="button" aria-pressed="false">brake</button>
       </div>
-      <div id="aux-row">
-        <button class="aux-btn" id="cam-btn" type="button" aria-label="Change camera">cam</button>
-        <button class="aux-btn" id="reset-btn" type="button" aria-label="Reset vehicle">reset</button>
-        <button class="aux-btn" id="starter-btn" type="button" aria-label="Crank the starter">start</button>
-        <button class="aux-btn" id="range-btn" type="button" aria-label="Cycle 2H, 4H, and 4L">2H<br/>4L</button>
-        <button class="aux-btn" id="rear-locker-btn" type="button" aria-label="Toggle rear locker">R lock</button>
-        <button class="aux-btn" id="front-locker-btn" type="button" aria-label="Toggle front locker">F lock</button>
-        <button class="aux-btn" id="air-down-btn" type="button" aria-label="Hold to air tyres down">PSI −</button>
-        <button class="aux-btn" id="inflate-btn" type="button" aria-label="Hold to inflate tyres">PSI +</button>
-        <button class="aux-btn" id="mute-btn" type="button" aria-label="Toggle engine audio">mute</button>
-        <button class="aux-btn" id="chat-btn" type="button" aria-label="Open team radio">chat</button>
-        <button class="aux-btn" id="winch-btn" type="button" aria-label="Target, attach, or detach winch">hook</button>
-        <button class="aux-btn" id="winch-out-btn" type="button" aria-label="Reel winch out">out</button>
-        <button class="aux-btn" id="winch-in-btn" type="button" aria-label="Reel winch in">in</button>
+      <!-- Two groups, not thirteen buttons in a row: the trail set stays on
+           screen, the pit set hides behind the tray toggle. All thirteen at
+           once walled off the top of a landscape phone. -->
+      <div id="aux-tray">
+        <div class="aux-group" id="aux-trail">
+          <button class="aux-btn" id="cam-btn" type="button" aria-label="Change camera">cam</button>
+          <button class="aux-btn" id="range-btn" type="button" aria-label="Cycle 2H, 4H, and 4L">2H<br/>4L</button>
+          <button class="aux-btn" id="rear-locker-btn" type="button" aria-label="Toggle rear locker">R lock</button>
+          <button class="aux-btn" id="front-locker-btn" type="button" aria-label="Toggle front locker">F lock</button>
+          <button class="aux-btn" id="winch-btn" type="button" aria-label="Target, attach, or detach winch">hook</button>
+          <button class="aux-btn" id="winch-out-btn" type="button" aria-label="Reel winch out">out</button>
+          <button class="aux-btn" id="winch-in-btn" type="button" aria-label="Reel winch in">in</button>
+          <button class="aux-btn aux-toggle" id="aux-more-btn" type="button" aria-expanded="false" aria-controls="aux-pit" aria-label="More controls">
+            <span aria-hidden="true">•••</span>
+          </button>
+        </div>
+        <div class="aux-group" id="aux-pit">
+          <button class="aux-btn" id="starter-btn" type="button" aria-label="Crank the starter">start</button>
+          <button class="aux-btn" id="reset-btn" type="button" aria-label="Reset vehicle">reset</button>
+          <button class="aux-btn" id="air-down-btn" type="button" aria-label="Hold to air tyres down">PSI −</button>
+          <button class="aux-btn" id="inflate-btn" type="button" aria-label="Hold to inflate tyres">PSI +</button>
+          <button class="aux-btn" id="chat-btn" type="button" aria-label="Open team radio">chat</button>
+          <button class="aux-btn" id="mute-btn" type="button" aria-label="Toggle engine audio">mute</button>
+        </div>
       </div>
     </div>
 
