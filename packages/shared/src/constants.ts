@@ -413,6 +413,7 @@ export const ANTI_ROLL = {
   torqueDamping: 16_000,
   frontShare: 0.55,
   rearShare: 0.45,
+  lowRangeFrontDisconnect: 0,
   maxStaticLoadTransfer: 0.45,
 } as const;
 

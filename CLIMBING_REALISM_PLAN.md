@@ -1,6 +1,6 @@
-> Status: Stages 0–2 are complete on the authoritative Node 22 runtime. The
+> Status: Stages 0–3 are complete on the authoritative Node 22 runtime. The
 > interstage flat-road turning diagnosis below corrected a global anti-roll
-> force-direction bug without implementing the Stage 3 disconnect. Stages 3–5
+> force-direction bug before the separate Stage 3 disconnect. Stages 4–5
 > remain pending.
 
 # Make tall obstacles climbable, the way a real crawler climbs them
@@ -10,7 +10,7 @@
 - [x] Stage 0 — lock Node 22 and verify all 15 exact golden fixtures.
 - [x] Stage 1 — redesign heightfield ledge contact and isolate the 0.6 m rig.
 - [x] Stage 2 — pressure-dependent tread wrapping.
-- [ ] Stage 3 — low-range sway-bar disconnect.
+- [x] Stage 3 — low-range sway-bar disconnect.
 - [ ] Stage 4 — belly and slider diagnosis.
 - [ ] Stage 5 — final rebaseline and documentation after the physics stages.
 
@@ -161,12 +161,13 @@ articulation. The global sign correction now adds support to that end and
 removes the equal amount from the other. All three pressure runs have zero
 near-zero-load entries after steering settles, no contact or handoff losses and
 `minUpY > 0.997`. The approved trajectory change deliberately rebaselines all
-15 exact goldens. This is a correctness fix only: Stage 3's low-range front-bar
-disconnect remains pending, with no new force, grip, rollover or handoff tune.
+15 exact goldens. This was a correctness fix only; at that point Stage 3's
+low-range front-bar disconnect remained pending, with no new force, grip,
+rollover or handoff tune.
 
 ## Stage 3 — Sway bar disconnect in low range
 
-Pending. Do not treat the interstage force-direction correction as this stage.
+Complete. This remains separate from the interstage force-direction correction.
 
 - **`constants.ts`:** `ANTI_ROLL.lowRangeFrontDisconnect` (front bar share
   scale, 0 for a true disconnect).
@@ -178,6 +179,12 @@ Pending. Do not treat the interstage force-direction correction as this stage.
   `SNAPSHOT_SCHEMA` or `PROTOCOL_VERSION` bump**. A workshop part with its own
   button is the natural follow-up, but it costs a wire-tuple change because
   `VEHICLE_PART_SLOTS` is what the positional build tuple walks.
+
+The front share is now scaled to zero only in 4L, leaving the rear bar and all
+existing anti-roll calculation, gating, capping and force application intact.
+A paired real-vehicle articulation regression pins the immediate 4H/4L force
+relationship and verifies that sustained 4L articulation retains more travel
+and load at the drooped front end without unstable chassis or axle motion.
 
 ## Stage 4 — Belly and slider contact (measure, then decide)
 

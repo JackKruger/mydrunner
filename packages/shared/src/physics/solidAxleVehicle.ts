@@ -1409,7 +1409,11 @@ export class SolidAxleVehicle implements VehicleLike {
     // world-up. Unsupported ends sit at full droop for bar deflection,
     // while forces can only enter the chassis through supported ends.
     const frontBarShare = clamp(TUNING.antiRollFrontShare, 0, 1);
-    const barShare = aIdx === 0 ? frontBarShare : 1 - frontBarShare;
+    const barShare = aIdx === 0
+      ? frontBarShare * (this.drivetrain.transferCase === '4l'
+        ? ANTI_ROLL.lowRangeFrontDisconnect
+        : 1)
+      : 1 - frontBarShare;
     const axleMassShare = aIdx === 0 ? 0.52 : 0.48;
     const antiRollInput = scratch.antiRollInput;
     antiRollInput.leftDepth = sides[0]!.supported ? sides[0]!.comp : -ag.droopMax;
