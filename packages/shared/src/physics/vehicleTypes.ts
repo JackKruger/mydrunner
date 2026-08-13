@@ -84,6 +84,8 @@ export interface WheelDebugTelemetry {
   sinkDepth: number;
   soilDrag: number;
   slipWork: number;
+  /** World-space vertical velocity of the kinematic wheel centre (m/s). */
+  verticalVelocity: number;
 }
 
 export interface VehicleDebugTelemetry {
@@ -129,10 +131,21 @@ export interface VehicleDebugTelemetry {
     iterationResidual: number;
     tubeContact: boolean;
     housingContact: boolean;
+    /** Axle heave velocity relative to the chassis (m/s). */
+    rideVelocity: number;
+    /** Axle articulation velocity relative to the chassis (rad/s). */
+    rollVelocity: number;
+    /** Paired wheel-end additions returned by the anti-roll solver (N). */
+    antiRollLeftForce: number;
+    antiRollRightForce: number;
   }, {
     iterationResidual: number;
     tubeContact: boolean;
     housingContact: boolean;
+    rideVelocity: number;
+    rollVelocity: number;
+    antiRollLeftForce: number;
+    antiRollRightForce: number;
   }];
   wheels: [WheelDebugTelemetry, WheelDebugTelemetry, WheelDebugTelemetry, WheelDebugTelemetry];
 }

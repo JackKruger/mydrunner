@@ -59,10 +59,21 @@ describe('axle: anti-roll load transfer', () => {
     })).toEqual({ leftForce: 0, rightForce: 0 });
   });
 
-  it('produces opposite supported-end forces and clamps the transfer', () => {
+  it('supports the more-compressed end and unloads the opposite end', () => {
+    const result = computeAntiRollLoadTransfer({
+      ...base,
+      leftDepth: 0.10,
+      rightDepth: 0.08,
+    });
+    expect(result.leftForce).toBeGreaterThan(0);
+    expect(result.rightForce).toBeLessThan(0);
+    expect(result.leftForce + result.rightForce).toBeCloseTo(0, 12);
+  });
+
+  it('produces equal/opposite supported-end forces and clamps the transfer', () => {
     const result = computeAntiRollLoadTransfer({ ...base, leftDepth: 0.5, rightDepth: -0.2 });
-    expect(result.leftForce).toBe(-4_000);
-    expect(result.rightForce).toBe(4_000);
+    expect(result.leftForce).toBe(4_000);
+    expect(result.rightForce).toBe(-4_000);
     expect(result.leftForce + result.rightForce).toBe(0);
   });
 
@@ -73,7 +84,7 @@ describe('axle: anti-roll load transfer', () => {
       rightDepth: -0.27,
       rightSupported: false,
     });
-    expect(result.leftForce).toBeLessThan(0);
+    expect(result.leftForce).toBeGreaterThan(0);
     expect(result.rightForce).toBe(0);
   });
 

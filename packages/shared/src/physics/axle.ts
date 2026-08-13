@@ -220,13 +220,13 @@ export function computeAntiRollLoadTransfer(
   const track = Math.max(1e-6, input.trackHalf * 2);
   const forceStiffness = input.torqueStiffness / (track * track);
   const forceDamping = input.torqueDamping / (track * track);
-  // Compression displacement and compression velocity have opposite
-  // force conventions: the spring pushes the chassis toward the less-
-  // compressed end, while the damper opposes the end currently gaining
-  // compression. Keeping the signs explicit avoids turning the bar into
-  // positive feedback on cross-slopes.
+  // Both terms oppose articulation. If the left end is more compressed (or
+  // gaining compression faster), the bar adds upward support on the left and
+  // removes the same support on the right. Giving the stiffness term the
+  // opposite sign turns the bar into positive feedback: a loaded outside
+  // tyre loses still more load and the axle enters a wheel-tramp cycle.
   const rawTransfer =
-    -forceStiffness * (input.leftDepth - input.rightDepth)
+    forceStiffness * (input.leftDepth - input.rightDepth)
     + forceDamping * (input.leftRate - input.rightRate);
   const limit = Math.max(0, input.maxTransferForce);
   const transfer = Math.max(-limit, Math.min(limit, rawTransfer));

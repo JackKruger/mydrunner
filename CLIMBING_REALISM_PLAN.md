@@ -1,18 +1,15 @@
-> Status: Stage 0 complete on the authoritative Node 22 runtime. Stage 1 was
-> attempted on 2026-08-13 and stopped at its explicit no-scope-expansion
-> condition: the two proposed geometry changes did not produce heightfield
-> ledge contacts or meet the safety/golden acceptance bars. Stages 2–4 remain
-> pending.
+> Status: Stages 0–2 are complete on the authoritative Node 22 runtime. The
+> interstage flat-road turning diagnosis below corrected a global anti-roll
+> force-direction bug without implementing the Stage 3 disconnect. Stages 3–5
+> remain pending.
 
 # Make tall obstacles climbable, the way a real crawler climbs them
 
 ## Current stage checklist
 
 - [x] Stage 0 — lock Node 22 and verify all 15 exact golden fixtures.
-- [ ] Stage 1 — redesign heightfield ledge contact and isolate the 0.6 m rig.
-  The original two-line geometry proposal was attempted and reverted; see the
-  measured blocker below.
-- [ ] Stage 2 — pressure-dependent tread wrapping.
+- [x] Stage 1 — redesign heightfield ledge contact and isolate the 0.6 m rig.
+- [x] Stage 2 — pressure-dependent tread wrapping.
 - [ ] Stage 3 — low-range sway-bar disconnect.
 - [ ] Stage 4 — belly and slider diagnosis.
 - [ ] Stage 5 — final rebaseline and documentation after the physics stages.
@@ -54,9 +51,9 @@ and the sim currently ignores:
   fixed 1.5 multiplier and a fixed 0.08 m `edgeAdvance`. Airing down to climb
   a ledge is the single most common real technique, and the game already has
   full pressure controls that are inert here.
-- **The anti-roll bar always fights articulation.** On a one-sided obstacle
-  `computeAntiRollLoadTransfer` moves load *off* the climbing wheel. Real rock
-  crawlers disconnect the front bar for exactly this.
+- **The anti-roll bar needs separate correctness and disconnect checks.** The
+  interstage diagnosis found that its stiffness term had the wrong global
+  force direction; Stage 3 remains the distinct low-range disconnect feature.
 - **Belly/slider behaviour is unverified.** The chassis collider exists at
   friction 0.1 (already skid-plate slippery), but nothing confirms whether it
   is contacting during a stalled climb or whether pivoting on it is possible.
@@ -100,7 +97,7 @@ The core fix.
   ledge contact. The rock path already handles that coexistence — reuse it,
   do not add a second branch.
 
-### Stage 1 attempt — measured blocker
+### Stage 1 completion after the measured blocker
 
 The original `axleRegressions.test.ts` course is not an isolated terrain rig.
 At its `{ x: 0, z: -12 }` start, the prepared Outclaw first meets the petrol
@@ -118,11 +115,12 @@ return a hit while the follow-up `contactShape` reconstruction used by
 `findSteepWheelContactInto` returns null, so the radius-scaled top probe is
 never reached for this terrain path.
 
-The narrowed gate also changed the existing prepared-Outclaw road and
-corrugation goldens, which are required to remain byte-identical. No fixtures
-were regenerated. Completing Stage 1 therefore needs a separately approved
-heightfield-contact design (and an isolated acceptance fixture), not force,
-traction, pressure, sway-bar, or handoff tuning.
+The completed design reuses the heightfield cast's witness and reconstructs a
+validated tread climb target directly instead of relying on Rapier's failing
+`contactShape` reconstruction. The synthetic station remains outside the test
+course. The isolated prepared Outclaw now crosses the one-sided 0.6 m ledge,
+while the repeated 0.35 m course retains alternating-articulation coverage and
+the hot contact path remains allocation-free.
 
 ## Stage 2 — Pressure-dependent tread wrap
 
@@ -139,7 +137,36 @@ traction, pressure, sway-bar, or handoff tuning.
   responds; also add the debug-panel slider and update its hand-written
   copy-to-clipboard serialiser.
 
+Stage 2 is complete: low, nominal and high pressure now change the physical
+wrap distance and ledge traction, with focused pressure, ledge, flat-terrain
+invariance and live-tuning coverage.
+
+## Interstage diagnosis — flat-road turning wheel tramp
+
+After Stages 1–2, a separate Stockman Single rig exposed violent axle motion
+on a flat sealed road despite continuous tread-only contact. The deterministic
+script settles for 180 ticks, starts at 8 m/s, then holds 0.25 throttle and full
+input through the normal progressive/speed-limited steering path for 240 ticks.
+
+Owner-only telemetry was extended with axle ride/roll velocities, exact paired
+anti-roll forces and wheel-centre vertical velocity. With the old production
+sign, the low/nominal/high-pressure runs recorded 50/31/29 near-zero-load
+entries in four seconds, large alternating tyre loads and elevated roll/lateral
+acceleration. They recorded zero shoulder/sidewall samples, zero ledge handoffs
+and zero tread-contact losses, ruling out the Stage 1–2 contact paths.
+
+`computeAntiRollLoadTransfer` gave the stiffness term the opposite force
+direction to its damping term: a more-compressed end lost support, amplifying
+articulation. The global sign correction now adds support to that end and
+removes the equal amount from the other. All three pressure runs have zero
+near-zero-load entries after steering settles, no contact or handoff losses and
+`minUpY > 0.997`. The approved trajectory change deliberately rebaselines all
+15 exact goldens. This is a correctness fix only: Stage 3's low-range front-bar
+disconnect remains pending, with no new force, grip, rollover or handoff tune.
+
 ## Stage 3 — Sway bar disconnect in low range
+
+Pending. Do not treat the interstage force-direction correction as this stage.
 
 - **`constants.ts`:** `ANTI_ROLL.lowRangeFrontDisconnect` (front bar share
   scale, 0 for a true disconnect).

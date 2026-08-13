@@ -345,6 +345,7 @@ function createWheelDebugTelemetry(): WheelDebugTelemetry {
     sinkDepth: 0,
     soilDrag: 0,
     slipWork: 0,
+    verticalVelocity: 0,
   };
 }
 
@@ -439,11 +440,19 @@ export class SolidAxleVehicle implements VehicleLike {
   private readonly debugAcceleration: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly axleDebug: [{
     iterationResidual: number; tubeContact: boolean; housingContact: boolean;
+    antiRollLeftForce: number; antiRollRightForce: number;
   }, {
     iterationResidual: number; tubeContact: boolean; housingContact: boolean;
+    antiRollLeftForce: number; antiRollRightForce: number;
   }] = [
-    { iterationResidual: 0, tubeContact: false, housingContact: false },
-    { iterationResidual: 0, tubeContact: false, housingContact: false },
+    {
+      iterationResidual: 0, tubeContact: false, housingContact: false,
+      antiRollLeftForce: 0, antiRollRightForce: 0,
+    },
+    {
+      iterationResidual: 0, tubeContact: false, housingContact: false,
+      antiRollLeftForce: 0, antiRollRightForce: 0,
+    },
   ];
 
   private readonly water: WaterState = createWaterState();
@@ -1033,6 +1042,9 @@ export class SolidAxleVehicle implements VehicleLike {
       debug.wheelCenter.x = center.x;
       debug.wheelCenter.y = center.y;
       debug.wheelCenter.z = center.z;
+      debug.verticalVelocity = w.hasPreviousCenter
+        ? (center.y - w.previousCenter.y) / dt
+        : 0;
       // Upward terrain support already accounts for the tyre volume. A steep
       // heightfield hit is different: reuse its cast normal and witness, then
       // validate the upper surface analytically because Rapier 0.14 may return
@@ -1412,6 +1424,8 @@ export class SolidAxleVehicle implements VehicleLike {
     antiRollInput.maxTransferForce = this.geom.spec.massKg * Math.abs(GRAVITY_Y)
       * axleMassShare * ANTI_ROLL.maxStaticLoadTransfer;
     const bar = computeAntiRollLoadTransfer(antiRollInput, scratch.antiRollOut);
+    this.axleDebug[aIdx]!.antiRollLeftForce = bar.leftForce;
+    this.axleDebug[aIdx]!.antiRollRightForce = bar.rightForce;
     sides[0]!.force = clamp(
       sides[0]!.force + bar.leftForce,
       0,
@@ -2343,8 +2357,16 @@ export class SolidAxleVehicle implements VehicleLike {
         dragTorque: { ...this.waterLoad.dragTorque },
       },
       axles: [
-        { ...this.axleDebug[0] },
-        { ...this.axleDebug[1] },
+        {
+          ...this.axleDebug[0],
+          rideVelocity: this.axles[0].rideVelY,
+          rollVelocity: this.axles[0].rollVel,
+        },
+        {
+          ...this.axleDebug[1],
+          rideVelocity: this.axles[1].rideVelY,
+          rollVelocity: this.axles[1].rollVel,
+        },
       ],
       wheels: this.wheelDebug.map((wheel) => ({
         ...wheel,

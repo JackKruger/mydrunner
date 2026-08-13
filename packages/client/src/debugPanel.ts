@@ -407,6 +407,14 @@ function recordTelemetry(telemetry: Physics.VehicleDebugTelemetry, now: number):
     transfer_case: telemetry.driveline.transferCase,
     front_locked: telemetry.driveline.frontLocked,
     rear_locked: telemetry.driveline.rearLocked,
+    front_axle_ride_mps: telemetry.axles[0].rideVelocity,
+    front_axle_roll_rad_s: telemetry.axles[0].rollVelocity,
+    front_bar_left_n: telemetry.axles[0].antiRollLeftForce,
+    front_bar_right_n: telemetry.axles[0].antiRollRightForce,
+    rear_axle_ride_mps: telemetry.axles[1].rideVelocity,
+    rear_axle_roll_rad_s: telemetry.axles[1].rollVelocity,
+    rear_bar_left_n: telemetry.axles[1].antiRollLeftForce,
+    rear_bar_right_n: telemetry.axles[1].antiRollRightForce,
     submerged: telemetry.water.submerged,
     buoyancy_n: telemetry.water.buoyancyForce.y,
     drag_n: Math.hypot(telemetry.water.dragForce.x, telemetry.water.dragForce.y, telemetry.water.dragForce.z),
@@ -424,6 +432,7 @@ function recordTelemetry(telemetry: Physics.VehicleDebugTelemetry, now: number):
     row[`${prefix}_wheel_rpm`] = wheel.angularVelocity * 60 / (Math.PI * 2);
     row[`${prefix}_drive_nm`] = wheel.driveTorque;
     row[`${prefix}_ground_nm`] = wheel.groundTorque;
+    row[`${prefix}_vertical_mps`] = wheel.verticalVelocity;
   });
   recordedRows.push(row);
   activeRunSamples++;

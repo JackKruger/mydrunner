@@ -45,6 +45,7 @@ function telemetry(): Physics.VehicleDebugTelemetry {
     sinkDepth: contact ? 0.04 : 0,
     soilDrag: contact ? 250 : 0,
     slipWork: contact ? 120 : 0,
+    verticalVelocity: 0,
   });
   return {
     position: { x: 0, y: 1, z: 0 },
@@ -86,8 +87,14 @@ function telemetry(): Physics.VehicleDebugTelemetry {
       dragTorque: { x: 0, y: 0, z: 0 },
     },
     axles: [
-      { iterationResidual: 0, tubeContact: false, housingContact: false },
-      { iterationResidual: 0, tubeContact: false, housingContact: false },
+      {
+        iterationResidual: 0, tubeContact: false, housingContact: false,
+        rideVelocity: 0, rollVelocity: 0, antiRollLeftForce: 0, antiRollRightForce: 0,
+      },
+      {
+        iterationResidual: 0, tubeContact: false, housingContact: false,
+        rideVelocity: 0, rollVelocity: 0, antiRollLeftForce: 0, antiRollRightForce: 0,
+      },
     ],
     wheels: [wheel(true), wheel(true), wheel(true), wheel(true)],
   };

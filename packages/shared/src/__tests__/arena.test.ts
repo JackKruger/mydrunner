@@ -329,10 +329,11 @@ describe('arena: cross-slope body roll', () => {
     expect(result.entrySpeed).toBeLessThan(13);
     expect(result.yawDeltaDeg).toBeGreaterThan(40);
     expect(result.yawDeltaDeg).toBeLessThan(80);
-    // The relaxed lateral-force path builds cornering load progressively,
-    // so it produces less of the old one-tick roll spike while remaining
-    // clearly visible and controlled through the manoeuvre.
-    expect(result.maxRollDeg).toBeGreaterThan(6);
+    // The relaxed lateral-force path builds cornering load progressively and
+    // the anti-roll stiffness now opposes articulation instead of amplifying
+    // it. Body roll remains clearly visible without retaining the old tramp
+    // spike as an accidental lower bound.
+    expect(result.maxRollDeg).toBeGreaterThan(3);
     expect(result.maxRollDeg).toBeLessThan(18);
     expect(result.endSpeed).toBeGreaterThan(5);
     expect(result.rolledOver).toBe(false);
