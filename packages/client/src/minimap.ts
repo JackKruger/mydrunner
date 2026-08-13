@@ -4,6 +4,7 @@
 // redraw per frame. Pure DOM/canvas - no Three.js involvement.
 
 import { Physics } from '@mydrunner/shared';
+import { registerFullscreenControl } from './fullscreen.js';
 
 const SIZE_PX = 168;
 
@@ -59,7 +60,7 @@ export class Minimap {
           <section data-menu-panel="map"><div class="full-map-heading"><div><span class="hud-field-label">AREA OVERVIEW</span><h2>FULL STAGE MAP</h2></div><span class="full-map-north">N ↑</span></div><canvas id="full-map" width="640" height="640" aria-label="Full terrain map and player positions"></canvas></section>
           <section data-menu-panel="players" hidden><span class="hud-field-label">SESSION ROSTER</span><h2>PLAYERS</h2><div id="game-menu-players" class="game-menu-players"></div></section>
           <section data-menu-panel="objectives" hidden><span class="hud-field-label">MISSION LOG</span><h2>OBJECTIVES</h2><div class="objectives-empty"><strong>NO ACTIVE OBJECTIVES</strong><p>Contracts and trail objectives will appear here in a future gameplay update.</p></div></section>
-          <section data-menu-panel="settings" hidden><span class="hud-field-label">LOCAL OPTIONS</span><h2>SETTINGS</h2><label class="menu-setting"><span><strong>MINIMAL HUD</strong><small>Hide driving instruments for a clean view.</small></span><input type="checkbox" data-setting="minimal-hud"></label><label class="menu-setting"><span><strong>MUTE ENGINE AUDIO</strong><small>Toggle vehicle audio on this device.</small></span><input type="checkbox" data-setting="mute"></label></section>
+          <section data-menu-panel="settings" hidden><span class="hud-field-label">LOCAL OPTIONS</span><h2>SETTINGS</h2><label class="menu-setting"><span><strong>FULL SCREEN</strong><small>Hide the browser chrome and drive on the whole display.</small></span><input type="checkbox" data-setting="fullscreen"></label><label class="menu-setting"><span><strong>MINIMAL HUD</strong><small>Hide driving instruments for a clean view.</small></span><input type="checkbox" data-setting="minimal-hud"></label><label class="menu-setting"><span><strong>MUTE ENGINE AUDIO</strong><small>Toggle vehicle audio on this device.</small></span><input type="checkbox" data-setting="mute"></label></section>
         </main>
         <footer>Driving continues while this menu is open.</footer>
       </div>`;
@@ -71,6 +72,10 @@ export class Minimap {
     for (const tab of this.overlay.querySelectorAll<HTMLButtonElement>('[data-menu-tab]')) {
       tab.addEventListener('click', () => this.selectTab(tab.dataset.menuTab!));
     }
+    // Registers itself rather than being wired from main: the control
+    // removes itself where the platform has no fullscreen API, and that
+    // decision belongs to one module.
+    registerFullscreenControl(this.overlay.querySelector<HTMLInputElement>('[data-setting="fullscreen"]')!);
     const minimal = this.overlay.querySelector<HTMLInputElement>('[data-setting="minimal-hud"]')!;
     minimal.checked = localStorage.getItem('mydrunner.minimalHud') === 'true';
     document.body.classList.toggle('minimal-hud', minimal.checked);

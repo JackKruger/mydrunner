@@ -10,7 +10,9 @@
 //
 // The aux buttons are split into a trail group that is always on screen and a
 // pit group behind `#aux-more-btn`. That split is a layout decision, but it is
-// bound here because this module already owns every control in the tray.
+// bound here because this module already owns every control in the tray —
+// every control that feeds `PlayerInput`, at least: the pit group's
+// full-screen button is a viewport control and lives in `fullscreen.ts`.
 
 type Edge = 'cam' | 'reset' | 'mute' | 'chat' | 'winch';
 

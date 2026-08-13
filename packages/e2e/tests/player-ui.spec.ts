@@ -253,11 +253,16 @@ test('touch HUD keeps its panels apart across phone viewports', async ({ page })
     await page.setViewportSize(viewport);
     await expectNoPanelOverlaps(page, `${label} collapsed`);
 
+    // The pit half out on its own. Landscape hides the tray whenever the
+    // gate is open, so this is the only state that shows the tray at its
+    // full height — the one that has to finish above the steer pad.
+    await trayToggle.dispatchEvent('pointerdown', { pointerId: 3 });
+    await expect(tray).toHaveClass(/open/);
+    await expectNoPanelOverlaps(page, `${label} tray open`);
+
     // Both toggles open at once is the worst case, and the one the panels
     // have to survive: the tray grows a second row downward while the
     // shifter grows a gate upward.
-    await trayToggle.dispatchEvent('pointerdown', { pointerId: 3 });
-    await expect(tray).toHaveClass(/open/);
     await page.locator('#shifter-collapse').click();
     await expect(shifter).toHaveClass(/expanded/);
     await expectNoPanelOverlaps(page, `${label} expanded`);
@@ -286,6 +291,34 @@ test('touch HUD keeps its panels apart across phone viewports', async ({ page })
   await trayToggle.dispatchEvent('pointerdown', { pointerId: 4 });
   await expect(page.locator('#starter-btn')).toBeVisible();
   await expect(trayToggle).toHaveAttribute('aria-expanded', 'true');
+});
+
+// The browser chrome is the largest single thing covering a phone screen and
+// the only one the game cannot lay out around, so both entry points to the
+// toggle are worth pinning — and pinning that they agree, since each reads
+// its state from `fullscreenchange` rather than from its own clicks.
+test('full screen is offered on the aux tray and in the menu, and they agree', async ({ page }) => {
+  await page.setViewportSize({ width: 851, height: 393 });
+  await page.goto('/?auto=1&name=fullscreen-check&q=low');
+  await waitConnected(page);
+  await page.evaluate(() => document.body.classList.add('touch'));
+
+  const button = page.locator('#fullscreen-btn');
+  await expect(button).toBeHidden();
+  await page.locator('#aux-more-btn').dispatchEvent('pointerdown', { pointerId: 9 });
+  await expect(button).toBeVisible();
+
+  await button.dispatchEvent('pointerdown', { pointerId: 9 });
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+  await expect(button).toHaveAttribute('aria-pressed', 'true');
+
+  await page.locator('#game-menu-button').click();
+  await page.getByRole('button', { name: 'SETTINGS' }).click();
+  const setting = page.locator('[data-setting="fullscreen"]');
+  await expect(setting).toBeChecked();
+  await setting.uncheck();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(false);
+  await expect(button).toHaveAttribute('aria-pressed', 'false');
 });
 
 test('keyboard and touch pressure controls adjust while stopped and explain refusals', async ({ page }) => {

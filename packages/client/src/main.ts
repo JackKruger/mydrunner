@@ -49,6 +49,7 @@ import {
   setManualGear,
 } from './input.js';
 import { getTouchState, initTouchInput, onTouchEdge } from './touchInput.js';
+import { initFullscreen } from './fullscreen.js';
 import { resolveHandshakeMap } from './mapLoad.js';
 import { NetClient } from './net.js';
 import { PlayerUI } from './playerUI.js';
@@ -78,6 +79,7 @@ const playerUI = new PlayerUI(hud, {
 
 initInput();
 initTouchInput();
+initFullscreen();
 const scene = new Scene(app);
 const engineAudio = new EngineAudio();
 const workshop = new WorkshopUI();

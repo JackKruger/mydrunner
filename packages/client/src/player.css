@@ -3,6 +3,9 @@
   --ui-ink: #0c0e0d;
   --ui-panel: rgba(20, 23, 20, 0.94);
   --ui-panel-soft: rgba(20, 23, 20, 0.78);
+  /* Touch panels sit over the only view the player has. One token so
+     "the mobile HUD is too heavy" stays a single edit. */
+  --ui-panel-touch: rgba(17, 20, 17, 0.56);
   --ui-panel-raised: #1b1e1a;
   --ui-border: #52574d;
   --ui-border-soft: rgba(190, 194, 173, 0.25);
@@ -1706,11 +1709,11 @@ body.touch #help {
   left: var(--ui-safe-left);
   width: 168px;
   height: 168px;
-  border: 2px solid rgba(242, 240, 231, 0.4);
+  border: 2px solid rgba(242, 240, 231, 0.3);
   border-radius: 50%;
   background:
     linear-gradient(90deg, transparent 49%, rgba(242, 240, 231, 0.16) 49% 51%, transparent 51%),
-    radial-gradient(circle, rgba(12, 14, 13, 0.42) 0 54%, rgba(12, 14, 13, 0.78) 55%);
+    radial-gradient(circle, rgba(12, 14, 13, 0.24) 0 54%, rgba(12, 14, 13, 0.5) 55%);
   box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.55), 0 8px 24px rgba(0, 0, 0, 0.28);
   pointer-events: auto;
 }
@@ -1773,7 +1776,7 @@ body.touch #help {
   min-height: 44px;
   padding: 0;
   overflow: hidden;
-  border: 2px solid rgba(242, 240, 231, 0.38);
+  border: 2px solid rgba(242, 240, 231, 0.3);
   border-radius: 6px;
   color: var(--ui-text);
   font: 900 11px/1.1 "Arial Narrow", "Roboto Condensed", Impact, sans-serif;
@@ -1786,21 +1789,21 @@ body.touch #help {
 
 .pedal {
   width: 108px;
-  background: rgba(18, 21, 18, 0.78);
+  background: rgba(18, 21, 18, 0.5);
   box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.38), 0 6px 16px rgba(0, 0, 0, 0.28);
 }
 
 #throttle-btn {
   height: 104px;
-  border-color: rgba(121, 195, 106, 0.62);
-  background: rgba(39, 75, 34, 0.6);
+  border-color: rgba(121, 195, 106, 0.52);
+  background: rgba(39, 75, 34, 0.42);
 }
 
 #brake-btn {
   width: 96px;
   height: 82px;
-  border-color: rgba(241, 91, 78, 0.62);
-  background: rgba(85, 30, 25, 0.68);
+  border-color: rgba(241, 91, 78, 0.52);
+  background: rgba(85, 30, 25, 0.46);
 }
 
 .pedal.pressed,
@@ -1825,8 +1828,8 @@ body.touch #help {
   bottom: calc(var(--ui-safe-bottom) + 14px);
   width: 86px;
   height: 72px;
-  border-color: rgba(242, 165, 41, 0.62);
-  background: rgba(20, 23, 20, 0.84);
+  border-color: rgba(242, 165, 41, 0.52);
+  background: rgba(20, 23, 20, 0.5);
 }
 
 #handbrake-btn.pressed,
@@ -1874,13 +1877,23 @@ body.touch #help {
   display: flex;
 }
 
+/* `justify-items: stretch` (against the shared `place-items: center`) plus a
+   zero-min column is what lets a label wrap. A grid item defaults to
+   max-content, so "R LOCK" laid itself out wider than its own button and
+   `overflow: hidden` then cut both ends off it. */
 .aux-btn {
   width: 50px;
   height: 50px;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: stretch;
+  padding: 0 2px;
   border-width: 1px;
-  background: rgba(16, 18, 16, 0.82);
+  background: rgba(16, 18, 16, 0.5);
   color: var(--ui-muted);
   font-size: 9px;
+  letter-spacing: 0.04em;
+  text-align: center;
+  white-space: normal;
 }
 
 .aux-toggle {
@@ -1899,6 +1912,47 @@ body.touch #help {
 }
 
 /* ── Touch HUD ───────────────────────────────────────────────────── */
+
+/* A phone is mostly game. Every panel below is drawn over the ground the
+   player is steering at, so touch layouts run the whole HUD translucent and
+   hard against the edges — the instruments stay legible against sky or mud,
+   and the line ahead stays visible through them. Opacity is applied to the
+   panel *background*, never to the element: fading the element fades the
+   numbers too, and an unreadable speedo is worse than an opaque one. */
+body.touch #hud .instrument-panel,
+body.touch #minimap-wrap,
+body.touch #game-menu-button,
+body.touch #chat-log .line {
+  background: var(--ui-panel-touch);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+/* The corner screw heads are a 3px flourish at desktop scale and noise at
+   phone scale, on panels half the size. */
+body.touch #hud .instrument-panel::before,
+body.touch #hud .instrument-panel::after,
+body.touch #minimap-wrap::before,
+body.touch #minimap-wrap::after {
+  display: none;
+}
+
+/* The wrapper is sized for the minimap canvas, which is only ever shown
+   inside the menu — on touch it is a frame around one button, and the
+   phone layouts stack against its real height. */
+body.touch #minimap-wrap {
+  width: auto;
+  padding: 0;
+}
+
+/* The shortcut is the one thing on this button a phone cannot press. */
+body.touch #game-menu-button {
+  padding: 9px 11px;
+  font-size: 10px;
+}
+
+body.touch #game-menu-button kbd {
+  display: none;
+}
 
 /* On touch the shifter joins the dock column instead of parking beside it:
    there is no room to its right once the pedals are down there, and it is
@@ -2064,31 +2118,34 @@ body.touch #transmission-mode {
     padding: 10px 16px;
   }
 
-  /* Portrait has no room beside the controls, so the dock hangs from the top
-     under the alert instead of sitting between the steer pad and the pedals. */
+  /* Bottom-left, in the band between the steer pad and the horizon. Hung
+     from the top it sat across the middle of the screen — the third of a
+     portrait viewport the player is actually driving through — and grew
+     downward into it as the alert and the status lines appeared. Anchored
+     to the bottom it grows *upward* instead, away from the sightline, and
+     the two thumb corners stay the only furniture below it. */
   .hud-dock {
-    top: 216px;
-    bottom: auto;
-    max-width: calc(100vw - 16px);
+    top: auto;
+    bottom: calc(var(--ui-safe-bottom) + 146px);
+    left: 8px;
+    max-width: calc(100vw - 116px);
     align-items: flex-start;
-    gap: 6px;
-  }
-
-  #hud[data-connection="connected"] .hud-dock,
-  #hud[data-connection="preview"] .hud-dock {
-    top: 186px;
+    gap: 5px;
+    transform: none;
   }
 
   .hud-cluster {
-    grid-template-columns: 78px 50px 1fr;
-    grid-template-rows: 51px 18px;
-    width: min(250px, calc(100vw - 20px));
-    padding: 6px 8px 8px;
+    grid-template-columns: 72px 44px 1fr;
+    grid-template-rows: 46px 16px;
+    width: min(236px, calc(100vw - 130px));
+    padding: 5px 7px 6px;
   }
 
-  .hud-shifter {
-    padding-right: 9px;
-    padding-left: 9px;
+  .hud-shifter,
+  body.touch .hud-shifter {
+    width: min(236px, 100%);
+    padding-right: 8px;
+    padding-left: 8px;
   }
 
   .hud-speed {
@@ -2096,7 +2153,7 @@ body.touch #transmission-mode {
   }
 
   .hud-speed-value {
-    font-size: 37px;
+    font-size: 33px;
   }
 
   .hud-speed-unit {
@@ -2105,11 +2162,18 @@ body.touch #transmission-mode {
   }
 
   .hud-gear {
-    margin: 0 5px;
+    margin: 0 4px;
+  }
+
+  /* The amber box is the label. Spelling GEAR above a single digit cost a
+     row of panel height to say what its own frame already says. */
+  .hud-gear .hud-field-label {
+    display: none;
   }
 
   .hud-gear strong {
-    font-size: 27px;
+    margin-top: 0;
+    font-size: 25px;
   }
 
   .hud-rpm {
@@ -2199,17 +2263,24 @@ body.touch #transmission-mode {
     font-size: 9px;
   }
 
-  /* Above the pedal stack: 82 + 7 + 66 of pedals on a 2px offset, plus a
-     gap. The old 154px offset put the tray's bottom row on top of the
-     throttle. */
+  /* Two columns hard against the right edge, above the pedals (82 + 7 + 66
+     on a 2px offset). Centred over the controls the tray printed itself
+     across the truck and the road under it; a column pinned to the border
+     leaves the middle of the screen to the game and puts the buttons where
+     the right thumb already is. */
   #aux-tray {
     top: auto;
-    bottom: calc(var(--ui-safe-bottom) + 166px);
-    max-width: calc(100vw - 20px);
+    right: 8px;
+    bottom: calc(var(--ui-safe-bottom) + 165px);
+    left: auto;
+    max-width: calc(2 * 46px + 5px);
+    align-items: flex-end;
     gap: 5px;
+    transform: none;
   }
 
   .aux-group {
+    justify-content: flex-end;
     gap: 5px;
   }
 
@@ -2260,26 +2331,34 @@ body.touch #transmission-mode {
   }
 
   /* Half of this width has to clear the steer pad on the left and the
-     handbrake plus pedals on the right — 168px of controls each side. */
+     handbrake plus pedals on the right — 168px of controls each side. The
+     dock is narrower than that budget now; the budget stays because the
+     chat log's width is derived from it. */
   .hud-dock {
-    bottom: 8px;
+    bottom: 6px;
     max-width: calc(100vw - 336px);
-    gap: 6px;
+    gap: 5px;
   }
 
+  /* The truck sits centre-bottom in the chase view, which is exactly where
+     the dock has to live — steer pad one side, pedals the other. It cannot
+     move, so it shrinks: this is ~30% less panel than the layout it
+     replaces, over a translucent background. */
   .hud-cluster {
-    grid-template-columns: minmax(70px, 85px) 50px minmax(92px, 1fr);
-    grid-template-rows: 54px 18px;
-    width: min(273px, 100%);
-    padding: 6px 6px 7px;
+    grid-template-columns: minmax(58px, 70px) 42px minmax(80px, 1fr);
+    grid-template-rows: 42px 16px;
+    width: min(228px, 100%);
+    padding: 4px 6px 5px;
   }
 
-  .hud-shifter {
-    padding: 7px 9px 6px;
+  .hud-shifter,
+  body.touch .hud-shifter {
+    width: min(228px, 100%);
+    padding: 5px 8px 5px;
   }
 
   .hud-speed-value {
-    font-size: 40px;
+    font-size: 31px;
   }
 
   .hud-speed-unit {
@@ -2287,11 +2366,25 @@ body.touch #transmission-mode {
   }
 
   .hud-gear {
-    margin: 0 5px;
+    margin: 0 4px;
+  }
+
+  .hud-gear .hud-field-label {
+    display: none;
   }
 
   .hud-gear strong {
-    font-size: 29px;
+    margin-top: 0;
+    font-size: 23px;
+  }
+
+  .hud-rpm-copy strong {
+    font-size: 12px;
+  }
+
+  .hud-rpm-meter {
+    height: 7px;
+    margin-top: 5px;
   }
 
   .hud-rpm {
@@ -2307,14 +2400,18 @@ body.touch #transmission-mode {
     font-size: 8px;
   }
 
-  /* Below the aux tray with its pit half open (two 44px rows), so opening the
-     tray never lands buttons on the log. */
-  /* Stops at the dock's left edge — the dock is centred and at most
-     `100vw - 336px` wide, so half of that plus the log's own margin is the
-     most it can take without printing chat over the instruments. */
+  /* Top-right, under the menu button. The tray owns the top-left corner
+     now and grows down through it when the pit half opens, and there is no
+     band left below that on a 320px-tall phone: the steer pad starts 184px
+     down. The two panels each take a corner instead of queueing in one.
+     Width stops short of the dock's left edge — the dock is centred and at
+     most `100vw - 336px` wide, so half of that plus a margin is the most
+     the log can take without printing chat over the instruments. */
   #chat-log {
-    top: 118px;
-    width: min(310px, calc(50vw - 140px));
+    top: 52px;
+    right: 8px;
+    left: auto;
+    width: min(300px, calc(50vw - 150px));
     /* Stops above the steer pad, which is 128px tall on an 8px bottom
        margin — on a 320px-tall phone that leaves room for one line, and one
        line is better than a line drawn over the thumb pad. */
@@ -2365,20 +2462,26 @@ body.touch #transmission-mode {
     height: 58px;
   }
 
-  /* Anchored left, not centred: a centred row has to reserve the minimap's
-     150px on *both* sides, which cost it a whole extra row of wrapping on a
-     small phone. The top-left corner is free — the session panel it would
-     otherwise clash with is never shown. */
+  /* A corner block, not a row across the top. Anchored left, not centred: a
+     centred row has to reserve the minimap's 150px on *both* sides, which
+     cost it a whole extra row of wrapping on a small phone. The top-left
+     corner is free — the session panel it would otherwise clash with is
+     never shown. Six columns is the point of the max-width: given the room
+     the tray would lay all eight trail buttons across the horizon the
+     player is driving at, so the wrap is deliberate and the block costs a
+     sixth of the screen rather than a third. */
   #aux-tray {
-    top: 8px;
-    left: 8px;
-    max-width: calc(100vw - 166px);
+    top: 6px;
+    left: 6px;
+    max-width: calc(6 * 42px + 5 * 4px);
     align-items: flex-start;
+    gap: 4px;
     transform: none;
   }
 
   .aux-group {
     justify-content: flex-start;
+    gap: 4px;
   }
 
   /* The gate and the tray both want the band above the dock, and on a 320px
@@ -2389,8 +2492,10 @@ body.touch #transmission-mode {
   }
 
   .aux-btn {
-    width: 44px;
-    height: 44px;
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+    min-height: 42px;
   }
 }
 
@@ -2413,15 +2518,29 @@ body.touch #transmission-mode {
   }
 
   .hud-cluster {
-    grid-template-rows: 46px 18px;
+    grid-template-rows: 38px 16px;
   }
 
   .hud-speed-value {
-    font-size: 34px;
+    font-size: 27px;
   }
 
   .hud-gear strong {
-    font-size: 25px;
+    font-size: 21px;
+  }
+
+  /* Four rows of aux buttons with the pit half open have to finish above
+     the steer pad, and on a 320px-tall phone the pad starts 184px down. */
+  .aux-btn {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+    font-size: 8px;
+  }
+
+  #aux-tray {
+    max-width: calc(6 * 36px + 5 * 4px);
   }
 }
 
@@ -2542,6 +2661,14 @@ body.touch #transmission-mode {
 .hud-pressure.active { color:#f4bf4f; }
 .hud-condition { grid-column:1/-1; min-height:14px; color:#ff9a78; font-size:10px; letter-spacing:.04em; }
 .hud-winch { grid-column:1/-1; min-height:14px; color:#f4bf4f; font-size:10px; letter-spacing:.05em; }
+/* Cluster status lines, phone-sized. Declared here rather than in the touch
+   block above because these four rules sit after the media queries, and a
+   media query cannot outrank a later rule of equal specificity. */
+body.touch .hud-drivetrain,
+body.touch .hud-pressure,
+body.touch .hud-condition,
+body.touch .hud-winch { min-height:12px; font-size:9px; letter-spacing:.03em; }
+body.touch .hud-drivetrain { margin-top:4px; }
 #winch-reticle { display:none; }
 #app > canvas.winch-targeting { cursor: not-allowed; }
 #app > canvas.winch-targeting.winch-target-valid { cursor: crosshair; }
