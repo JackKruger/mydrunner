@@ -5,9 +5,9 @@
 - [x] Protocol 16 owner-authoritative rut reconciliation is implemented.
 - [x] Exact locked-centre and corrected 2.5:1 LSD solvers are implemented.
 - [x] Two-pass beam contact prediction and standard/portal probes are implemented.
-- [x] Typecheck, production build, 409 shared tests, 84 server tests, and 242 client tests pass.
-- [x] The instrumented 1,200-tick desktop benchmark passes at 1.69 ms p95.
-- [ ] Playwright and visual evidence are pending a working Chromium installation.
+- [x] Typecheck, production build, 457 shared tests, 84 server tests, and 269 client tests pass on Node 22.23.0.
+- [x] The instrumented 1,200-tick benchmark remains below the documented ~3.2 ms container baseline; the Stage 5 runs are recorded below.
+- [ ] Chromium build 1194 is installed and browser execution works, but clean-baseline Playwright closure is blocked by the repeatable workshop-entry relay race and two stale screenshot-route assumptions recorded below.
 
 ## Milestone 1: allocation-free physics phases
 
@@ -46,21 +46,30 @@ pre-refactor build.
 
 `axleRegressions.test.ts` runs these against a real Rapier world rather than
 the pure functions, because each is a property of how the contact and
-suspension phases compose. Two notes from writing them:
+suspension phases compose. The climbing follow-up is now complete through its
+four physics stages:
 
-- **The recorded 0.6 m stall was contaminated by a landmark collider.** The
-  synthetic rig starts directly in front of the petrol-station sign pole, and
-  instrumentation identified its first supposed ledge as friction 0.7 with a
-  0 m top. With the station moved outside the course, the existing volume
-  support path advances 20.755 m over the terrain but reaches a minimum
-  chassis-up value of 0.793, below the required 0.8 safety bar. The proposed
-  Stage 1 gate observed 260 steep volume-support ticks but produced zero
-  validated terrain ledge contacts because Rapier 0.14's follow-up
-  heightfield `contactShape` query returned null. The original wheel-radius
-  ceiling explanation is therefore not supported by this rig. Stage 1 remains
-  pending a heightfield-contact design and an isolated acceptance fixture;
-  pressure wrapping, sway-bar disconnect, and belly diagnosis are also
-  explicitly pending.
+- **Steep heightfield contact is implemented and isolated.** Ordinary and
+  moderate heightfield slopes retain volumetric support. Steeper faces enter
+  `LEDGE_CONTACT` only after a reachable upper surface is validated. Terrain
+  reuses the cylinder cast's witness and reconstructs that contact
+  analytically because Rapier 0.14 may return the cast while its follow-up
+  `contactShape` returns null. The station metadata remains outside the
+  synthetic course, and the existing one-sided 0.6 m prepared-Outclaw
+  regression climbs while preserving finite, upright, articulation and
+  no-launch assertions.
+- **Pressure-dependent edge wrapping is implemented.** Low pressure increases
+  ledge edge advance and transmitted tread impulse; high pressure reduces
+  both. Focused tests pin the pressure ordering and the live tuning reader.
+- **Anti-roll behavior is corrected and 4L disconnects only the front bar.**
+  The more-compressed wheel end gains support and the opposite end loses the
+  equal paired amount. In 4L the front share scales to zero while the rear bar
+  is unchanged.
+- **The 0.9 m belly diagnosis is closed without a chassis tune.** At the stable
+  0.45-throttle stall, wheel ledge contacts and front axle tube/housing probes
+  stop the crawler before any chassis manifold occurs. There are zero chassis
+  contact ticks, points or impulses, so there is no belly snag or slider
+  behavior to correct.
 - **Angular momentum is covered in three places, not one.** The internal
   impulse pair is pinned per-axle in `travelStops.test.ts`, the driveline
   carriers in `differential.test.ts` (milestone 4), and the vehicle-level
@@ -74,6 +83,63 @@ portal housing lift each fail at least one test. The portal case is why the
 assertion is a near-zero contact count rather than "fewer than standard" —
 the weaker form passed with the lift deleted, because the smaller portal
 probe alone still beats a standard axle.
+
+### Post-Stage-4 ledge rebaseline
+
+The isolated fixture was swept with the prepared Outclaw, nominal 18 psi,
+4L, and either both axle lockers open or both engaged. Each run had ten
+seconds available. Success means the existing upper-surface clearance
+threshold (`z > -5.5`) was reached while the state remained finite,
+`upY > 0.8`, both axle rolls stayed within their articulation limits, and
+the chassis-height no-launch bound stayed below 3 m. `P` is a safe pass;
+`U` reached the upper surface but failed that safety envelope.
+
+Unlocked coarse matrix:
+
+| Height (m) | 0.25 | 0.45 | 0.70 | 1.00 |
+| ---: | :---: | :---: | :---: | :---: |
+| 0.50 | P | P | P | P |
+| 0.55 | P | P | P | P |
+| 0.60 | P | P | P | P |
+| 0.65 | P | P | P | P |
+| 0.70 | P | P | P | P |
+| 0.75 | P | P | P | P |
+| 0.80 | P | P | P | P |
+| 0.85 | P | P | P | P |
+| 0.90 | P | P | P | P |
+
+Locked coarse matrix:
+
+| Height (m) | 0.25 | 0.45 | 0.70 | 1.00 |
+| ---: | :---: | :---: | :---: | :---: |
+| 0.50 | P | P | P | P |
+| 0.55 | P | P | U | U |
+| 0.60 | P | U | U | U |
+| 0.65 | P | U | U | U |
+| 0.70 | U | U | U | U |
+| 0.75 | U | U | U | U |
+| 0.80 | U | U | U | U |
+| 0.85 | U | U | U | U |
+| 0.90 | U | U | U | U |
+
+The 0.01 m refinements put the highest safe locked results at 0.68, 0.56,
+0.54 and 0.51 m for throttles 0.25, 0.45, 0.70 and 1.00 respectively:
+
+| Locker state | Throttle | Refined samples above last coarse pass | Highest safe height |
+| --- | ---: | --- | ---: |
+| Open | 0.25 | sweep limit reached | at least 0.90 m |
+| Open | 0.45 | sweep limit reached | at least 0.90 m |
+| Open | 0.70 | sweep limit reached | at least 0.90 m |
+| Open | 1.00 | sweep limit reached | at least 0.90 m |
+| Both locked | 0.25 | 0.66 P, 0.67 P, 0.68 P, 0.69 U | 0.68 m |
+| Both locked | 0.45 | 0.56 P, 0.57 U, 0.58 U, 0.59 U | 0.56 m |
+| Both locked | 0.70 | 0.51 P, 0.52 P, 0.53 P, 0.54 P | 0.54 m |
+| Both locked | 1.00 | 0.51 P, 0.52 U, 0.53 U, 0.54 U | 0.51 m |
+
+The unlocked ceiling lies above the requested 0.90 m sweep limit; this run
+does not claim a higher unmeasured number. Locking both axles lowers the safe
+boundary because the upright gate, not upper-surface reach, becomes limiting
+as throttle and face height rise.
 
 ## Milestone 3: sparse rut GPU ownership
 
@@ -105,7 +171,7 @@ probe alone still beats a standard axle.
 
 ## Milestone 5: browser evidence and closure
 
-- [ ] Install the repository-compatible Playwright Chromium build.
+- [x] Install the repository-compatible Playwright Chromium build.
 - [ ] Add a CDP 4x CPU-throttled performance test with a test-only timing
   collector and require warmed fixed-step p95 below 4 ms.
 - [ ] Run driving, multiplayer, pressure, workshop, and rut reconciliation
