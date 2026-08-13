@@ -10,7 +10,7 @@
 // chassis.
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { FIXED_DT, GRAVITY_Y } from '../constants.js';
+import { FIXED_DT, GRAVITY_Y, LEDGE_CONTACT } from '../constants.js';
 import { EMPTY_INPUT, Physics, TUNING, createStockBuild } from '../index.js';
 import type { VehicleBuild } from '../types.js';
 
@@ -377,6 +377,218 @@ describe('solid axle: repeated steps', () => {
     expect(run.worstUp).toBeGreaterThan(0.8);
     expect(run.highest).toBeLessThan(3);
     expect(run.finite).toBe(true);
+  }, 20_000);
+
+  it('stalls at the wheels and front axle before the chassis belly reaches a 0.9 m ledge', () => {
+    // Stage 4 is diagnosis-first: this is deliberately taller than the 0.6 m
+    // acceptance ledge above, so the same real prepared Outclaw reaches a
+    // stable stall instead of driving away before its belly can be observed.
+    // Chassis manifolds are sampled through the same Rapier path postStep uses
+    // for collision damage; no production telemetry or contact behavior is
+    // added for this diagnostic.
+    const world = isolatedLedge(0.9);
+    const vehicle = spawn(world, CRAWLER, { x: 0, y: 2.4, z: -12 });
+    settle(world, 120);
+    const startZ = vehicle.getState().position.z;
+    const drivenTicks = 10 * 60;
+    const finalWindowTicks = 60;
+    let finalWindowStartZ = startZ;
+    let chassisManifoldTicks = 0;
+    let chassisContactPoints = 0;
+    let chassisImpulse = 0;
+    let maxChassisImpulse = 0;
+    type ChassisContactSample = {
+      tick: number; localX: number; localY: number; localZ: number; impulse: number;
+    };
+    let firstChassisContact: ChassisContactSample | null = null;
+    let lastChassisContact: ChassisContactSample | null = null;
+    const wheelSupportTicks = [0, 0, 0, 0];
+    const wheelLedgeTicks = [0, 0, 0, 0];
+    const axleTubeTicks = [0, 0];
+    const axleHousingTicks = [0, 0];
+    const minAxleRide = [Infinity, Infinity];
+    const maxAxleRide = [-Infinity, -Infinity];
+    const maxAbsAxleRoll = [0, 0];
+    const maxAbsAxleRideVelocity = [0, 0];
+    const maxAbsAxleRollVelocity = [0, 0];
+    let finite = true;
+    let minUpY = 1;
+    let maxChassisSpeed = 0;
+    let maxChassisSpin = 0;
+    let maxSuspensionForce = 0;
+    let maxLedgeNormalForce = 0;
+    let maxLedgeLongForce = 0;
+    let maxTireUtilization = 0;
+    const internals = vehicle as unknown as {
+      wheels: Array<{
+        ledgeContact: boolean;
+        ledgeNormalForce: number;
+        ledgeLongForce: number;
+      }>;
+    };
+
+    for (let tick = 0; tick < drivenTicks; tick++) {
+      vehicle.setInput({
+        ...EMPTY_INPUT, seq: tick + 2, throttle: 0.45, transferCase: '4l',
+      });
+      world.step();
+      const state = vehicle.getState();
+      const debug = vehicle.debugTelemetry();
+      if (tick === drivenTicks - finalWindowTicks - 1) finalWindowStartZ = state.position.z;
+
+      finite = finite && [
+        state.position.x, state.position.y, state.position.z,
+        state.rotation.x, state.rotation.y, state.rotation.z, state.rotation.w,
+        state.linVel.x, state.linVel.y, state.linVel.z,
+        state.angVel.x, state.angVel.y, state.angVel.z,
+      ].every(Number.isFinite);
+      minUpY = Math.min(minUpY, 1 - 2 * (state.rotation.x ** 2 + state.rotation.z ** 2));
+      maxChassisSpeed = Math.max(
+        maxChassisSpeed,
+        Math.hypot(state.linVel.x, state.linVel.y, state.linVel.z),
+      );
+      maxChassisSpin = Math.max(
+        maxChassisSpin,
+        Math.hypot(state.angVel.x, state.angVel.y, state.angVel.z),
+      );
+
+      for (let axleIndex = 0; axleIndex < 2; axleIndex++) {
+        const axle = state.axles![axleIndex]!;
+        const axleDebug = debug.axles[axleIndex]!;
+        minAxleRide[axleIndex] = Math.min(minAxleRide[axleIndex]!, axle.rideY);
+        maxAxleRide[axleIndex] = Math.max(maxAxleRide[axleIndex]!, axle.rideY);
+        maxAbsAxleRoll[axleIndex] = Math.max(
+          maxAbsAxleRoll[axleIndex]!, Math.abs(axle.rollAngle),
+        );
+        maxAbsAxleRideVelocity[axleIndex] = Math.max(
+          maxAbsAxleRideVelocity[axleIndex]!, Math.abs(axleDebug.rideVelocity),
+        );
+        maxAbsAxleRollVelocity[axleIndex] = Math.max(
+          maxAbsAxleRollVelocity[axleIndex]!, Math.abs(axleDebug.rollVelocity),
+        );
+        if (axleDebug.tubeContact) axleTubeTicks[axleIndex]!++;
+        if (axleDebug.housingContact) axleHousingTicks[axleIndex]!++;
+      }
+
+      for (let wheelIndex = 0; wheelIndex < 4; wheelIndex++) {
+        const wheel = internals.wheels[wheelIndex]!;
+        const wheelDebug = debug.wheels[wheelIndex]!;
+        if (state.wheels[wheelIndex]!.contact) wheelSupportTicks[wheelIndex]!++;
+        if (wheel.ledgeContact) wheelLedgeTicks[wheelIndex]!++;
+        maxSuspensionForce = Math.max(maxSuspensionForce, Math.abs(wheelDebug.suspensionForce));
+        maxLedgeNormalForce = Math.max(maxLedgeNormalForce, Math.abs(wheel.ledgeNormalForce));
+        maxLedgeLongForce = Math.max(maxLedgeLongForce, Math.abs(wheel.ledgeLongForce));
+        maxTireUtilization = Math.max(maxTireUtilization, wheelDebug.utilization);
+      }
+
+      let chassisContactThisTick = false;
+      world.world.contactPairsWith(vehicle.chassis, (other) => {
+        world.world.contactPair(vehicle.chassis, other, (manifold, flipped) => {
+          for (let contactIndex = 0; contactIndex < manifold.numContacts(); contactIndex++) {
+            const point = flipped
+              ? manifold.localContactPoint2(contactIndex)
+              : manifold.localContactPoint1(contactIndex);
+            if (!point) continue;
+            const impulse = Math.abs(manifold.contactImpulse(contactIndex));
+            const contact = {
+              tick,
+              localX: point.x,
+              localY: point.y,
+              localZ: point.z,
+              impulse,
+            };
+            chassisContactThisTick = true;
+            chassisContactPoints++;
+            chassisImpulse += impulse;
+            maxChassisImpulse = Math.max(maxChassisImpulse, impulse);
+            firstChassisContact ??= contact;
+            lastChassisContact = contact;
+          }
+        });
+      });
+      if (chassisContactThisTick) chassisManifoldTicks++;
+    }
+
+    const final = vehicle.getState();
+    const summary = {
+      progress: final.position.z - startZ,
+      finalWindowProgress: final.position.z - finalWindowStartZ,
+      chassisManifoldTicks,
+      chassisContactPoints,
+      chassisImpulse,
+      maxChassisImpulse,
+      firstChassisContact,
+      lastChassisContact,
+      wheelSupportTicks,
+      wheelLedgeTicks,
+      axleTubeTicks,
+      axleHousingTicks,
+      minAxleRide,
+      maxAxleRide,
+      maxAbsAxleRoll,
+      maxAbsAxleRideVelocity,
+      maxAbsAxleRollVelocity,
+      finite,
+      minUpY,
+      maxChassisSpeed,
+      maxChassisSpin,
+      maxSuspensionForce,
+      maxLedgeNormalForce,
+      maxLedgeLongForce,
+      maxTireUtilization,
+      finalPose: { position: final.position, rotation: final.rotation },
+      finalVelocity: { linear: final.linVel, angular: final.angVel },
+    };
+    const diagnostics = JSON.stringify(summary);
+
+    // No chassis manifold means there is no belly contact to slide, pivot, or
+    // snag. All chassis-contact location and impulse diagnostics remain empty.
+    expect(summary.chassisManifoldTicks, diagnostics).toBe(0);
+    expect(summary.chassisContactPoints, diagnostics).toBe(0);
+    expect(summary.chassisImpulse, diagnostics).toBe(0);
+    expect(summary.maxChassisImpulse, diagnostics).toBe(0);
+    expect(summary.firstChassisContact, diagnostics).toBeNull();
+    expect(summary.lastChassisContact, diagnostics).toBeNull();
+
+    // It reaches the face, then makes effectively no progress in the final
+    // second. Continuous wheel support plus sustained front-only ledge and
+    // axle-probe contacts establish what is holding it before the belly.
+    expect(summary.progress, diagnostics).toBeGreaterThan(2.5);
+    expect(summary.progress, diagnostics).toBeLessThan(4);
+    expect(summary.finalWindowProgress, diagnostics).toBeLessThan(0.05);
+    expect(summary.wheelSupportTicks, diagnostics).toEqual([600, 600, 600, 600]);
+    expect(summary.wheelLedgeTicks[0], diagnostics).toBeGreaterThan(300);
+    expect(summary.wheelLedgeTicks[1], diagnostics).toBeGreaterThan(300);
+    expect(summary.wheelLedgeTicks[2], diagnostics).toBe(0);
+    expect(summary.wheelLedgeTicks[3], diagnostics).toBe(0);
+    expect(summary.axleTubeTicks[0], diagnostics).toBeGreaterThan(300);
+    expect(summary.axleHousingTicks[0], diagnostics).toBeGreaterThan(300);
+    expect(summary.axleTubeTicks[1], diagnostics).toBe(0);
+    expect(summary.axleHousingTicks[1], diagnostics).toBe(0);
+
+    expect(summary.finite, diagnostics).toBe(true);
+    expect(summary.minUpY, diagnostics).toBeGreaterThan(0.9);
+    expect(summary.maxChassisSpeed, diagnostics).toBeLessThan(3);
+    expect(summary.maxChassisSpin, diagnostics).toBeLessThan(1);
+    for (let axleIndex = 0; axleIndex < 2; axleIndex++) {
+      const geom = axleIndex === 0 ? vehicle.geom.front : vehicle.geom.rear;
+      expect(summary.minAxleRide[axleIndex], diagnostics).toBeGreaterThanOrEqual(-geom.droopMax);
+      expect(summary.maxAxleRide[axleIndex], diagnostics)
+        .toBeLessThanOrEqual(geom.suspensionRestLength * 0.85 + 1e-6);
+      expect(summary.maxAbsAxleRoll[axleIndex], diagnostics)
+        .toBeLessThanOrEqual(geom.maxArticulation + 1e-6);
+      expect(summary.maxAbsAxleRideVelocity[axleIndex], diagnostics).toBeLessThan(1.7);
+      expect(summary.maxAbsAxleRollVelocity[axleIndex], diagnostics).toBeLessThan(4.5);
+    }
+    expect(summary.maxSuspensionForce, diagnostics).toBeLessThanOrEqual(LEDGE_CONTACT.maxForce);
+    expect(summary.maxLedgeNormalForce, diagnostics).toBeLessThanOrEqual(LEDGE_CONTACT.maxForce);
+    expect(summary.maxLedgeLongForce, diagnostics).toBeLessThanOrEqual(LEDGE_CONTACT.maxDriveForce);
+    expect(summary.maxTireUtilization, diagnostics).toBeLessThanOrEqual(1 + 1e-9);
+    expect(Math.hypot(final.linVel.x, final.linVel.y, final.linVel.z), diagnostics)
+      .toBeLessThan(0.05);
+    expect(Math.hypot(final.angVel.x, final.angVel.y, final.angVel.z), diagnostics)
+      .toBeLessThan(0.05);
+    world.dispose();
   }, 20_000);
 
   it('rewards airing down the prepared Outclaw while it wraps an isolated ledge', () => {

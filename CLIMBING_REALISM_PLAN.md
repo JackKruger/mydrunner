@@ -1,7 +1,7 @@
-> Status: Stages 0–3 are complete on the authoritative Node 22 runtime. The
+> Status: Stages 0–4 are complete on the authoritative Node 22 runtime. The
 > interstage flat-road turning diagnosis below corrected a global anti-roll
-> force-direction bug before the separate Stage 3 disconnect. Stages 4–5
-> remain pending.
+> force-direction bug before the separate Stage 3 disconnect. Stage 5 remains
+> pending.
 
 # Make tall obstacles climbable, the way a real crawler climbs them
 
@@ -11,7 +11,7 @@
 - [x] Stage 1 — redesign heightfield ledge contact and isolate the 0.6 m rig.
 - [x] Stage 2 — pressure-dependent tread wrapping.
 - [x] Stage 3 — low-range sway-bar disconnect.
-- [ ] Stage 4 — belly and slider diagnosis.
+- [x] Stage 4 — belly and slider diagnosis.
 - [ ] Stage 5 — final rebaseline and documentation after the physics stages.
 
 ## Context
@@ -188,16 +188,23 @@ and load at the drooped front end without unstable chassis or axle motion.
 
 ## Stage 4 — Belly and slider contact (measure, then decide)
 
-Unlike the others this has no confirmed defect yet, so it is diagnosis first:
+Complete. A deterministic real-vehicle diagnostic reuses the isolated
+one-sided heightfield and prepared Outclaw from the climbing regressions, but
+raises the face to 0.9 m so the truck reaches a sustained stall. At 0.45
+throttle in 4L it advanced 3.0648 m over ten seconds, then only 0.0106 m in
+the final second. All four wheels retained support for all 600 driven ticks;
+the two front wheels retained ledge contact for 402 and 436 ticks, while the
+front axle tube/housing probes reported contact for 399 and 403 ticks.
 
-- Instrument a stalled climb and record whether `chassis` contact manifolds
-  fire at all (the machinery is already in `postStep`, which walks
-  `contactPairsWith` for damage).
-- If the belly never contacts, the obstacle stops the wheels before the
-  chassis reaches it and there is nothing to fix — say so and stop.
-- If it contacts and snags, the likely lever is collider shape rather than
-  friction, which at 0.1 is already slider-like. Design only after the
-  measurement; do not pre-commit to a change here.
+The existing `postStep`/damage manifold path reported zero chassis manifold
+ticks, zero chassis contact points and zero accumulated or peak chassis
+impulse. Two repeated measurement runs produced identical results. The truck
+remained finite and upright (`min upY = 0.9387`), stayed within articulation
+and the existing 45 kN suspension/ledge and 8 kN ledge-drive caps, and settled
+to less than 0.05 m/s linear and 0.05 rad/s angular speed. The running gear
+therefore stops at the face before the belly reaches it; the chassis is not
+snagging and there is no slider behavior to correct. Stage 4 adds only the
+focused regression and makes no production-physics or golden-fixture change.
 
 ## Stage 5 — Re-baseline and document
 
