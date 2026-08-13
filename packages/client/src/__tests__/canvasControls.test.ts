@@ -1,3 +1,4 @@
+import { Vector2 } from 'three';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { clientToNdc, wireCanvasPointerControls } from '../canvasControls.js';
 
@@ -24,7 +25,13 @@ describe('canvas pointer controls', () => {
   });
 
   it('routes selection coordinates and primary clicks without dragging the camera', () => {
-    const winch = { isTargeting: () => true, pointerMove: vi.fn(() => true), primaryClick: vi.fn(() => true) };
+    // The mocks carry their Vector2 parameter so `mock.calls` stays a typed
+    // tuple - a bare vi.fn() types calls as [] and indexing one is an error.
+    const winch = {
+      isTargeting: () => true,
+      pointerMove: vi.fn((_ndc: Vector2) => true),
+      primaryClick: vi.fn((_ndc: Vector2) => true),
+    };
     const camera = { begin: vi.fn(), drag: vi.fn(), end: vi.fn() };
     wireCanvasPointerControls(canvas, winch, camera);
     canvas.dispatchEvent(pointer('pointerdown', { clientX: 300, clientY: 150, button: 0 }));
