@@ -44,6 +44,8 @@ export interface WheelKinematic {
   ledgeHandoffGrace: number;
   /** Whether the tyre-volume query found a steep face this tick. */
   ledgeContact: boolean;
+  /** Number of retained independent steep constraints (0..2). */
+  ledgeContactCount: number;
   /** Internal diagnostics and integration-test observability. */
   ledgeNormalForce: number;
   ledgeLongForce: number;
@@ -102,6 +104,7 @@ export function createWheelKinematic(): WheelKinematic {
     ledgeHandoff: false,
     ledgeHandoffGrace: 0,
     ledgeContact: false,
+    ledgeContactCount: 0,
     ledgeNormalForce: 0,
     ledgeLongForce: 0,
     previousCenter: { x: 0, y: 0, z: 0 },
@@ -142,6 +145,7 @@ export function resetWheelKinematic(w: WheelKinematic): void {
   w.ledgeHandoff = false;
   w.ledgeHandoffGrace = 0;
   w.ledgeContact = false;
+  w.ledgeContactCount = 0;
   w.ledgeNormalForce = 0;
   w.ledgeLongForce = 0;
   w.hasPreviousCenter = false;

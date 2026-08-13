@@ -152,7 +152,13 @@ export function lateralGripFromSlipAngle(
  *  (0.10) does. The excess is normalised over [peakSlip, 1] rather than in
  *  units of peakSlip: the latter drives road to the floor by ~0.3 slip,
  *  which is too abrupt to catch and drive. The floor keeps a locked tyre
- *  recoverable rather than zero-grip, matching slipAngleFloor's intent. */
+ *  recoverable rather than zero-grip, matching slipAngleFloor's intent.
+ *
+ *  The caller combines this with lateralGripFromSlipAngle by min(), not by
+ *  product — see the note at that call site in solidAxleVehicle.ts. Both
+ *  curves bottom out at a gameplay floor rather than a true sliding value,
+ *  so multiplying them compounds two concessions into a 5% floor nobody
+ *  chose. */
 /** @hotloop */
 export function lateralGripFromLongitudinalSlip(
   slip: number,
