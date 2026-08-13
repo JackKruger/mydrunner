@@ -396,8 +396,11 @@ export const LEDGE_CONTACT = {
   // damper can begin resisting a face before the visual tyre penetrates it.
   prediction: 0.015,
   // Normal velocity is resolved inelastically (no spring energy to rebound
-  // from). Each of a usual two-wheel axle contact owns half the sprung mass.
-  normalMassFraction: 0.5,
+  // from). A wheel owns one quarter of the sprung mass. This is deliberately
+  // a vehicle-wide budget: giving every wheel half the mass lets a row of
+  // obstacles manufacture twice the chassis momentum when all four tyres
+  // touch steep faces during the same tick.
+  normalMassFraction: 0.25,
   normalCorrectionRate: 5,
   maxNormalCorrectionSpeed: 0.15,
   maxForce: 45_000,
@@ -407,14 +410,21 @@ export const LEDGE_CONTACT = {
   maxDriveForce: 8_000,
   // A deformable off-road tread can hook a sharp corner more strongly than
   // rigid face friction alone. This multiplier is ledge-only.
-  tractionMultiplier: 1.5,
+  // The shared normal-impulse budget below must not make the tread less
+  // capable: retain (and slightly improve) the available edge traction while
+  // the force direction does more useful forward work.
+  tractionMultiplier: 3.2,
   // A downward probe just beyond the face accepts a top transition only
   // when an actual upper surface is within this hub-rise. Tall walls do not
   // become driveable simply because the tyre touches them.
   maxClimbHeight: 0.9,
   // Aim slightly beyond the top edge so the drive reaction has a forward
   // component and carries the hub onto the upper support surface.
-  edgeAdvance: 0.08,
+  // Reaching farther onto the real top makes the reaction more forward and
+  // less vertical. That both helps a crawling tyre roll across an edge and
+  // avoids the unrealistic upward kick produced by aiming almost straight at
+  // the hub from the lower face.
+  edgeAdvance: 0.14,
   // Keep the last validated edge support briefly while the cylinder normal
   // rotates through pure-up and the chassis-axis ray has not yet moved over
   // the top. This bridges query representations, not arbitrary air time.
