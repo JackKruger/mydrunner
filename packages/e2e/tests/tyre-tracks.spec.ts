@@ -1,6 +1,4 @@
 import { expect, test } from '@playwright/test';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 
 test('live driving leaves one bounded visual tyre-track mesh', async ({ page }) => {
   test.setTimeout(120_000);
@@ -12,7 +10,7 @@ test('live driving leaves one bounded visual tyre-track mesh', async ({ page }) 
   // Find a broad, fairly flat grass run from the live map rather than baking
   // a coordinate into the test. Authored map changes can then move the grass
   // without turning this visual integration check into a spawn-location test.
-  const target = await page.evaluate(() => {
+  await page.evaluate(() => {
     const w = window as unknown as {
       __scene: any;
       __localSimulation: {
@@ -73,18 +71,12 @@ test('live driving leaves one bounded visual tyre-track mesh', async ({ page }) 
   expect(diagnostics.meshCount).toBe(1);
   expect(diagnostics.visible).toBe(true);
   expect(diagnostics.meshName).toBe('tyre-tracks');
-
-  // Keep one visual milestone alongside the existing tracked screenshots.
-  await page.evaluate(({ x, z }) => {
-    const scene = (window as unknown as { __scene: any }).__scene;
-    const p = scene.localPosition();
-    scene.setReviewView(
-      { x: p.x - 7, y: p.y + 7, z: p.z - 11 },
-      { x, y: p.y - 1, z: p.z - 2 },
-    );
-  }, target);
-  await page.waitForTimeout(250);
-  const outDir = join(process.cwd(), 'screenshots');
-  mkdirSync(outDir, { recursive: true });
-  await page.screenshot({ path: join(outDir, '35-tyre-tracks-grass.png') });
 });
+
+// This test used to end by writing screenshots/35-tyre-tracks-grass.png.
+// It is the only non-@screenshot spec that wrote into the tracked screenshot
+// directory, so every `pnpm test:e2e` left the repository dirty with an image
+// nobody had asked for — and the truck's path varies enough run to run that
+// the bytes changed each time. The visual changelog is regenerated
+// deliberately (`playwright test tests/screenshot.spec.ts`), not as a side
+// effect of an assertion run. The capture belongs there if it is wanted back.
