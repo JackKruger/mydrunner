@@ -7,6 +7,7 @@ import {
   COLLISION_GROUP_WHEEL_RAY,
 } from '../physics/collisionGroups.js';
 import { SolidAxleVehicle } from '../physics/solidAxleVehicle.js';
+import { pressureEdgeWrapScale } from '../physics/tireCarcass.js';
 import {
   Surface,
   mountainFor,
@@ -125,7 +126,7 @@ describe('wheel ledge contact geometry', () => {
       y: hitCenter.y - (normal.y - wheelAxle.y * axial) * radialScale - wheelAxle.y * capScale,
       z: hitCenter.z - (normal.z - wheelAxle.z * axial) * radialScale - wheelAxle.z * capScale,
     };
-    const hit = findHeightfieldLedgeContact(
+    const hitAtPressure = (pressurePsi: number) => findHeightfieldLedgeContact(
       terrain,
       wheelCenter,
       facePoint,
@@ -137,17 +138,24 @@ describe('wheel ledge contact geometry', () => {
       0.015,
       0.65,
       0.9,
-      0.08,
+      0.08 * pressureEdgeWrapScale(pressurePsi, 18),
       1,
     );
+    const low = hitAtPressure(6);
+    const hit = hitAtPressure(18);
+    const high = hitAtPressure(28);
 
+    expect(low).not.toBeNull();
     expect(hit).not.toBeNull();
+    expect(high).not.toBeNull();
     expect(hit!.normal.y).toBeLessThan(0.65);
     expect(hit!.climbTopY).toBeCloseTo(0.6, 6);
     expect(hit!.point.y).toBeCloseTo(0.6, 4);
     expect(hit!.climbDirection).not.toBeNull();
     expect(hit!.climbDirection!.y).toBeGreaterThan(0.5);
     expect(hit!.climbDirection!.z).toBeGreaterThan(0.5);
+    expect(low!.climbDirection!.z).toBeGreaterThan(hit!.climbDirection!.z);
+    expect(hit!.climbDirection!.z).toBeGreaterThan(high!.climbDirection!.z);
     world.free();
   });
 
@@ -155,7 +163,7 @@ describe('wheel ledge contact geometry', () => {
     const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     addStep(world, 0.35, 0.35);
 
-    const hit = findSteepWheelContact(
+    const hitAtPressure = (pressurePsi: number) => findSteepWheelContact(
       world,
       new RAPIER.Cylinder(0.21, 0.46),
       { x: -0.92, y: 0.46, z: 1.50 },
@@ -166,16 +174,23 @@ describe('wheel ledge contact geometry', () => {
       0.015,
       0.65,
       0.9,
-      0.08,
+      0.08 * pressureEdgeWrapScale(pressurePsi, 18),
       { x: 0, y: 0, z: 1 },
       COLLISION_GROUP_WHEEL_RAY,
     );
+    const low = hitAtPressure(6);
+    const hit = hitAtPressure(18);
+    const high = hitAtPressure(28);
 
+    expect(low).not.toBeNull();
     expect(hit).not.toBeNull();
+    expect(high).not.toBeNull();
     expect(hit!.normal.z).toBeLessThan(-0.95);
     expect(hit!.climbTopY).toBeCloseTo(0.7, 3);
     expect(hit!.climbDirection!.y).toBeGreaterThan(0.7);
     expect(hit!.climbDirection!.z).toBeGreaterThan(0.4);
+    expect(low!.climbDirection!.z).toBeGreaterThan(hit!.climbDirection!.z);
+    expect(hit!.climbDirection!.z).toBeGreaterThan(high!.climbDirection!.z);
     world.free();
   });
 

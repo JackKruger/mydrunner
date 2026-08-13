@@ -230,6 +230,11 @@ export function pressureRollingScale(pressurePsi: number, nominalPsi: number): n
   return (Math.max(1, nominalPsi) / Math.max(1, pressurePsi)) ** 0.6;
 }
 
+export function pressureEdgeWrapScale(pressurePsi: number, nominalPsi: number): number {
+  const inverseRatio = Math.max(1, nominalPsi) / Math.max(1, pressurePsi);
+  return clamp(Math.sqrt(inverseRatio), 0.75, 1.75);
+}
+
 export function pressureLateralScale(pressurePsi: number, nominalPsi: number): number {
   return clamp(Math.sqrt(Math.max(1, pressurePsi) / Math.max(1, nominalPsi)), 0.75, 1.15);
 }

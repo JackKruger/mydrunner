@@ -44,6 +44,7 @@ const SLIDERS: Slider[] = [
   { label: 'frontGripMult', description: 'Global multiplier on the front axle friction budget after tire and surface grip are resolved.', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.frontGripMult, set: (v) => (TUNING.frontGripMult = v) },
   { label: 'rearGripMult', description: 'Global multiplier on the rear axle friction budget. Lower values make power oversteer easier.', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.rearGripMult, set: (v) => (TUNING.rearGripMult = v) },
   { label: 'longGrip×', description: 'Multiplier on the base acceleration and braking grip available at every tire. Surface and axle grip still apply afterward.', min: 0.5, max: 1.5, step: 0.02, get: () => TUNING.tireLongGripMult, set: (v) => (TUNING.tireLongGripMult = v) },
+  { label: 'edgeWrap×', description: 'Multiplier on pressure-dependent tread reach and corner hooking at validated ledges only.', min: 0.5, max: 1.5, step: 0.02, get: () => TUNING.tireEdgeWrapMult, set: (v) => (TUNING.tireEdgeWrapMult = v) },
   { label: 'carcassCompliance×', description: 'Tyre softness relative to the fitted carcass preset. Higher values produce more physical deflection under the same load.', min: 0.4, max: 2.5, step: 0.05, get: () => TUNING.tireCarcassComplianceMult, set: (v) => (TUNING.tireCarcassComplianceMult = v) },
   { label: 'radialDamping×', description: 'Carcass contribution to the series suspension damping. Raise it to settle tyre squash faster; excessive values can feel harsh.', min: 0.3, max: 2, step: 0.05, get: () => TUNING.tireRadialDampingMult, set: (v) => (TUNING.tireRadialDampingMult = v) },
   { label: 'sidewallCorrection×', description: 'Rate and speed of the compliant sidewall collision constraint. Higher values push out of ledges and side-rest contacts more firmly.', min: 0.25, max: 2.5, step: 0.05, get: () => TUNING.tireSidewallCorrectionMult, set: (v) => (TUNING.tireSidewallCorrectionMult = v) },
@@ -327,6 +328,7 @@ function tuningRecord(): Record<string, RecordedValue> {
     tune_front_grip: TUNING.frontGripMult,
     tune_rear_grip: TUNING.rearGripMult,
     tune_long_grip_mult: TUNING.tireLongGripMult,
+    tune_edge_wrap_mult: TUNING.tireEdgeWrapMult,
     tune_carcass_compliance: TUNING.tireCarcassComplianceMult,
     tune_radial_damping: TUNING.tireRadialDampingMult,
     tune_sidewall_correction: TUNING.tireSidewallCorrectionMult,
@@ -810,6 +812,7 @@ export const SURFACE_FRICTION = {
 //   },
 export const TIRE_LONG_FRICTION = ${f(TIRE_LONG_FRICTION * t.tireLongGripMult)}; // x${f(t.tireLongGripMult, 2)}
 // TIRE_CARCASS live multipliers:
+//   pressure edge wrap            x${f(t.tireEdgeWrapMult, 2)}
 //   static deflection / compliance x${f(t.tireCarcassComplianceMult, 2)}
 //   radial damping               x${f(t.tireRadialDampingMult, 2)}
 //   sidewall correction          x${f(t.tireSidewallCorrectionMult, 2)}

@@ -11,7 +11,7 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { FIXED_DT, GRAVITY_Y } from '../constants.js';
-import { EMPTY_INPUT, Physics, createStockBuild } from '../index.js';
+import { EMPTY_INPUT, Physics, TUNING, createStockBuild } from '../index.js';
 import type { VehicleBuild } from '../types.js';
 
 beforeAll(async () => { await Physics.initRapier(); });
@@ -251,14 +251,29 @@ describe('solid axle: repeated steps', () => {
     ), 256, 120);
   }
 
-  function traverse(height: number, isolated = false): {
+  function traverse(
+    height: number,
+    isolated = false,
+    pressureMode?: 'low' | 'nominal' | 'high',
+    edgeWrapMult = 1,
+  ): {
     progress: number; worstUp: number; highest: number;
     minRoll: number; maxRoll: number; maxArticulation: number;
-    ledgeTicks: number; finite: boolean;
+    ledgeTicks: number; finite: boolean; pressurePsi: number; clearTick: number;
+    ledgeAdvance: number; ledgeLongImpulse: number;
   } {
+    const savedEdgeWrapMult = TUNING.tireEdgeWrapMult;
+    TUNING.tireEdgeWrapMult = edgeWrapMult;
     const world = isolated ? isolatedLedge(height) : alternatingSteps(height);
     const vehicle = spawn(world, CRAWLER, { x: 0, y: 2.4, z: -12 });
     settle(world, 120);
+    if (pressureMode) {
+      const pressureAdjust = pressureMode === 'low' ? -1 : pressureMode === 'high' ? 1 : 0;
+      vehicle.setInput({ ...EMPTY_INPUT, seq: 2, pressureAdjust });
+      settle(world, 10 * 60);
+      vehicle.setInput({ ...EMPTY_INPUT, seq: 3 });
+      world.step();
+    }
     const startZ = vehicle.getState().position.z;
     let worstUp = 1;
     let highest = -Infinity;
@@ -266,8 +281,12 @@ describe('solid axle: repeated steps', () => {
     let maxRoll = 0;
     let ledgeTicks = 0;
     let finite = true;
+    let clearTick = 10 * 60;
+    let firstLedgeZ: number | null = null;
+    let lastLedgeZ: number | null = null;
+    let ledgeLongImpulse = 0;
     const internals = vehicle as unknown as {
-      wheels: Array<{ ledgeContact: boolean }>;
+      wheels: Array<{ ledgeContact: boolean; ledgeLongForce: number }>;
     };
     for (let tick = 0; tick < 10 * 60; tick++) {
       vehicle.setInput({
@@ -275,6 +294,7 @@ describe('solid axle: repeated steps', () => {
       });
       world.step();
       const state = vehicle.getState();
+      if (clearTick === 10 * 60 && state.position.z > -5.5) clearTick = tick;
       finite = finite && [
         state.position.x, state.position.y, state.position.z,
         state.rotation.x, state.rotation.y, state.rotation.z, state.rotation.w,
@@ -298,6 +318,9 @@ describe('solid axle: repeated steps', () => {
         const wheel = internals.wheels[wheelIndex]!;
         if (!wheel.ledgeContact) continue;
         ledgeTicks++;
+        firstLedgeZ ??= state.position.z;
+        lastLedgeZ = state.position.z;
+        ledgeLongImpulse += Math.abs(wheel.ledgeLongForce) * FIXED_DT;
       }
     }
     const result = {
@@ -309,8 +332,13 @@ describe('solid axle: repeated steps', () => {
       maxArticulation: vehicle.geom.front.maxArticulation,
       ledgeTicks,
       finite,
+      pressurePsi: vehicle.pressureStatus().currentPsi,
+      clearTick,
+      ledgeAdvance: firstLedgeZ === null || lastLedgeZ === null ? 0 : lastLedgeZ - firstLedgeZ,
+      ledgeLongImpulse,
     };
     world.dispose();
+    TUNING.tireEdgeWrapMult = savedEdgeWrapMult;
     return result;
   }
 
@@ -350,6 +378,35 @@ describe('solid axle: repeated steps', () => {
     expect(run.highest).toBeLessThan(3);
     expect(run.finite).toBe(true);
   }, 20_000);
+
+  it('rewards airing down the prepared Outclaw while it wraps an isolated ledge', () => {
+    const low = traverse(0.7, true, 'low');
+    const nominal = traverse(0.7, true, 'nominal');
+    const high = traverse(0.7, true, 'high');
+
+    expect(low.pressurePsi).toBeLessThan(nominal.pressurePsi);
+    expect(nominal.pressurePsi).toBeLessThan(high.pressurePsi);
+    expect(low.ledgeAdvance).toBeGreaterThan(nominal.ledgeAdvance + 0.05);
+    expect(low.ledgeAdvance).toBeGreaterThan(high.ledgeAdvance + 0.07);
+    expect(low.ledgeLongImpulse).toBeGreaterThan(nominal.ledgeLongImpulse + 50);
+    expect(low.ledgeLongImpulse).toBeGreaterThan(high.ledgeLongImpulse + 150);
+    for (const run of [low, nominal, high]) {
+      expect(run.progress).toBeGreaterThan(8);
+      expect(run.ledgeTicks).toBeGreaterThan(0);
+      expect(run.worstUp).toBeGreaterThan(0.8);
+      expect(run.highest).toBeLessThan(3);
+      expect(run.finite).toBe(true);
+    }
+  }, 30_000);
+
+  it('reads the live edge-wrap multiplier in ledge physics', () => {
+    const weak = traverse(0.6, true, 'nominal', 0.6);
+    const strong = traverse(0.6, true, 'nominal', 1.4);
+    expect(strong.clearTick).toBeLessThan(weak.clearTick);
+    expect(strong.ledgeLongImpulse).toBeGreaterThan(weak.ledgeLongImpulse * 1.4);
+    expect(weak.finite).toBe(true);
+    expect(strong.finite).toBe(true);
+  }, 30_000);
 });
 
 describe('solid axle: portal clearance', () => {

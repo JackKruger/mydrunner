@@ -4,6 +4,7 @@ import {
   classifyTireContact,
   solveSeriesCompliance,
   solveSidewallConstraint,
+  pressureEdgeWrapScale,
   pressureLateralScale,
   pressureRadialScale,
   pressureRollingScale,
@@ -59,6 +60,17 @@ describe('directional tyre carcass', () => {
     expect(pressureLateralScale(17, 34)).toBeCloseTo(0.75);
     expect(pressureRollingScale(17, 34)).toBeGreaterThan(1);
     expect(sealedRoadPressureGripScale(17, 34)).toBeLessThan(1);
+  });
+
+  it('bounds ledge tread wrapping above and below nominal pressure', () => {
+    const low = pressureEdgeWrapScale(10, 20);
+    const nominal = pressureEdgeWrapScale(20, 20);
+    const high = pressureEdgeWrapScale(30, 20);
+    expect(low).toBeGreaterThan(nominal);
+    expect(nominal).toBe(1);
+    expect(high).toBeLessThan(nominal);
+    expect(pressureEdgeWrapScale(1, 100)).toBe(1.75);
+    expect(pressureEdgeWrapScale(100, 1)).toBe(0.75);
   });
 
   it('keeps the implicit sidewall constraint bounded and releases gradually', () => {

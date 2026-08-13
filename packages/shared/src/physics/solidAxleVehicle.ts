@@ -80,6 +80,7 @@ import {
   SIDEWALL_RELEASE_RATE,
   carcassRatesInto,
   classifyTireContactInto,
+  pressureEdgeWrapScale,
   pressureLateralScale,
   pressureRadialScale,
   pressureRollingScale,
@@ -426,6 +427,7 @@ export class SolidAxleVehicle implements VehicleLike {
 
   private engine: EngineState = createEngineState();
   private tirePressurePsi: number;
+  private tireEdgeWrapPressureScale: number;
   private pressureReason: string | null = null;
   private lastRpm = 0;
   private lastGear = 0;
@@ -536,6 +538,10 @@ export class SolidAxleVehicle implements VehicleLike {
       : normalizeVehicleBuild(value);
     this.geom = geomFor(this.build);
     this.tirePressurePsi = this.geom.spec.tireCarcass.nominalPressurePsi;
+    this.tireEdgeWrapPressureScale = pressureEdgeWrapScale(
+      this.tirePressurePsi,
+      this.geom.spec.tireCarcass.nominalPressurePsi,
+    );
     this.drivetrain.transferCase = this.geom.spec.drivetrain === 'fixed-rwd' ? '2h' : '4h';
     this.wheelShape = new RAPIER.Cylinder(this.geom.wheelWidth / 2, this.geom.wheelRadius);
     this.axleTubeShapes = [this.geom.front, this.geom.rear].map((axle) => new RAPIER.Cuboid(
@@ -1046,7 +1052,8 @@ export class SolidAxleVehicle implements VehicleLike {
             LEDGE_CONTACT.prediction,
             LEDGE_CONTACT.maxSupportNormalY,
             LEDGE_CONTACT.maxClimbHeight,
-            LEDGE_CONTACT.edgeAdvance,
+            LEDGE_CONTACT.edgeAdvance * this.tireEdgeWrapPressureScale
+              * TUNING.tireEdgeWrapMult,
             this.world.terrainCollider.friction(),
             this._ledgeStorage[wheelIndex]!,
           )
@@ -1062,7 +1069,8 @@ export class SolidAxleVehicle implements VehicleLike {
           LEDGE_CONTACT.prediction,
           LEDGE_CONTACT.maxSupportNormalY,
           LEDGE_CONTACT.maxClimbHeight,
-          LEDGE_CONTACT.edgeAdvance,
+          LEDGE_CONTACT.edgeAdvance * this.tireEdgeWrapPressureScale
+            * TUNING.tireEdgeWrapMult,
           basis.forward,
           COLLISION_GROUP_WHEEL_RAY,
           this._ledgeStorage[wheelIndex]!,
@@ -1787,10 +1795,12 @@ export class SolidAxleVehicle implements VehicleLike {
         : null;
       const treadFraction = ledgeSemantics[wIdx]?.treadFraction ?? 0;
       if (ledge && ledgeFrame && treadFraction > 0) {
+        const edgeWrapScale = this.tireEdgeWrapPressureScale * TUNING.tireEdgeWrapMult;
         cp = ledge.point;
         tireLong = ledge.climbDirection ?? ledgeFrame.longitudinal;
         tireLat = ledgeFrame.lateral;
-        surfMult = clamp(ledge.friction, 0, 2) * LEDGE_CONTACT.tractionMultiplier * treadFraction;
+        surfMult = clamp(ledge.friction, 0, 2) * LEDGE_CONTACT.tractionMultiplier
+          * edgeWrapScale * treadFraction;
         normalLoad = Math.max(0, w.volumeSupport ? (w.lastForce ?? 0) : ledgeLoads[wIdx]!);
       } else if (w.contact) {
         const supportFrame = contactFrameInto(
@@ -2409,6 +2419,10 @@ export class SolidAxleVehicle implements VehicleLike {
       return;
     }
     this.tirePressurePsi = next;
+    this.tireEdgeWrapPressureScale = pressureEdgeWrapScale(
+      next,
+      this.geom.spec.tireCarcass.nominalPressurePsi,
+    );
   }
 
   private updateDrivetrainControls(speed: number): void {

@@ -844,6 +844,27 @@ describe('SolidAxleVehicle: TUNING axle multipliers', () => {
 });
 
 describe('SolidAxleVehicle: live tire budget tuning', () => {
+  it('leaves ordinary flat, non-ledge contact trajectories byte-exact', () => {
+    const saved = TUNING.tireEdgeWrapMult;
+    const stateAt = (mult: number) => {
+      TUNING.tireEdgeWrapMult = mult;
+      const { world, vehicle } = makeWorld();
+      settle(world, 120);
+      for (let tick = 0; tick < 180; tick++) {
+        vehicle.setInput({ ...EMPTY_INPUT, seq: tick + 1, throttle: 0.4, steer: 0.15 });
+        world.step();
+      }
+      const state = vehicle.getState();
+      world.dispose();
+      return state;
+    };
+    try {
+      expect(stateAt(1.5)).toEqual(stateAt(0.5));
+    } finally {
+      TUNING.tireEdgeWrapMult = saved;
+    }
+  });
+
   it('scales the transmitted grip coefficient', () => {
     const saved = TUNING.tireLongGripMult;
     const coefficientAt = (mult: number): number => {

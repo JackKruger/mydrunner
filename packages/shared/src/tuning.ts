@@ -52,6 +52,8 @@ export interface Tuning {
   rearGripMult: number;
   /** Multiplier on the base longitudinal friction coefficient. */
   tireLongGripMult: number;
+  /** Multiplier on pressure-dependent ledge edge advance and tread hooking. */
+  tireEdgeWrapMult: number;
   /** Multiplier on the tyre's nominal static deflection (higher is softer). */
   tireCarcassComplianceMult: number;
   /** Multiplier on carcass radial damping in the series suspension response. */
@@ -112,6 +114,7 @@ export const TUNING: Tuning = {
   frontGripMult: VEHICLE.frontGripMult,
   rearGripMult: VEHICLE.rearGripMult,
   tireLongGripMult: 1,
+  tireEdgeWrapMult: 1,
   tireCarcassComplianceMult: 1,
   tireRadialDampingMult: 1,
   tireSidewallCorrectionMult: 1,

@@ -132,6 +132,7 @@ describe('physics debug panel', () => {
     TUNING.engineTorqueMult = savedTorque;
 
     const newTireControls = [
+      'edgeWrap×',
       'carcassCompliance×',
       'radialDamping×',
       'sidewallCorrection×',
@@ -150,6 +151,12 @@ describe('physics debug panel', () => {
     baggingInput!.dispatchEvent(new Event('input', { bubbles: true }));
     expect(TUNING.tireVisualDeformationMult).toBe(2.5);
     TUNING.tireVisualDeformationMult = savedBagging;
+
+    const writeText = vi.fn(async (_text: string) => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    document.querySelector<HTMLButtonElement>('#debug-tuning-card .actions button')!.click();
+    expect(writeText).toHaveBeenCalledOnce();
+    expect(writeText.mock.calls[0]![0]).toContain('pressure edge wrap');
 
     const record = document.querySelector<HTMLButtonElement>('#debug-record')!;
     record.click();
