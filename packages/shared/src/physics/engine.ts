@@ -98,6 +98,18 @@ export function gearRatio(state: EngineState): number {
   return ENGINE.gears[state.gearIndex] ?? 0;
 }
 
+function rpmTarget(wheelAngVel: number, throttle: number, ratio: number, finalDrive: number): number {
+  if (ratio === 0) {
+    return ENGINE.idleRpm + Math.max(0, throttle) * (ENGINE.redlineRpm - ENGINE.idleRpm);
+  }
+  const wheelRpm = (Math.abs(wheelAngVel) * 60) / (2 * Math.PI);
+  const lockedRpm = wheelRpm * Math.abs(ratio) * finalDrive;
+  const blend = Math.min(1, Math.abs(wheelAngVel) / 8);
+  const throttleTarget = ENGINE.idleRpm
+    + Math.abs(throttle) * (ENGINE.peakTorqueRpm - ENGINE.idleRpm);
+  return lockedRpm * blend + throttleTarget * (1 - blend);
+}
+
 /** Step the engine simulation one fixed frame.
  *
  *  wheelAngVel:   signed average angular velocity of the driven wheels in
@@ -150,24 +162,10 @@ export function stepEngine(
   if (manualGear !== null) state.gearIndex = gearIndexFor(manualGear);
   const gIdx = state.gearIndex;
   const ratio = ENGINE.gears[gIdx] ?? 0;
-  let targetRpm: number;
-  if (gIdx === ENGINE.neutralGear || ratio === 0) {
-    // Free-revving in neutral.
-    targetRpm = ENGINE.idleRpm + Math.max(0, throttle) * (ENGINE.redlineRpm - ENGINE.idleRpm);
-  } else {
-    // Wheel-derived RPM (rigid coupling). At low wheel speed a real auto
-    // is decoupled from the wheels by a torque converter / slipping
-    // clutch - the engine "blips" up toward the throttle target while
-    // the wheels lag. Without modeling this, launches lug at idle and
-    // the car crawls forever before the wheels catch up.
-    const wheelRpm = (Math.abs(wheelAngVel) * 60) / (2 * Math.PI);
-    const lockedRpm = wheelRpm * Math.abs(ratio) * finalDrive;
-    // Blend: at zero wheel speed use throttle target; full lock around
-    // 8 rad/s wheel speed (~3 m/s).
-    const blend = Math.min(1, Math.abs(wheelAngVel) / 8);
-    const throttleTarget = ENGINE.idleRpm + Math.abs(throttle) * (ENGINE.peakTorqueRpm - ENGINE.idleRpm);
-    targetRpm = lockedRpm * blend + throttleTarget * (1 - blend);
-  }
+  // At low wheel speed a real automatic is decoupled by its torque converter.
+  // rpmTarget blends from a throttle target at rest to rigid coupling at
+  // 8 rad/s (~3 m/s). Neutral uses the same helper's free-rev path.
+  let targetRpm = rpmTarget(wheelAngVel, throttle, ratio, finalDrive);
   // Hard cap at the rev-limiter cliff. Past this rpm the torque curve
   // (torqueAtRpm) returns ~0 anyway, so the engine cannot physically
   // rev higher. Without this cap, freely-spinning wheels (slip on mud,
@@ -225,18 +223,32 @@ export function stepEngine(
     nextGear = ENGINE.neutralGear;
   }
   state.gearIndex = nextGear;
-  state.rpm = rpm;
+
+  // RPM above is normally calculated from the gear active at the start of the
+  // tick. For a road-speed-triggered forward shift, immediately retarget it to
+  // the selected ratio so the returned gear, torque curve and tachometer agree.
+  // Direction engagement deliberately keeps its existing one-tick converter
+  // flare: changing that launch transient measurably changes obstacle traversal.
+  if (gIdx >= ENGINE.firstGear && nextGear !== gIdx) {
+    const nextRatio = ENGINE.gears[nextGear] ?? 0;
+    targetRpm = rpmTarget(wheelAngVel, throttle, nextRatio, finalDrive);
+    targetRpm = Math.min(RPM_HARD_LIMIT, Math.max(ENGINE.idleRpm, targetRpm));
+  }
+  const resolvedRpm = gIdx >= ENGINE.firstGear && nextGear !== gIdx
+    ? state.rpm + (targetRpm - state.rpm) * Math.min(1, dt * 8)
+    : rpm;
+  state.rpm = resolvedRpm;
 
   const activeRatio = ENGINE.gears[nextGear] ?? 0;
   if (activeRatio === 0) {
     out.totalDrivelineTorque = 0;
-    out.rpm = rpm;
+    out.rpm = resolvedRpm;
     out.gear = signedGear(nextGear);
     return out;
   }
 
   // Engine torque this tick.
-  const engineT = torqueAtRpm(rpm) * Math.abs(throttle) * TUNING.engineTorqueMult;
+  const engineT = torqueAtRpm(resolvedRpm) * Math.abs(throttle) * TUNING.engineTorqueMult;
   // Negative throttle in reverse gear translates to positive torque
   // through the negative ratio - both signs cancel.
   const torqueAtWheels = engineT * activeRatio * finalDrive;
@@ -262,7 +274,7 @@ export function stepEngine(
   // sign there keeps standstill behaviour identical.
   let brakeT = 0;
   if (Math.abs(throttle) < 0.05 && Math.abs(activeRatio) > 0) {
-    const rpmBrake = Math.max(0, rpm - ENGINE.idleRpm) * ENGINE.engineBrakeCoef;
+    const rpmBrake = Math.max(0, resolvedRpm - ENGINE.idleRpm) * ENGINE.engineBrakeCoef;
     const speedBrake = Math.abs(vehicleAngVel) * ENGINE.engineBrakeSpeedCoef;
     const travelDir =
       Math.abs(wheelAngVel) > 1e-3 ? Math.sign(wheelAngVel) : Math.sign(activeRatio);
@@ -270,7 +282,7 @@ export function stepEngine(
   }
 
   out.totalDrivelineTorque = torqueAtWheels - brakeT;
-  out.rpm = rpm;
+  out.rpm = resolvedRpm;
   out.gear = signedGear(nextGear);
   return out;
 }

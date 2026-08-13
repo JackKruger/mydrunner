@@ -69,7 +69,7 @@ describe('gearbox', () => {
     s.gearIndex = ENGINE.firstGear;
     // vehicleAngVel high enough that chassis-speed RPM in 1st exceeds shiftUpRpm.
     // vehicleAngVel * ratio * finalDrive * 60/(2π) = vehicleAngVel * 4.0 * 4.1 * 9.549
-    // Need > 4600 → vehicleAngVel > 29.4 rad/s. Use 50 to be well clear.
+    // Need > 3500 → vehicleAngVel > 22.4 rad/s. Use 50 to be well clear.
     const angVel = 50;
     let last = -1;
     for (let i = 0; i < 5; i++) {
@@ -77,6 +77,21 @@ describe('gearbox', () => {
       last = out.gear;
     }
     expect(last).toBeGreaterThan(1);
+  });
+
+  it('uses the selected ratio for RPM on an automatic upshift tick', () => {
+    const s = createEngineState();
+    s.gearIndex = ENGINE.firstGear;
+    const angVel = 30;
+    const out = stepEngine(s, angVel, angVel, 1, dt);
+
+    expect(out.gear).toBe(2);
+    const secondRatio = ENGINE.gears[ENGINE.firstGear + 1]!;
+    const targetRpm = angVel * 60 / (2 * Math.PI) * secondRatio * ENGINE.finalDrive;
+    expect(out.rpm).toBeCloseTo(
+      ENGINE.idleRpm + (targetRpm - ENGINE.idleRpm) * dt * 8,
+      5,
+    );
   });
 
   it('does not upshift on wheel spin alone (slip on stuck truck)', () => {
