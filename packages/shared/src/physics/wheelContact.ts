@@ -7,6 +7,7 @@
 // the existing solid-axle suspension model.
 
 import type RAPIER from '@dimforge/rapier3d-compat';
+import { sampleHeightBilinear, type TerrainData } from './terrain.js';
 
 export interface ContactVec3 {
   x: number;
@@ -203,6 +204,161 @@ export function createSteepWheelContact(): SteepWheelContact {
     timeOfImpact: 0,
     climbStore: { x: 0, y: 0, z: 0 },
   };
+}
+
+/** Build a validated ledge contact from a steep heightfield support hit.
+ *  The allocating form is for tests and cold callers; owner physics uses the
+ *  `Into` form below. */
+export function findHeightfieldLedgeContact(
+  terrain: TerrainData,
+  wheelCenter: ContactVec3,
+  facePoint: ContactVec3,
+  faceNormal: ContactVec3,
+  wheelForward: ContactVec3,
+  wheelAxle: ContactVec3,
+  wheelRadius: number,
+  wheelHalfWidth: number,
+  prediction: number,
+  maxSupportNormalY: number,
+  maxClimbHeight: number,
+  edgeAdvance: number,
+  friction: number,
+): SteepWheelContact | null {
+  return findHeightfieldLedgeContactInto(
+    terrain, wheelCenter, facePoint, faceNormal, wheelForward, wheelAxle,
+    wheelRadius, wheelHalfWidth, prediction, maxSupportNormalY,
+    maxClimbHeight, edgeAdvance, friction, createSteepWheelContact(),
+  );
+}
+
+/** Convert the steep normal and witness already produced by the suspension's
+ *  heightfield cylinder cast into a ledge contact. Rapier 0.14 can return that
+ *  cast while returning null from a follow-up `contactShape`, so terrain uses
+ *  this analytic reconstruction instead of repeating the failed query.
+ *
+ *  A top is valid only if an upward-supporting patch exists beyond the face
+ *  within both the tyre radius and one heightfield-cell diagonal. This clears
+ *  the triangle that formed a coarse ledge without reaching across a long
+ *  steep slope or turning an unbounded rise into a climb target. @hotloop */
+export function findHeightfieldLedgeContactInto(
+  terrain: TerrainData,
+  wheelCenter: ContactVec3,
+  facePoint: ContactVec3,
+  faceNormal: ContactVec3,
+  wheelForward: ContactVec3,
+  wheelAxle: ContactVec3,
+  wheelRadius: number,
+  wheelHalfWidth: number,
+  prediction: number,
+  maxSupportNormalY: number,
+  maxClimbHeight: number,
+  edgeAdvance: number,
+  friction: number,
+  out: SteepWheelContact,
+): SteepWheelContact | null {
+  const normalLength = Math.hypot(faceNormal.x, faceNormal.y, faceNormal.z);
+  if (normalLength < 1e-8) return null;
+  const invNormalLength = 1 / normalLength;
+  const normalX = faceNormal.x * invNormalLength;
+  const normalY = faceNormal.y * invNormalLength;
+  const normalZ = faceNormal.z * invNormalLength;
+  if (normalY >= maxSupportNormalY) return null;
+
+  intoHorizontal.x = -normalX;
+  intoHorizontal.y = 0;
+  intoHorizontal.z = -normalZ;
+  normalizeInto(intoHorizontal, intoHorizontal);
+  forwardHorizontal.x = wheelForward.x;
+  forwardHorizontal.y = 0;
+  forwardHorizontal.z = wheelForward.z;
+  normalizeInto(forwardHorizontal, forwardHorizontal);
+  if (lengthSq(intoHorizontal) < 0.5 || dot(intoHorizontal, forwardHorizontal) < 0.25) {
+    return null;
+  }
+
+  const cellSize = terrain.size / Math.max(1, terrain.resolution - 1);
+  const probeInset = Math.max(
+    0.04,
+    prediction * 2,
+    Math.min(wheelRadius, cellSize * Math.SQRT2),
+  );
+  const probeX = facePoint.x + intoHorizontal.x * probeInset;
+  const probeZ = facePoint.z + intoHorizontal.z * probeInset;
+  const normalSample = cellSize * 0.25;
+  const halfSize = terrain.size * 0.5;
+  if (
+    probeX - normalSample < -halfSize || probeX + normalSample > halfSize
+    || probeZ - normalSample < -halfSize || probeZ + normalSample > halfSize
+  ) return null;
+
+  const topY = sampleHeightBilinear(terrain, probeX, probeZ);
+  const hubRise = topY + wheelRadius - wheelCenter.y;
+  if (hubRise <= prediction || hubRise > maxClimbHeight + prediction) return null;
+
+  const topDx = (
+    sampleHeightBilinear(terrain, probeX + normalSample, probeZ)
+    - sampleHeightBilinear(terrain, probeX - normalSample, probeZ)
+  ) / (2 * normalSample);
+  const topDz = (
+    sampleHeightBilinear(terrain, probeX, probeZ + normalSample)
+    - sampleHeightBilinear(terrain, probeX, probeZ - normalSample)
+  ) / (2 * normalSample);
+  const topNormalY = 1 / Math.hypot(topDx, 1, topDz);
+  if (topNormalY < maxSupportNormalY) return null;
+
+  // Locate the first upper-surface point rather than applying an upper-edge
+  // tread direction at the lower face witness. The heightfield is continuous
+  // across the cell, so a fixed bisection stays deterministic and allocation
+  // free while placing the force at the physical slope-to-top boundary.
+  let edgeLo = 0;
+  let edgeHi = probeInset;
+  for (let iteration = 0; iteration < 8; iteration++) {
+    const middle = (edgeLo + edgeHi) * 0.5;
+    const middleHeight = sampleHeightBilinear(
+      terrain,
+      facePoint.x + intoHorizontal.x * middle,
+      facePoint.z + intoHorizontal.z * middle,
+    );
+    if (middleHeight >= topY - 1e-4) edgeHi = middle;
+    else edgeLo = middle;
+  }
+  const edgeX = facePoint.x + intoHorizontal.x * edgeHi;
+  const edgeZ = facePoint.z + intoHorizontal.z * edgeHi;
+
+  const axleLength = Math.hypot(wheelAxle.x, wheelAxle.y, wheelAxle.z);
+  const axial = axleLength > 1e-8
+    ? clamp(
+      (normalX * wheelAxle.x + normalY * wheelAxle.y + normalZ * wheelAxle.z)
+        / axleLength,
+      -1,
+      1,
+    )
+    : 0;
+  const extent = wheelHalfWidth * Math.abs(axial)
+    + wheelRadius * Math.sqrt(Math.max(0, 1 - axial * axial));
+  const distance =
+    (wheelCenter.x - facePoint.x) * normalX
+    + (wheelCenter.y - facePoint.y) * normalY
+    + (wheelCenter.z - facePoint.z) * normalZ
+    - extent;
+
+  out.point.x = edgeX;
+  out.point.y = topY;
+  out.point.z = edgeZ;
+  out.normal.x = normalX;
+  out.normal.y = normalY;
+  out.normal.z = normalZ;
+  out.climbStore.x = edgeX + intoHorizontal.x * edgeAdvance - wheelCenter.x;
+  out.climbStore.y = topY + wheelRadius - wheelCenter.y;
+  out.climbStore.z = edgeZ + intoHorizontal.z * edgeAdvance - wheelCenter.z;
+  normalizeInto(out.climbStore, out.climbStore);
+  out.climbDirection = out.climbStore;
+  out.climbTopY = topY;
+  out.distance = distance;
+  out.penetration = Math.max(0, -distance);
+  out.friction = friction;
+  out.timeOfImpact = 0;
+  return out;
 }
 
 // Broadphase state for the query in flight. Hoisted to module scope with the

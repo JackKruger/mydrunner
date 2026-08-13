@@ -16,6 +16,7 @@ import {
 } from '../physics/terrain.js';
 import {
   cylinderRotation,
+  findHeightfieldLedgeContact,
   findSteepWheelContact,
 } from '../physics/wheelContact.js';
 import type { WheelKinematic } from '../physics/wheelDynamics.js';
@@ -43,6 +44,113 @@ function addStep(
 }
 
 describe('wheel ledge contact geometry', () => {
+  it('validates the upper surface of a coarse heightfield for a large tyre', () => {
+    const resolution = 9;
+    const size = 4;
+    const heights = new Float32Array(resolution * resolution);
+    for (let row = 0; row < resolution; row++) {
+      const height = row >= 4 ? 0.6 : 0;
+      for (let column = 0; column < resolution; column++) {
+        heights[row * resolution + column] = height;
+      }
+    }
+    const terrain: TerrainData = {
+      size,
+      resolution,
+      heights,
+      surfaces: new Uint8Array(resolution * resolution).fill(Surface.Dirt),
+      seed: 0,
+      mountain: mountainFor(size),
+      petrolStation: petrolStationPadFor(size),
+      ...dryWater(resolution),
+      bogs: [],
+      roads: [],
+    };
+    const rapierHeights = new Float32Array(heights.length);
+    for (let column = 0; column < resolution; column++) {
+      for (let row = 0; row < resolution; row++) {
+        rapierHeights[column * resolution + row] = heights[row * resolution + column]!;
+      }
+    }
+    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+    const collider = world.createCollider(
+      RAPIER.ColliderDesc.heightfield(
+        resolution - 1,
+        resolution - 1,
+        rapierHeights,
+        { x: size, y: 1, z: size },
+      ).setFriction(1).setCollisionGroups(COLLISION_GROUP_WORLD),
+      body,
+    );
+    world.step();
+
+    const wheelRadius = 0.508;
+    const wheelHalfWidth = 0.22;
+    const wheelCenter = { x: 0, y: wheelRadius, z: -0.65 };
+    const castOrigin = { x: wheelCenter.x, y: wheelCenter.y + 0.5, z: wheelCenter.z };
+    const wheelAxle = { x: 1, y: 0, z: 0 };
+    const rotation = cylinderRotation(wheelAxle);
+    const shape = new RAPIER.Cylinder(wheelHalfWidth, wheelRadius);
+    const cast = collider.castShape(
+      { x: 0, y: 0, z: 0 },
+      shape,
+      castOrigin,
+      rotation,
+      { x: 0, y: -1, z: 0 },
+      0,
+      1.5,
+      true,
+    );
+    expect(cast).not.toBeNull();
+    // This is the Rapier 0.14 failure mode Stage 1 must not depend on.
+    expect(collider.contactShape(shape, wheelCenter, rotation, 0.015)).toBeNull();
+
+    const normal = cast!.normal1;
+    const hitCenter = {
+      x: castOrigin.x,
+      y: castOrigin.y - cast!.time_of_impact,
+      z: castOrigin.z,
+    };
+    const axial = normal.x * wheelAxle.x + normal.y * wheelAxle.y + normal.z * wheelAxle.z;
+    const radialLength = Math.hypot(
+      normal.x - wheelAxle.x * axial,
+      normal.y - wheelAxle.y * axial,
+      normal.z - wheelAxle.z * axial,
+    );
+    const radialScale = wheelRadius / radialLength;
+    const capScale = Math.sign(axial) * wheelHalfWidth;
+    const facePoint = {
+      x: hitCenter.x - (normal.x - wheelAxle.x * axial) * radialScale - wheelAxle.x * capScale,
+      y: hitCenter.y - (normal.y - wheelAxle.y * axial) * radialScale - wheelAxle.y * capScale,
+      z: hitCenter.z - (normal.z - wheelAxle.z * axial) * radialScale - wheelAxle.z * capScale,
+    };
+    const hit = findHeightfieldLedgeContact(
+      terrain,
+      wheelCenter,
+      facePoint,
+      normal,
+      { x: 0, y: 0, z: 1 },
+      wheelAxle,
+      wheelRadius,
+      wheelHalfWidth,
+      0.015,
+      0.65,
+      0.9,
+      0.08,
+      1,
+    );
+
+    expect(hit).not.toBeNull();
+    expect(hit!.normal.y).toBeLessThan(0.65);
+    expect(hit!.climbTopY).toBeCloseTo(0.6, 6);
+    expect(hit!.point.y).toBeCloseTo(0.6, 4);
+    expect(hit!.climbDirection).not.toBeNull();
+    expect(hit!.climbDirection!.y).toBeGreaterThan(0.5);
+    expect(hit!.climbDirection!.z).toBeGreaterThan(0.5);
+    world.free();
+  });
+
   it('finds the leading face and a reachable upper edge before the hub crosses it', () => {
     const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     addStep(world, 0.35, 0.35);

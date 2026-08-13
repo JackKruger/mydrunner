@@ -135,6 +135,7 @@ import {
   contactFrameInto,
   createSteepWheelContact,
   cylinderRotationInto,
+  findHeightfieldLedgeContactInto,
   findSteepWheelContactInto,
   wheelBasisInto,
   type ContactQuat,
@@ -1026,27 +1027,47 @@ export class SolidAxleVehicle implements VehicleLike {
       debug.wheelCenter.x = center.x;
       debug.wheelCenter.y = center.y;
       debug.wheelCenter.z = center.z;
-      // Exact upward terrain support already accounts for the tyre volume.
-      // Running the steep-face path as well would replace its raw depth with
-      // the intentionally slow ledge-climb handoff, leaving the visible axle
-      // behind the ground it is already supported by.
-      let ledge = w.volumeSupport ? null : findSteepWheelContactInto(
-        this.world.world,
-        this.wheelShape,
-        w.hasPreviousCenter ? w.previousCenter : null,
-        center,
-        wheelRotation,
-        this.geom.wheelRadius,
-        this.geom.wheelWidth / 2,
-        LEDGE_CONTACT.prediction,
-        LEDGE_CONTACT.maxSupportNormalY,
-        LEDGE_CONTACT.maxClimbHeight,
-        LEDGE_CONTACT.edgeAdvance,
-        basis.forward,
-        COLLISION_GROUP_WHEEL_RAY,
-        this._ledgeStorage[wheelIndex]!,
-        basis.axle,
-      );
+      // Upward terrain support already accounts for the tyre volume. A steep
+      // heightfield hit is different: reuse its cast normal and witness, then
+      // validate the upper surface analytically because Rapier 0.14 may return
+      // null when the same heightfield/cylinder pair is reconstructed through
+      // `contactShape`.
+      let ledge = w.volumeSupport
+        ? (w.contactNormal.y < LEDGE_CONTACT.maxSupportNormalY
+          ? findHeightfieldLedgeContactInto(
+            this.world.terrain,
+            center,
+            w.contactPoint,
+            w.contactNormal,
+            basis.forward,
+            basis.axle,
+            this.geom.wheelRadius,
+            this.geom.wheelWidth / 2,
+            LEDGE_CONTACT.prediction,
+            LEDGE_CONTACT.maxSupportNormalY,
+            LEDGE_CONTACT.maxClimbHeight,
+            LEDGE_CONTACT.edgeAdvance,
+            this.world.terrainCollider.friction(),
+            this._ledgeStorage[wheelIndex]!,
+          )
+          : null)
+        : findSteepWheelContactInto(
+          this.world.world,
+          this.wheelShape,
+          w.hasPreviousCenter ? w.previousCenter : null,
+          center,
+          wheelRotation,
+          this.geom.wheelRadius,
+          this.geom.wheelWidth / 2,
+          LEDGE_CONTACT.prediction,
+          LEDGE_CONTACT.maxSupportNormalY,
+          LEDGE_CONTACT.maxClimbHeight,
+          LEDGE_CONTACT.edgeAdvance,
+          basis.forward,
+          COLLISION_GROUP_WHEEL_RAY,
+          this._ledgeStorage[wheelIndex]!,
+          basis.axle,
+        );
       if (!ledge && !w.contact) {
         ledge = findTerrainSidewallContactInto(
           this.world,
@@ -1098,7 +1119,7 @@ export class SolidAxleVehicle implements VehicleLike {
         scratch.series,
       );
       let bridgeActive = false;
-      if (ledge && (semantics?.treadFraction ?? 0) > 0) {
+      if (ledge && !w.volumeSupport && (semantics?.treadFraction ?? 0) > 0) {
         w.ledgeHandoff = true;
         w.ledgeHandoffGrace = LEDGE_CONTACT.handoffGraceTicks;
         bridgeActive = true;
@@ -1135,7 +1156,11 @@ export class SolidAxleVehicle implements VehicleLike {
         w.tireContactNormal.y = w.contactNormal.y;
         w.tireContactNormal.z = w.contactNormal.z;
       }
-      if (ledge) {
+      // A heightfield ledge is reconstructed from this wheel's existing
+      // volume-support hit, so its suspension reaction already owns the
+      // contact normal. Discrete scenery has no such support and keeps the
+      // separate sidewall constraint below.
+      if (ledge && !w.volumeSupport) {
         const normalSpeed = pointVelocityDot(lv, av, t, ledge.point, ledge.normal);
         const constraint = solveSidewallConstraintInto(
           ledge.penetration,
@@ -1681,7 +1706,7 @@ export class SolidAxleVehicle implements VehicleLike {
       let contactLoad = 0;
       const ledgeTreadFraction = ledgeSemantics[wIdx]?.treadFraction ?? 0;
       if (ledge && ledgeFrame && ledgeTreadFraction > 0) {
-        contactLoad = Math.max(0, ledgeLoads[wIdx]!);
+        contactLoad = Math.max(0, w.volumeSupport ? (w.lastForce ?? 0) : ledgeLoads[wIdx]!);
       } else if (w.contact) {
         contactLoad = Math.max(0, w.lastForce ?? 0);
       }
@@ -1766,7 +1791,7 @@ export class SolidAxleVehicle implements VehicleLike {
         tireLong = ledge.climbDirection ?? ledgeFrame.longitudinal;
         tireLat = ledgeFrame.lateral;
         surfMult = clamp(ledge.friction, 0, 2) * LEDGE_CONTACT.tractionMultiplier * treadFraction;
-        normalLoad = Math.max(0, ledgeLoads[wIdx]!);
+        normalLoad = Math.max(0, w.volumeSupport ? (w.lastForce ?? 0) : ledgeLoads[wIdx]!);
       } else if (w.contact) {
         const supportFrame = contactFrameInto(
           w.contactNormal, basis.axle, basis.forward, this._supportFrames[wIdx]!,

@@ -31,6 +31,12 @@ interface TerrainEdit {
 function makeWorld(edit?: TerrainEdit, resolution = 128, size = 60): Physics.World {
   const heights = new Float32Array(resolution * resolution);
   const surfaces = new Uint8Array(resolution * resolution).fill(Physics.Surface.Dirt);
+  const petrolStation = Physics.petrolStationPadFor(size);
+  // These are terrain/axle fixtures, not production-map courses. Keep every
+  // station collider well outside the heightfield so a landmark can never be
+  // mistaken for the first step or alter the vehicle acceptance result.
+  petrolStation.cx = size * 4;
+  petrolStation.cz = size * 4;
   for (let zi = 0; zi < resolution; zi++) {
     const z = (zi / (resolution - 1) - 0.5) * size;
     for (let xi = 0; xi < resolution; xi++) {
@@ -49,7 +55,7 @@ function makeWorld(edit?: TerrainEdit, resolution = 128, size = 60): Physics.Wor
       surfaces,
       seed: 11,
       mountain: Physics.mountainFor(size),
-      petrolStation: Physics.petrolStationPadFor(size),
+      petrolStation,
       ...Physics.dryWater(resolution),
       bogs: [],
       roads: [],
@@ -239,11 +245,18 @@ describe('solid axle: repeated steps', () => {
     });
   }
 
-  function traverse(height: number): {
+  function isolatedLedge(height: number): Physics.World {
+    return makeWorld((x, z) => (
+      z >= -8 && x > 0 ? { height } : null
+    ), 256, 120);
+  }
+
+  function traverse(height: number, isolated = false): {
     progress: number; worstUp: number; highest: number;
     minRoll: number; maxRoll: number; maxArticulation: number;
+    ledgeTicks: number; finite: boolean;
   } {
-    const world = alternatingSteps(height);
+    const world = isolated ? isolatedLedge(height) : alternatingSteps(height);
     const vehicle = spawn(world, CRAWLER, { x: 0, y: 2.4, z: -12 });
     settle(world, 120);
     const startZ = vehicle.getState().position.z;
@@ -251,17 +264,40 @@ describe('solid axle: repeated steps', () => {
     let highest = -Infinity;
     let minRoll = 0;
     let maxRoll = 0;
+    let ledgeTicks = 0;
+    let finite = true;
+    const internals = vehicle as unknown as {
+      wheels: Array<{ ledgeContact: boolean }>;
+    };
     for (let tick = 0; tick < 10 * 60; tick++) {
       vehicle.setInput({
         ...EMPTY_INPUT, seq: tick + 2, throttle: 0.45, transferCase: '4l',
       });
       world.step();
       const state = vehicle.getState();
+      finite = finite && [
+        state.position.x, state.position.y, state.position.z,
+        state.rotation.x, state.rotation.y, state.rotation.z, state.rotation.w,
+        state.linVel.x, state.linVel.y, state.linVel.z,
+        state.angVel.x, state.angVel.y, state.angVel.z,
+        state.rpm, state.gear, state.throttle,
+        ...state.axles.flatMap((axle) => [axle.rideY, axle.rollAngle]),
+        ...state.wheels.flatMap((wheel) => [
+          wheel.steer, wheel.spin, wheel.suspensionLength, wheel.angVel,
+          wheel.tireDeflection,
+          wheel.tireContactNormal.x, wheel.tireContactNormal.y, wheel.tireContactNormal.z,
+        ]),
+      ].every(Number.isFinite);
       worstUp = Math.min(worstUp, upY(vehicle));
       highest = Math.max(highest, state.position.y);
       for (const axle of state.axles!) {
         minRoll = Math.min(minRoll, axle.rollAngle);
         maxRoll = Math.max(maxRoll, axle.rollAngle);
+      }
+      for (let wheelIndex = 0; wheelIndex < internals.wheels.length; wheelIndex++) {
+        const wheel = internals.wheels[wheelIndex]!;
+        if (!wheel.ledgeContact) continue;
+        ledgeTicks++;
       }
     }
     const result = {
@@ -271,6 +307,8 @@ describe('solid axle: repeated steps', () => {
       minRoll,
       maxRoll,
       maxArticulation: vehicle.geom.front.maxArticulation,
+      ledgeTicks,
+      finite,
     };
     world.dispose();
     return result;
@@ -294,29 +332,23 @@ describe('solid axle: repeated steps', () => {
     expect(run.highest).toBeLessThan(3);
   }, 20_000);
 
-  it('stalls against alternating 0.6 m steps without launching or rolling', () => {
-    // Being stopped is the correct outcome, and the reason is the wheel
-    // radius. A *one-sided* face taller than the hub meets the tyre at or
-    // above its centre, so the edge reaction on that wheel has no upward
-    // component, and the wheel on the flat opposite side offers nothing to
-    // lift with. Swept across height x throttle, the ceiling sits between
-    // 0.45 m (climbs, but only at 0.7 throttle) and 0.50 m (never climbs at
-    // any throttle) — which brackets this crawler's 0.508 m radius.
-    //
-    // The limit is that one-sidedness, not the height alone: the same 0.6 m
-    // step run across the full width is climbable at 0.7 throttle, because
-    // both wheels of the axle contact together and the chassis pitches up.
-    // Nor is it drive: lockers cut the wheel-speed spread from 642 to 7 rad/s
-    // and the truck still does not climb it. LEDGE_CONTACT.maxClimbHeight is
-    // 0.9 m, so the ledge system is not rejecting the face either.
-    //
-    // What must not happen is the contact phase resolving that face into a
-    // launch or a rollover — the failure mode the volumetric tyre query
-    // exists to avoid.
-    const run = traverse(0.6);
-    expect(run.progress).toBeLessThan(3);
+  it('climbs an isolated one-sided 0.6 m heightfield ledge safely', () => {
+    // This is deliberately one ledge with a sustained upper surface. The old
+    // alternating course mixed repeated climb/drop launches into this gate,
+    // and its production-derived station metadata put a sign pole directly
+    // in the approach. The 0.35 m whoops regression above retains that
+    // repeated-articulation coverage; this fixture isolates steep-heightfield
+    // climb geometry and the prepared Outclaw's safety envelope.
+    const run = traverse(0.6, true);
+    expect(run.progress).toBeGreaterThan(8);
+    expect(run.ledgeTicks).toBeGreaterThan(0);
+    expect(run.minRoll).toBeLessThan(-0.03);
+    expect(run.maxRoll).toBeGreaterThan(0.03);
+    expect(Math.abs(run.minRoll)).toBeLessThanOrEqual(run.maxArticulation);
+    expect(run.maxRoll).toBeLessThanOrEqual(run.maxArticulation);
     expect(run.worstUp).toBeGreaterThan(0.8);
     expect(run.highest).toBeLessThan(3);
+    expect(run.finite).toBe(true);
   }, 20_000);
 });
 
