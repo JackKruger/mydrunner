@@ -1,7 +1,8 @@
-> Status: approved, not yet implemented. Stage 0 is in progress on
-> `claude/previous-session-status-0ash8s`. Raised by the finding recorded in
-> `OFF_ROAD_PHYSICS_COMPLETION_PLAN.md` under milestone 2, that a prepared
-> crawler cannot climb a one-sided face taller than its wheel radius.
+> Status: Stage 0 complete on the authoritative Node 22 runtime. Stage 1 was
+> attempted on 2026-08-13 and stopped at its explicit no-scope-expansion
+> condition: the two proposed geometry changes did not produce heightfield
+> ledge contacts or meet the safety/golden acceptance bars. Stages 2–4 remain
+> pending.
 
 # Make tall obstacles climbable, the way a real crawler climbs them
 
@@ -87,6 +88,30 @@ The core fix.
 - Watch for double-counted normal load where a wheel now has both support and
   ledge contact. The rock path already handles that coexistence — reuse it,
   do not add a second branch.
+
+### Stage 1 attempt — measured blocker
+
+The original `axleRegressions.test.ts` course is not an isolated terrain rig.
+At its `{ x: 0, z: -12 }` start, the prepared Outclaw first meets the petrol
+station sign pole at approximately `{ x: -1, z: -11 }`. Instrumentation
+identified the supposed ledge as a friction-0.7 collider with a top at 0 m,
+not the friction-1 terrain heightfield. With the proposed gate and probe inset
+applied, that contaminated run still advanced only 1.055 m.
+
+Moving only the synthetic world's station metadata out of the course exposed
+the terrain result: 20.755 m progress, chassis height below 2.148 m, axle roll
+from -0.066 to +0.151 rad, but a minimum chassis-up value of 0.793. More
+importantly, 260 ticks reported steep terrain volume support and zero reported
+a validated ledge contact. Rapier 0.14's heightfield cylinder shape cast can
+return a hit while the follow-up `contactShape` reconstruction used by
+`findSteepWheelContactInto` returns null, so the radius-scaled top probe is
+never reached for this terrain path.
+
+The narrowed gate also changed the existing prepared-Outclaw road and
+corrugation goldens, which are required to remain byte-identical. No fixtures
+were regenerated. Completing Stage 1 therefore needs a separately approved
+heightfield-contact design (and an isolated acceptance fixture), not force,
+traction, pressure, sway-bar, or handoff tuning.
 
 ## Stage 2 — Pressure-dependent tread wrap
 

@@ -48,20 +48,19 @@ pre-refactor build.
 the pure functions, because each is a property of how the contact and
 suspension phases compose. Two notes from writing them:
 
-- **The 0.6 m step is not traversable *one-sided*, and should not be.** Swept
-  across height x throttle, the ceiling for a one-sided face sits between
-  0.45 m (climbs, but only at 0.7 throttle) and 0.50 m (never climbs at any
-  throttle), which brackets the crawler's 0.508 m wheel radius: a face at or
-  above the hub meets the tyre at or above its centre, so the edge reaction on
-  that wheel has no upward component and the wheel on the flat opposite side
-  offers nothing to lift with. The limit is the one-sidedness, not the height
-  — the same 0.6 m step across the full width *is* climbable at 0.7 throttle,
-  because both wheels contact together and the chassis pitches up. It is not
-  drive either: lockers cut the wheel-speed spread from 642 to 7 rad/s and it
-  still does not climb. That case now asserts it stalls *safely* (upright, no
-  launch, no depth launch), and a 0.35 m step carries the traversal
-  assertions: forward progress plus articulation in both directions, within
-  the cap.
+- **The recorded 0.6 m stall was contaminated by a landmark collider.** The
+  synthetic rig starts directly in front of the petrol-station sign pole, and
+  instrumentation identified its first supposed ledge as friction 0.7 with a
+  0 m top. With the station moved outside the course, the existing volume
+  support path advances 20.755 m over the terrain but reaches a minimum
+  chassis-up value of 0.793, below the required 0.8 safety bar. The proposed
+  Stage 1 gate observed 260 steep volume-support ticks but produced zero
+  validated terrain ledge contacts because Rapier 0.14's follow-up
+  heightfield `contactShape` query returned null. The original wheel-radius
+  ceiling explanation is therefore not supported by this rig. Stage 1 remains
+  pending a heightfield-contact design and an isolated acceptance fixture;
+  pressure wrapping, sway-bar disconnect, and belly diagnosis are also
+  explicitly pending.
 - **Angular momentum is covered in three places, not one.** The internal
   impulse pair is pinned per-axle in `travelStops.test.ts`, the driveline
   carriers in `differential.test.ts` (milestone 4), and the vehicle-level
@@ -99,9 +98,9 @@ probe alone still beats a standard axle.
 - [ ] Add sealed-road low-pressure drag/steering, workshop replacement,
   reconnect, recovery-pressure, equal-load footprint/sinkage, mud-exit
   disturbance release, and remote bogged-pose coverage.
-- [ ] Add exact serialized golden fixtures for Ridgeback, Dustback, and a
+- [x] Add exact serialized golden fixtures for Ridgeback, Dustback, and a
   prepared Outclaw on road, planar slopes, split friction, mud, and
-  corrugations.
+  corrugations. All 15 match byte-for-byte on Node 22.23.0.
 - [x] Keep synthetic fixtures, rather than production routes, as physics gates.
 
 ## Milestone 5: browser evidence and closure

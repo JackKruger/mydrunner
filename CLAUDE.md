@@ -16,7 +16,7 @@ Rollover is intentionally a real risk on slopes and at-speed turns into ruts —
 
 ## Stack
 
-- **TypeScript everywhere**, ESM, Node 22+, pnpm workspaces.
+- **TypeScript everywhere**, ESM, Node 22 (use the `.nvmrc` runtime), pnpm workspaces. Exact physics fixtures are created and compared on Node 22; do not regenerate them to accommodate another Node major.
 - **Physics:** Rapier (`@dimforge/rapier3d-compat`, WASM). Lives in `packages/shared/src/physics/` and runs in each owning browser. The server does not simulate vehicles.
 - **Client:** Vite + Three.js. No React. `requestAnimationFrame` drives fixed-step owner physics plus `Scene.render()`. Remote vehicles interpolate from relayed snapshots ~100 ms behind; the local truck interpolates its two latest 60 Hz physics poses at display rate.
 - **Server:** Node + `ws` + `http`. A single `Room` allocates spawns, stores the newest owner state and broadcasts 30 Hz aggregate snapshots. Lives in `packages/server/src/`.
