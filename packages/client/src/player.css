@@ -2542,12 +2542,9 @@ body.touch #transmission-mode {
 .hud-pressure.active { color:#f4bf4f; }
 .hud-condition { grid-column:1/-1; min-height:14px; color:#ff9a78; font-size:10px; letter-spacing:.04em; }
 .hud-winch { grid-column:1/-1; min-height:14px; color:#f4bf4f; font-size:10px; letter-spacing:.05em; }
-#winch-reticle { position:fixed; left:50%; top:50%; width:20px; height:20px; margin:-10px 0 0 -10px; border:2px solid #e46955; border-radius:50%; pointer-events:none; z-index:15; display:none; box-shadow:0 0 8px #000a; }
-#winch-reticle::before,#winch-reticle::after { content:""; position:absolute; background:currentColor; }
-#winch-reticle::before { width:28px; height:2px; left:-6px; top:7px; }
-#winch-reticle::after { width:2px; height:28px; left:7px; top:-6px; }
-#winch-reticle.visible { display:block; color:#e46955; }
-#winch-reticle.valid { border-color:#69e38a; color:#69e38a; }
+#winch-reticle { display:none; }
+#app > canvas.winch-targeting { cursor: not-allowed; }
+#app > canvas.winch-targeting.winch-target-valid { cursor: crosshair; }
 #workshop-overlay { position:fixed; inset:0; z-index:90; display:grid; grid-template-columns:220px minmax(0,1fr); color:#f4f1e8; background:linear-gradient(125deg,#111419fa,#202328f5); font:14px/1.35 system-ui,sans-serif; }
 .workshop-nav { padding:28px 18px; overflow:auto; border-right:1px solid #ffffff1e; background:#101216; }
 .workshop-nav h2 { margin:2px 0 22px; font-size:28px; }
