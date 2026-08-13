@@ -134,13 +134,14 @@ import type { World } from './world.js';
 import { COLLISION_GROUP_OWNED_VEHICLE, COLLISION_GROUP_WHEEL_RAY } from './collisionGroups.js';
 import {
   contactFrameInto,
-  createSteepWheelContact,
+  createSteepWheelContactResult,
   cylinderRotationInto,
   findHeightfieldLedgeContactInto,
-  findSteepWheelContactInto,
+  findSteepWheelContactsInto,
   wheelBasisInto,
   type ContactQuat,
   type SteepWheelContact,
+  type SteepWheelContactResult,
   type WheelBasis,
   type WheelContactFrame,
 } from './wheelContact.js';
@@ -494,13 +495,14 @@ export class SolidAxleVehicle implements VehicleLike {
   private readonly _axleScratch: [AxleStepScratch, AxleStepScratch] = [
     createAxleStepScratch(), createAxleStepScratch(),
   ];
-  /** One reusable steep/sidewall contact per wheel. The tyre phase reads the
-   *  contact its wheel resolved, so these cannot be a single shared slot. */
-  private readonly _ledgeStorage: [
-    SteepWheelContact, SteepWheelContact, SteepWheelContact, SteepWheelContact,
+  /** Two fixed steep-contact slots per wheel retain opposing constraints.
+   *  `_ledgeContacts` above points only at the validated driven patch. */
+  private readonly _ledgeContactSets: [
+    SteepWheelContactResult, SteepWheelContactResult,
+    SteepWheelContactResult, SteepWheelContactResult,
   ] = [
-    createSteepWheelContact(), createSteepWheelContact(),
-    createSteepWheelContact(), createSteepWheelContact(),
+    createSteepWheelContactResult(), createSteepWheelContactResult(),
+    createSteepWheelContactResult(), createSteepWheelContactResult(),
   ];
   private readonly _ledgeSemanticsStorage: [
     TireContactSemantics, TireContactSemantics, TireContactSemantics, TireContactSemantics,
@@ -510,6 +512,9 @@ export class SolidAxleVehicle implements VehicleLike {
     { zone: 'tread', treadFraction: 0, axleAlignment: 0 },
     { zone: 'tread', treadFraction: 0, axleAlignment: 0 },
   ];
+  private readonly _constraintSemantics: TireContactSemantics = {
+    zone: 'tread', treadFraction: 0, axleAlignment: 0,
+  };
   private readonly _contactFrames: [
     WheelContactFrame, WheelContactFrame, WheelContactFrame, WheelContactFrame,
   ] = [
@@ -778,6 +783,10 @@ export class SolidAxleVehicle implements VehicleLike {
       ledgeContacts[wheelIndex] = null;
       ledgeSemantics[wheelIndex] = null;
       ledgeLoads[wheelIndex] = 0;
+      const contactSet = this._ledgeContactSets[wheelIndex]!;
+      contactSet.count = 0;
+      contactSet.primaryContactIndex = -1;
+      contactSet.driveContactIndex = -1;
     }
 
     // 2. Smooth steering.
@@ -1050,27 +1059,35 @@ export class SolidAxleVehicle implements VehicleLike {
       // validate the upper surface analytically because Rapier 0.14 may return
       // null when the same heightfield/cylinder pair is reconstructed through
       // `contactShape`.
-      let ledge = w.volumeSupport
-        ? (w.contactNormal.y < LEDGE_CONTACT.maxSupportNormalY
-          ? findHeightfieldLedgeContactInto(
-            this.world.terrain,
-            center,
-            w.contactPoint,
-            w.contactNormal,
-            basis.forward,
-            basis.axle,
-            this.geom.wheelRadius,
-            this.geom.wheelWidth / 2,
-            LEDGE_CONTACT.prediction,
-            LEDGE_CONTACT.maxSupportNormalY,
-            LEDGE_CONTACT.maxClimbHeight,
-            LEDGE_CONTACT.edgeAdvance * this.tireEdgeWrapPressureScale
-              * TUNING.tireEdgeWrapMult,
-            this.world.terrainCollider.friction(),
-            this._ledgeStorage[wheelIndex]!,
-          )
-          : null)
-        : findSteepWheelContactInto(
+      const contactSet = this._ledgeContactSets[wheelIndex]!;
+      contactSet.count = 0;
+      contactSet.primaryContactIndex = -1;
+      contactSet.driveContactIndex = -1;
+      if (w.volumeSupport && w.contactNormal.y < LEDGE_CONTACT.maxSupportNormalY) {
+        const terrainLedge = findHeightfieldLedgeContactInto(
+          this.world.terrain,
+          center,
+          w.contactPoint,
+          w.contactNormal,
+          basis.forward,
+          basis.axle,
+          this.geom.wheelRadius,
+          this.geom.wheelWidth / 2,
+          LEDGE_CONTACT.prediction,
+          LEDGE_CONTACT.maxSupportNormalY,
+          LEDGE_CONTACT.maxClimbHeight,
+          LEDGE_CONTACT.edgeAdvance * this.tireEdgeWrapPressureScale
+            * TUNING.tireEdgeWrapMult,
+          this.world.terrainCollider.friction(),
+          contactSet.contacts[0]!,
+        );
+        if (terrainLedge) {
+          contactSet.count = 1;
+          contactSet.primaryContactIndex = 0;
+          contactSet.driveContactIndex = terrainLedge.climbDirection ? 0 : -1;
+        }
+      } else if (!w.volumeSupport) {
+        findSteepWheelContactsInto(
           this.world.world,
           this.wheelShape,
           w.hasPreviousCenter ? w.previousCenter : null,
@@ -1085,20 +1102,28 @@ export class SolidAxleVehicle implements VehicleLike {
             * TUNING.tireEdgeWrapMult,
           basis.forward,
           COLLISION_GROUP_WHEEL_RAY,
-          this._ledgeStorage[wheelIndex]!,
+          contactSet,
           basis.axle,
         );
-      if (!ledge && !w.contact) {
-        ledge = findTerrainSidewallContactInto(
+      }
+      if (contactSet.count === 0 && !w.contact) {
+        const sidewall = findTerrainSidewallContactInto(
           this.world,
           center,
           basis.axle,
           this.geom.wheelRadius,
           this.geom.wheelWidth / 2,
           LEDGE_CONTACT.prediction,
-          this._ledgeStorage[wheelIndex]!,
+          contactSet.contacts[0]!,
         );
+        if (sidewall) {
+          contactSet.count = 1;
+          contactSet.primaryContactIndex = 0;
+        }
       }
+      const ledge = contactSet.driveContactIndex >= 0
+        ? contactSet.contacts[contactSet.driveContactIndex]!
+        : null;
       ledgeContacts[wheelIndex] = ledge;
       const semantics = ledge
         ? classifyTireContactInto(
@@ -1109,7 +1134,8 @@ export class SolidAxleVehicle implements VehicleLike {
         )
         : null;
       ledgeSemantics[wheelIndex] = semantics;
-      w.ledgeContact = ledge !== null;
+      w.ledgeContact = contactSet.count > 0;
+      w.ledgeContactCount = contactSet.count;
       w.ledgeNormalForce = 0;
       w.ledgeLongForce = 0;
       w.previousCenter.x = center.x;
@@ -1180,60 +1206,77 @@ export class SolidAxleVehicle implements VehicleLike {
       // volume-support hit, so its suspension reaction already owns the
       // contact normal. Discrete scenery has no such support and keeps the
       // separate sidewall constraint below.
-      if (ledge && !w.volumeSupport) {
-        const normalSpeed = pointVelocityDot(lv, av, t, ledge.point, ledge.normal);
-        const constraint = solveSidewallConstraintInto(
-          ledge.penetration,
-          normalSpeed,
-          (VEHICLE.mass * this.geom.massMult) * LEDGE_CONTACT.normalMassFraction,
-          dt,
-          w.previousTireDeflection,
-          carcass.maxDeflection,
-          LEDGE_CONTACT.normalCorrectionRate * TUNING.tireSidewallCorrectionMult,
-          LEDGE_CONTACT.maxNormalCorrectionSpeed * TUNING.tireSidewallCorrectionMult,
-          LEDGE_CONTACT.maxForce * dt,
-          SIDEWALL_RELEASE_RATE,
-          scratch.sidewall,
-        );
-        const normalForce = constraint.impulse / dt;
-        ledgeLoads[wheelIndex] = normalForce;
-        w.ledgeNormalForce = normalForce;
-        if (!w.contact || constraint.deflection > w.tireDeflection) {
-          w.tireDeflection = constraint.deflection;
-          w.tireContactNormal.x = ledge.normal.x;
-          w.tireContactNormal.y = ledge.normal.y;
-          w.tireContactNormal.z = ledge.normal.z;
-          w.contactZone = semantics?.zone ?? 'sidewall';
-          w.treadFraction = semantics?.treadFraction ?? 0;
-          w.suspensionAxisAlignment = Math.max(0, -(
-            ledge.normal.x * rayDir.x + ledge.normal.y * rayDir.y + ledge.normal.z * rayDir.z
-          ));
-        }
-        if (normalForce > 0) {
+      if (contactSet.count > 0 && !w.volumeSupport) {
+        const contactBudgetShare = 1 / contactSet.count;
+        let totalNormalForce = 0;
+        for (let contactIndex = 0; contactIndex < contactSet.count; contactIndex++) {
+          const constraintContact = contactSet.contacts[contactIndex]!;
+          const constraintSemantics = classifyTireContactInto(
+            constraintContact.normal.x * basis.axle.x
+              + constraintContact.normal.y * basis.axle.y
+              + constraintContact.normal.z * basis.axle.z,
+            this._constraintSemantics,
+          );
+          const normalSpeed = pointVelocityDot(
+            lv, av, t, constraintContact.point, constraintContact.normal,
+          );
+          const constraint = solveSidewallConstraintInto(
+            constraintContact.penetration,
+            normalSpeed,
+            (VEHICLE.mass * this.geom.massMult)
+              * LEDGE_CONTACT.normalMassFraction * contactBudgetShare,
+            dt,
+            w.previousTireDeflection,
+            carcass.maxDeflection,
+            LEDGE_CONTACT.normalCorrectionRate * TUNING.tireSidewallCorrectionMult,
+            LEDGE_CONTACT.maxNormalCorrectionSpeed * TUNING.tireSidewallCorrectionMult,
+            LEDGE_CONTACT.maxForce * dt * contactBudgetShare,
+            SIDEWALL_RELEASE_RATE,
+            scratch.sidewall,
+          );
+          const normalForce = constraint.impulse / dt;
+          totalNormalForce += normalForce;
+          if (!w.contact || constraint.deflection > w.tireDeflection) {
+            w.tireDeflection = constraint.deflection;
+            w.tireContactNormal.x = constraintContact.normal.x;
+            w.tireContactNormal.y = constraintContact.normal.y;
+            w.tireContactNormal.z = constraintContact.normal.z;
+            w.contactZone = constraintSemantics.zone;
+            w.treadFraction = constraintSemantics.treadFraction;
+            w.suspensionAxisAlignment = Math.max(0, -(
+              constraintContact.normal.x * rayDir.x
+                + constraintContact.normal.y * rayDir.y
+                + constraintContact.normal.z * rayDir.z
+            ));
+          }
+          if (normalForce <= 0) continue;
+
           const sf = this._scratchForce;
-          sf.x = ledge.normal.x * constraint.impulse;
-          sf.y = ledge.normal.y * constraint.impulse;
-          sf.z = ledge.normal.z * constraint.impulse;
-          if (semantics?.zone === 'tread') this.body.applyImpulse(sf, true);
-          else this.body.applyImpulseAtPoint(sf, ledge.point, true);
-          // A pure sidewall has ordinary carcass scrub, but no rolling
-          // frame and therefore no drive/brake torque. Apply that scrub as
-          // a bounded chassis impulse at the physical patch.
-          if (semantics?.treadFraction === 0) {
-            const armX = ledge.point.x - t.x;
-            const armY = ledge.point.y - t.y;
-            const armZ = ledge.point.z - t.z;
+          sf.x = constraintContact.normal.x * constraint.impulse;
+          sf.y = constraintContact.normal.y * constraint.impulse;
+          sf.z = constraintContact.normal.z * constraint.impulse;
+          if (constraintSemantics.zone === 'tread') this.body.applyImpulse(sf, true);
+          else this.body.applyImpulseAtPoint(sf, constraintContact.point, true);
+
+          // Contacts without the selected forward climb target resist local
+          // tangential motion through bounded carcass scrub, but never receive
+          // wheel torque. The shared normal budget also bounds total scrub.
+          if (constraintContact !== ledge) {
+            const armX = constraintContact.point.x - t.x;
+            const armY = constraintContact.point.y - t.y;
+            const armZ = constraintContact.point.z - t.z;
             const vx = lv.x + av.y * armZ - av.z * armY;
             const vy = lv.y + av.z * armX - av.x * armZ;
             const vz = lv.z + av.x * armY - av.y * armX;
-            const normalV = vx * ledge.normal.x + vy * ledge.normal.y + vz * ledge.normal.z;
-            const tx = vx - ledge.normal.x * normalV;
-            const ty = vy - ledge.normal.y * normalV;
-            const tz = vz - ledge.normal.z * normalV;
+            const normalV = vx * constraintContact.normal.x
+              + vy * constraintContact.normal.y + vz * constraintContact.normal.z;
+            const tx = vx - constraintContact.normal.x * normalV;
+            const ty = vy - constraintContact.normal.y * normalV;
+            const tz = vz - constraintContact.normal.z * normalV;
             const tangentSpeed = Math.hypot(tx, ty, tz);
             if (tangentSpeed > 1e-6) {
               const tangentImpulse = Math.min(
-                tangentSpeed * quarterMass,
+                tangentSpeed * quarterMass * contactBudgetShare,
                 constraint.impulse
                   * this.geom.spec.tireCarcass.sidewallFrictionRatio
                   * TUNING.tireSidewallFrictionMult,
@@ -1241,10 +1284,12 @@ export class SolidAxleVehicle implements VehicleLike {
               sf.x = -tx / tangentSpeed * tangentImpulse;
               sf.y = -ty / tangentSpeed * tangentImpulse;
               sf.z = -tz / tangentSpeed * tangentImpulse;
-              this.body.applyImpulseAtPoint(sf, ledge.point, true);
+              this.body.applyImpulseAtPoint(sf, constraintContact.point, true);
             }
           }
         }
+        ledgeLoads[wheelIndex] = totalNormalForce;
+        w.ledgeNormalForce = totalNormalForce;
       }
       w.previousTireDeflection = w.tireDeflection;
     }

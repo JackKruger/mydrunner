@@ -2,6 +2,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { BUTTON_FRONT_LOCKER, BUTTON_RANGE, BUTTON_REAR_LOCKER, EMPTY_INPUT } from '../types.js';
 import { createStockBuild } from '../vehicleBuild.js';
+import type { VehicleBuild } from '../types.js';
 import {
   COLLISION_GROUP_WORLD,
   COLLISION_GROUP_WHEEL_RAY,
@@ -16,9 +17,11 @@ import {
   dryWater,
 } from '../physics/terrain.js';
 import {
+  createSteepWheelContactResult,
   cylinderRotation,
   findHeightfieldLedgeContact,
   findSteepWheelContact,
+  findSteepWheelContactsInto,
 } from '../physics/wheelContact.js';
 import type { WheelKinematic } from '../physics/wheelDynamics.js';
 import { World, initRapier } from '../physics/world.js';
@@ -37,6 +40,33 @@ function addStep(
   );
   world.createCollider(
     RAPIER.ColliderDesc.cuboid(8, halfHeight, 6)
+      .setFriction(1)
+      .setCollisionGroups(COLLISION_GROUP_WORLD),
+    body,
+  );
+  world.step();
+}
+
+function addRock(world: RAPIER.World, radius: number, z: number, x = 0): void {
+  const body = world.createRigidBody(
+    RAPIER.RigidBodyDesc.fixed().setTranslation(x, radius * 0.6, z),
+  );
+  world.createCollider(
+    RAPIER.ColliderDesc.ball(radius)
+      .setFriction(1)
+      .setCollisionGroups(COLLISION_GROUP_WORLD),
+    body,
+  );
+  world.step();
+}
+
+function addAxialLog(world: RAPIER.World, radius: number, z: number): void {
+  const halfSqrt = Math.SQRT1_2;
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+  world.createCollider(
+    RAPIER.ColliderDesc.cylinder(2, radius)
+      .setTranslation(0, radius, z)
+      .setRotation({ x: 0, y: 0, z: -halfSqrt, w: halfSqrt })
       .setFriction(1)
       .setCollisionGroups(COLLISION_GROUP_WORLD),
     body,
@@ -219,6 +249,74 @@ describe('wheel ledge contact geometry', () => {
     expect(hit!.climbTopY).toBeNull();
     world.free();
   });
+
+  it.each([
+    ['spherical rock', (world: RAPIER.World) => addRock(world, 0.35, 2), 1.225],
+    ['cylindrical log', (world: RAPIER.World) => addAxialLog(world, 0.35, 2), 1.195],
+  ])('finds an ahead climb target on a %s at first practical contact', (_name, add, centerZ) => {
+    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    add(world);
+    const wheelCenter = { x: 0, y: 0.46, z: centerZ };
+    const hit = findSteepWheelContact(
+      world,
+      new RAPIER.Cylinder(0.21, 0.46),
+      null,
+      wheelCenter,
+      cylinderRotation({ x: 1, y: 0, z: 0 }),
+      0.46,
+      0.21,
+      0.015,
+      0.65,
+      0.9,
+      0.08,
+      { x: 0, y: 0, z: 1 },
+      COLLISION_GROUP_WHEEL_RAY,
+      { x: 1, y: 0, z: 0 },
+    );
+
+    expect(hit).not.toBeNull();
+    expect(hit!.climbDirection).not.toBeNull();
+    expect(hit!.climbDirection!.y).toBeGreaterThan(0);
+    expect(hit!.climbDirection!.z).toBeGreaterThan(0);
+    world.free();
+  });
+
+  it('retains opposing log constraints and selects only the forward face for drive', () => {
+    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+    addAxialLog(world, 0.25, -0.55);
+    addAxialLog(world, 0.25, 0.55);
+    const result = createSteepWheelContactResult();
+    const wheelShape = new RAPIER.Cylinder(0.21, 0.46);
+    for (const centerZ of [-0.002, 0, 0.002]) {
+      findSteepWheelContactsInto(
+        world,
+        wheelShape,
+        null,
+        { x: 0, y: 0.46, z: centerZ },
+        cylinderRotation({ x: 1, y: 0, z: 0 }),
+        0.46,
+        0.21,
+        0.015,
+        0.65,
+        0.9,
+        0.08,
+        { x: 0, y: 0, z: 1 },
+        COLLISION_GROUP_WHEEL_RAY,
+        result,
+        { x: 1, y: 0, z: 0 },
+      );
+
+      expect(result.count).toBe(2);
+      expect(result.contacts[0]!.normal.z * result.contacts[1]!.normal.z).toBeLessThan(0);
+      expect(result.driveContactIndex).toBeGreaterThanOrEqual(0);
+      const driven = result.contacts[result.driveContactIndex]!;
+      expect(driven.normal.z).toBeLessThan(0);
+      expect(driven.climbDirection!.z).toBeGreaterThan(0);
+      const other = result.contacts[result.driveContactIndex === 0 ? 1 : 0]!;
+      expect(other.climbDirection).toBeNull();
+    }
+    world.free();
+  });
 });
 
 function flatVehicleWorld(): { world: World; vehicle: SolidAxleVehicle } {
@@ -322,4 +420,147 @@ describe('solid axle sharp-step traversal', () => {
     expect(maxPitchQuaternionX).toBeLessThan(0.5);
     world.dispose();
   });
+
+  function obstacleVehicleWorld(
+    build: VehicleBuild,
+    obstacle: 'rocks' | 'log' | 'boulder',
+    radius: number,
+  ): { world: World; vehicle: SolidAxleVehicle } {
+    const resolution = 16;
+    const terrain: TerrainData = {
+      size: 40,
+      resolution,
+      heights: new Float32Array(resolution * resolution),
+      surfaces: new Uint8Array(resolution * resolution).fill(Surface.Road),
+      seed: 0,
+      mountain: mountainFor(40),
+      petrolStation: petrolStationPadFor(40),
+      ...dryWater(resolution),
+      bogs: [],
+      roads: [],
+    };
+    const world = new World({ terrain });
+    const trackHalf = build.baseId === 'outclaw' ? 1.07 : 0.89;
+    if (obstacle === 'log') addAxialLog(world.world, radius, 5);
+    else {
+      addRock(world.world, radius, 5, -trackHalf);
+      addRock(world.world, radius, 5, trackHalf);
+    }
+    const vehicle = new SolidAxleVehicle(
+      world,
+      `round-${obstacle}-${build.baseId}`,
+      { position: { x: 0, y: 1.6, z: 0 } },
+      build,
+    );
+    world.vehicles.set(vehicle.id, vehicle);
+    return { world, vehicle };
+  }
+
+  function runRoundObstacle(
+    build: VehicleBuild,
+    obstacle: 'rocks' | 'log' | 'boulder',
+    radius: number,
+    ticks: number,
+  ): {
+    clearedTick: number;
+    maxPitch: number;
+    maxVerticalSpeed: number;
+    maxDrivenLedgeForce: number;
+    maxContactCount: number;
+    finalZ: number;
+    finite: boolean;
+  } {
+    const { world, vehicle } = obstacleVehicleWorld(build, obstacle, radius);
+    for (let i = 0; i < 180; i++) world.step();
+    vehicle.setInput({
+      ...EMPTY_INPUT,
+      seq: 1,
+      buttons: BUTTON_RANGE | BUTTON_FRONT_LOCKER | BUTTON_REAR_LOCKER,
+    });
+    world.step();
+    const wheels = (vehicle as unknown as { wheels: WheelKinematic[] }).wheels;
+    let clearedTick = -1;
+    let maxPitch = 0;
+    let maxVerticalSpeed = 0;
+    let maxDrivenLedgeForce = 0;
+    let maxContactCount = 0;
+    let finite = true;
+    for (let tick = 0; tick < ticks; tick++) {
+      vehicle.setInput({ ...EMPTY_INPUT, seq: tick + 2, throttle: 0.30 });
+      world.step();
+      const state = vehicle.getState();
+      maxPitch = Math.max(maxPitch, Math.abs(state.rotation.x));
+      maxVerticalSpeed = Math.max(maxVerticalSpeed, Math.abs(state.linVel.y));
+      finite &&= Number.isFinite(state.position.x + state.position.y + state.position.z)
+        && Number.isFinite(state.rotation.x + state.rotation.y + state.rotation.z + state.rotation.w);
+      for (const wheel of wheels) {
+        maxDrivenLedgeForce = Math.max(maxDrivenLedgeForce, Math.abs(wheel.ledgeLongForce));
+        maxContactCount = Math.max(maxContactCount, wheel.ledgeContactCount);
+      }
+      if (state.position.z > 7.5) {
+        clearedTick = tick;
+        break;
+      }
+    }
+    const finalZ = vehicle.getState().position.z;
+    world.dispose();
+    return {
+      clearedTick, maxPitch, maxVerticalSpeed, maxDrivenLedgeForce,
+      maxContactCount, finalZ, finite,
+    };
+  }
+
+  it.each(['rocks', 'log'] as const)(
+    'clears prepared-crawler 0.35 m %s without launch or excessive pitch',
+    (obstacle) => {
+      const prepared: VehicleBuild = {
+        ...createStockBuild('outclaw'),
+        suspensionId: 'outclaw.suspension.flex-100',
+        axleId: 'outclaw.axle.portal-240',
+        tireId: 'outclaw.tire.xt-40-wide',
+        wheelId: 'outclaw.wheel.beadlock-alloy',
+        frontLocker: true,
+        rearLocker: true,
+      };
+      const run = runRoundObstacle(prepared, obstacle, 0.35, 760);
+      expect(run.finite).toBe(true);
+      expect(run.clearedTick, JSON.stringify(run)).toBeGreaterThanOrEqual(0);
+      expect(run.maxContactCount).toBeGreaterThan(0);
+      expect(run.maxDrivenLedgeForce).toBeGreaterThan(250);
+      expect(run.maxPitch).toBeLessThan(0.55);
+      expect(run.maxVerticalSpeed).toBeLessThan(2.5);
+    },
+    10_000,
+  );
+
+  it.each(['rocks', 'log'] as const)(
+    'lets a stock Ridgeback in 4L clear 0.25 m %s safely',
+    (obstacle) => {
+      const run = runRoundObstacle(createStockBuild('ridgeback'), obstacle, 0.25, 760);
+      expect(run.finite).toBe(true);
+      expect(run.clearedTick, JSON.stringify(run)).toBeGreaterThanOrEqual(0);
+      expect(run.maxPitch).toBeLessThan(0.55);
+      expect(run.maxVerticalSpeed).toBeLessThan(2.5);
+    },
+    10_000,
+  );
+
+  it('stalls stably at paired 0.70 m boulders without driven ledge lift', () => {
+    const prepared: VehicleBuild = {
+      ...createStockBuild('outclaw'),
+      suspensionId: 'outclaw.suspension.flex-100',
+      axleId: 'outclaw.axle.portal-240',
+      tireId: 'outclaw.tire.xt-40-wide',
+      wheelId: 'outclaw.wheel.beadlock-alloy',
+      frontLocker: true,
+      rearLocker: true,
+    };
+    const run = runRoundObstacle(prepared, 'boulder', 0.70, 620);
+    expect(run.finite).toBe(true);
+    expect(run.clearedTick).toBe(-1);
+    expect(run.finalZ).toBeLessThan(5);
+    expect(run.maxDrivenLedgeForce).toBe(0);
+    expect(run.maxPitch).toBeLessThan(0.45);
+    expect(run.maxVerticalSpeed).toBeLessThan(1.8);
+  }, 10_000);
 });

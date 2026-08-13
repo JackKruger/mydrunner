@@ -48,6 +48,18 @@ export interface SteepWheelContact {
   readonly climbStore: ContactVec3;
 }
 
+/** Fixed-capacity result for the tyre-volume query. Two independent normal
+ *  constraints are enough to represent a tyre wedged between discrete
+ *  obstacles without allocating a manifold in the vehicle hot loop. */
+export interface SteepWheelContactResult {
+  readonly contacts: [SteepWheelContact, SteepWheelContact];
+  count: number;
+  /** Most constraining contact, whether or not it can transmit drive. */
+  primaryContactIndex: number;
+  /** Stable forward contact with a validated climb target, or -1. */
+  driveContactIndex: number;
+}
+
 const ZERO: ContactVec3 = { x: 0, y: 0, z: 0 };
 
 export function wheelBasis(
@@ -183,11 +195,13 @@ export function findSteepWheelContact(
   queryGroups: number,
   wheelAxle?: ContactVec3,
 ): SteepWheelContact | null {
-  return findSteepWheelContactInto(
+  const result = createSteepWheelContactResult();
+  findSteepWheelContactsInto(
     world, shape, previousCenter, currentCenter, rotation, wheelRadius, wheelHalfWidth,
     prediction, maxSupportNormalY, maxClimbHeight, edgeAdvance, wheelForward, queryGroups,
-    createSteepWheelContact(), wheelAxle,
+    result, wheelAxle,
   );
+  return result.primaryContactIndex >= 0 ? result.contacts[result.primaryContactIndex]! : null;
 }
 
 /** A reusable `findSteepWheelContactInto` result. Owns storage for the climb
@@ -203,6 +217,15 @@ export function createSteepWheelContact(): SteepWheelContact {
     friction: 0,
     timeOfImpact: 0,
     climbStore: { x: 0, y: 0, z: 0 },
+  };
+}
+
+export function createSteepWheelContactResult(): SteepWheelContactResult {
+  return {
+    contacts: [createSteepWheelContact(), createSteepWheelContact()],
+    count: 0,
+    primaryContactIndex: -1,
+    driveContactIndex: -1,
   };
 }
 
@@ -372,8 +395,7 @@ const query = {
   currentCenter: null as unknown as ContactVec3,
   wheelForward: null as unknown as ContactVec3,
   wheelAxle: undefined as ContactVec3 | undefined,
-  out: null as unknown as SteepWheelContact,
-  climbOut: null as unknown as ContactVec3,
+  result: null as unknown as SteepWheelContactResult,
   climbScratch: { x: 0, y: 0, z: 0 },
   start: { x: 0, y: 0, z: 0 },
   delta: { x: 0, y: 0, z: 0 },
@@ -386,8 +408,8 @@ const query = {
   maxClimbHeight: 0,
   edgeAdvance: 0,
   queryGroups: 0,
-  bestSeverity: -Infinity,
-  found: false,
+  severity0: -Infinity,
+  severity1: -Infinity,
 };
 
 const aabbCenter: ContactVec3 = { x: 0, y: 0, z: 0 };
@@ -413,6 +435,39 @@ export function findSteepWheelContactInto(
   out: SteepWheelContact,
   wheelAxle?: ContactVec3,
 ): SteepWheelContact | null {
+  findSteepWheelContactsInto(
+    world, shape, previousCenter, currentCenter, rotation, wheelRadius, wheelHalfWidth,
+    prediction, maxSupportNormalY, maxClimbHeight, edgeAdvance, wheelForward, queryGroups,
+    compatibilityResult, wheelAxle,
+  );
+  if (compatibilityResult.primaryContactIndex < 0) return null;
+  copySteepWheelContact(
+    compatibilityResult.contacts[compatibilityResult.primaryContactIndex]!,
+    out,
+  );
+  return out;
+}
+
+/** Allocation-free steep query retaining up to two independent normal
+ *  constraints. Similar normals compete for one slot; opposing or otherwise
+ *  distinct faces can coexist. @hotloop */
+export function findSteepWheelContactsInto(
+  world: RAPIER.World,
+  shape: RAPIER.Shape,
+  previousCenter: ContactVec3 | null,
+  currentCenter: ContactVec3,
+  rotation: ContactQuat,
+  wheelRadius: number,
+  wheelHalfWidth: number,
+  prediction: number,
+  maxSupportNormalY: number,
+  maxClimbHeight: number,
+  edgeAdvance: number,
+  wheelForward: ContactVec3,
+  queryGroups: number,
+  out: SteepWheelContactResult,
+  wheelAxle?: ContactVec3,
+): SteepWheelContactResult {
   const start = query.start;
   const source = previousCenter ?? currentCenter;
   start.x = source.x; start.y = source.y; start.z = source.z;
@@ -434,23 +489,33 @@ export function findSteepWheelContactInto(
   query.currentCenter = currentCenter;
   query.wheelForward = wheelForward;
   query.wheelAxle = wheelAxle;
-  query.out = out;
-  query.climbOut = out.climbStore;
+  query.result = out;
   query.wheelRadius = wheelRadius;
   query.prediction = prediction;
   query.maxSupportNormalY = maxSupportNormalY;
   query.maxClimbHeight = maxClimbHeight;
   query.edgeAdvance = edgeAdvance;
   query.queryGroups = queryGroups;
-  query.bestSeverity = -Infinity;
-  query.found = false;
+  query.severity0 = -Infinity;
+  query.severity1 = -Infinity;
+  out.count = 0;
+  out.primaryContactIndex = -1;
+  out.driveContactIndex = -1;
 
   world.collidersWithAabbIntersectingAabb(aabbCenter, aabbHalf, considerCollider);
-  return query.found ? out : null;
+  selectContactRoles(out);
+  return out;
 }
+
+const compatibilityResult = createSteepWheelContactResult();
 
 function considerCollider(collider: RAPIER.Collider): boolean {
   if (!interactionGroupsMatch(query.queryGroups, collider.collisionGroups())) return true;
+  // Heightfields are continuous terrain and have an analytic ledge path fed
+  // by the suspension cylinder cast. Rapier may report near-horizontal cap
+  // normals for cylinder/heightfield `contactShape`; treating those as a
+  // discrete face creates false sidewall or climb contacts on flat ground.
+  if (collider.shapeType() === RAPIER_HEIGHTFIELD_SHAPE_TYPE) return true;
 
   const delta = query.delta;
   const prediction = query.prediction;
@@ -510,39 +575,119 @@ function considerCollider(collider: RAPIER.Collider): boolean {
   const penetration = Math.max(0, -contact.distance, sweptOvershoot);
   const proximity = Math.max(0, prediction - Math.max(0, contact.distance));
   const severity = penetration + proximity;
-  const best = query.out;
-  if (
-    !query.found
-    || severity > query.bestSeverity + 1e-7
-    || (Math.abs(severity - query.bestSeverity) <= 1e-7 && timeOfImpact < best.timeOfImpact)
-  ) {
-    query.bestSeverity = severity;
-    query.found = true;
-    best.point.x = contact.point1.x;
-    best.point.y = contact.point1.y;
-    best.point.z = contact.point1.z;
-    // `normal` is the shared scratch the next candidate overwrites, so the
-    // accepted one has to be copied out rather than aliased.
-    best.normal.x = normal.x;
-    best.normal.y = normal.y;
-    best.normal.z = normal.z;
-    // The climb scratch is rewritten by every candidate, so the accepted one
-    // is copied into this result's own storage before it is pointed at.
-    if (climbTopY === null) {
-      best.climbDirection = null;
-    } else {
-      query.climbOut.x = query.climbScratch.x;
-      query.climbOut.y = query.climbScratch.y;
-      query.climbOut.z = query.climbScratch.z;
-      best.climbDirection = query.climbOut;
-    }
-    best.climbTopY = climbTopY;
-    best.distance = contact.distance;
-    best.penetration = penetration;
-    best.friction = collider.friction();
-    best.timeOfImpact = timeOfImpact;
-  }
+  retainCandidate(
+    contact.point1, normal, climbTopY, contact.distance, penetration,
+    collider.friction(), timeOfImpact, severity,
+  );
   return true;
+}
+
+/** Keep the strongest representative of each distinct constraint plane. */
+function retainCandidate(
+  point: ContactVec3,
+  normal: ContactVec3,
+  climbTopY: number | null,
+  distance: number,
+  penetration: number,
+  friction: number,
+  timeOfImpact: number,
+  severity: number,
+): void {
+  const result = query.result;
+  let slot = -1;
+  for (let i = 0; i < result.count; i++) {
+    if (dot(normal, result.contacts[i]!.normal) >= 0.75) {
+      slot = i;
+      break;
+    }
+  }
+  if (slot >= 0) {
+    const oldSeverity = slot === 0 ? query.severity0 : query.severity1;
+    const old = result.contacts[slot]!;
+    if (
+      severity < oldSeverity - 1e-7
+      || (Math.abs(severity - oldSeverity) <= 1e-7 && timeOfImpact >= old.timeOfImpact)
+    ) return;
+  } else if (result.count < 2) {
+    slot = result.count++;
+  } else {
+    slot = query.severity0 <= query.severity1 ? 0 : 1;
+    const oldSeverity = slot === 0 ? query.severity0 : query.severity1;
+    if (severity <= oldSeverity + 1e-7) return;
+  }
+
+  const out = result.contacts[slot]!;
+  out.point.x = point.x;
+  out.point.y = point.y;
+  out.point.z = point.z;
+  out.normal.x = normal.x;
+  out.normal.y = normal.y;
+  out.normal.z = normal.z;
+  if (climbTopY === null) {
+    out.climbDirection = null;
+  } else {
+    out.climbStore.x = query.climbScratch.x;
+    out.climbStore.y = query.climbScratch.y;
+    out.climbStore.z = query.climbScratch.z;
+    out.climbDirection = out.climbStore;
+  }
+  out.climbTopY = climbTopY;
+  out.distance = distance;
+  out.penetration = penetration;
+  out.friction = friction;
+  out.timeOfImpact = timeOfImpact;
+  if (slot === 0) query.severity0 = severity;
+  else query.severity1 = severity;
+}
+
+function selectContactRoles(result: SteepWheelContactResult): void {
+  let primary = -1;
+  let drive = -1;
+  let primarySeverity = -Infinity;
+  let driveScore = -Infinity;
+  for (let i = 0; i < result.count; i++) {
+    const contact = result.contacts[i]!;
+    const severity = i === 0 ? query.severity0 : query.severity1;
+    if (severity > primarySeverity + 1e-7) {
+      primarySeverity = severity;
+      primary = i;
+    }
+    if (!contact.climbDirection) continue;
+    const horizontalNormal = Math.hypot(contact.normal.x, contact.normal.z);
+    const approach = horizontalNormal > 1e-8
+      ? -(contact.normal.x * query.wheelForward.x + contact.normal.z * query.wheelForward.z)
+        / horizontalNormal
+      : -1;
+    const score = approach * 2 + severity;
+    if (score > driveScore + 1e-7) {
+      driveScore = score;
+      drive = i;
+    }
+  }
+  result.primaryContactIndex = primary;
+  result.driveContactIndex = drive;
+}
+
+function copySteepWheelContact(source: SteepWheelContact, out: SteepWheelContact): void {
+  out.point.x = source.point.x;
+  out.point.y = source.point.y;
+  out.point.z = source.point.z;
+  out.normal.x = source.normal.x;
+  out.normal.y = source.normal.y;
+  out.normal.z = source.normal.z;
+  if (source.climbDirection) {
+    out.climbStore.x = source.climbDirection.x;
+    out.climbStore.y = source.climbDirection.y;
+    out.climbStore.z = source.climbDirection.z;
+    out.climbDirection = out.climbStore;
+  } else {
+    out.climbDirection = null;
+  }
+  out.climbTopY = source.climbTopY;
+  out.distance = source.distance;
+  out.penetration = source.penetration;
+  out.friction = source.friction;
+  out.timeOfImpact = source.timeOfImpact;
 }
 
 /** Probe just beyond a steep face for its upper surface and return the arc
@@ -596,23 +741,49 @@ function findClimbTargetInto(
     return null;
   }
 
-  const probeInset = Math.max(0.04, prediction * 2);
-  probeOrigin.x = facePoint.x + intoHorizontal.x * probeInset;
-  probeOrigin.y = wheelCenter.y + maxClimbHeight;
-  probeOrigin.z = facePoint.z + intoHorizontal.z * probeInset;
-  const hit = collider.castRayAndGetNormal(probeRay, maxClimbHeight + wheelRadius, false);
-  if (!hit || hit.normal.y < maxSupportNormalY) return null;
+  const minimumInset = Math.max(0.04, prediction * 2);
+  const targetX = facePoint.x + intoHorizontal.x * edgeAdvance;
+  const targetZ = facePoint.z + intoHorizontal.z * edgeAdvance;
+  const targetAhead = (targetX - wheelCenter.x) * forwardHorizontal.x
+    + (targetZ - wheelCenter.z) * forwardHorizontal.z;
+  if (targetAhead <= 0) return null;
 
-  const topY = probeOrigin.y - hit.timeOfImpact;
-  const hubRise = topY + wheelRadius - wheelCenter.y;
-  if (hubRise <= prediction || hubRise > maxClimbHeight + prediction) return null;
+  // Rounded rocks and logs do not expose an upward normal a fixed 4 cm past
+  // their leading witness. Walk a bounded set of radius-scaled points into
+  // the same collider and accept the first reachable supporting patch.
+  for (let probeIndex = 0; probeIndex < CLIMB_PROBE_SCALES.length; probeIndex++) {
+    const probeInset = Math.max(minimumInset, wheelRadius * CLIMB_PROBE_SCALES[probeIndex]!);
+    probeOrigin.x = facePoint.x + intoHorizontal.x * probeInset;
+    probeOrigin.y = wheelCenter.y + maxClimbHeight;
+    probeOrigin.z = facePoint.z + intoHorizontal.z * probeInset;
+    const hit = collider.castRayAndGetNormal(probeRay, maxClimbHeight + wheelRadius, false);
+    if (!hit || hit.normal.y < maxSupportNormalY) continue;
 
-  outDirection.x = facePoint.x + intoHorizontal.x * edgeAdvance - wheelCenter.x;
-  outDirection.y = topY + wheelRadius - wheelCenter.y;
-  outDirection.z = facePoint.z + intoHorizontal.z * edgeAdvance - wheelCenter.z;
-  normalizeInto(outDirection, outDirection);
-  return topY;
+    const topY = probeOrigin.y - hit.timeOfImpact;
+    const hubRise = topY + wheelRadius - wheelCenter.y;
+    if (hubRise <= prediction || hubRise > maxClimbHeight + prediction) continue;
+    // A reachable tread hook must lie on the nearby shoulder of the
+    // obstacle. If the upward patch is almost a full tyre radius above the
+    // current face witness, a large round boulder can otherwise become
+    // "reachable" only after its collision normal has slowly jacked the hub
+    // upward. That turns an intended line-choice obstacle into a delayed
+    // vertical drive patch.
+    if (topY - facePoint.y > wheelRadius * 0.75 + prediction) continue;
+
+    outDirection.x = targetX - wheelCenter.x;
+    outDirection.y = topY + wheelRadius - wheelCenter.y;
+    outDirection.z = targetZ - wheelCenter.z;
+    normalizeInto(outDirection, outDirection);
+    if (dot(outDirection, forwardHorizontal) <= 0) return null;
+    return topY;
+  }
+  return null;
 }
+
+const CLIMB_PROBE_SCALES = [0.10, 0.22, 0.38, 0.58, 0.80, 1.0] as const;
+// Rapier 0.14 ShapeType.HeightField. Kept local so this deterministic helper
+// can retain a type-only Rapier import rather than adding runtime init work.
+const RAPIER_HEIGHTFIELD_SHAPE_TYPE = 7;
 
 function interactionGroupsMatch(a: number, b: number): boolean {
   const membershipA = (a >>> 16) & 0xffff;
