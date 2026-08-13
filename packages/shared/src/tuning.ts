@@ -45,6 +45,9 @@ export interface Tuning {
     concrete: number;
   };
   brakeForce: number;
+  /** Rear-axle handbrake force. Separate from brakeForce because the
+   *  handbrake must exceed rear tyre grip to lock the wheel. */
+  handbrakeForce: number;
   maxSteer: number;
   steerSpeed: number;
   maxSteerLateralAccel: number;
@@ -71,6 +74,10 @@ export interface Tuning {
   tireSlipAnglePeak: number;
   tireSlipAngleFalloff: number;
   tireSlipAngleFloor: number;
+  /** Lateral grip retained by a fully locked or fully spinning wheel. */
+  tireCombinedSlipFloor: number;
+  /** Sharpness of the lateral falloff past the surface's peak slip ratio. */
+  tireCombinedSlipFalloff: number;
   // Solid-axle vehicle knobs. Per-axle scaling so the front and rear can
   // diverge (front stiffer for nose-up climbs, rear softer for cargo
   // articulation). diffLock* toggles the per-axle differential lock
@@ -108,6 +115,7 @@ export interface Tuning {
 export const TUNING: Tuning = {
   surfaceFriction: { ...SURFACE_FRICTION } as Tuning['surfaceFriction'],
   brakeForce: VEHICLE.brakeForce,
+  handbrakeForce: VEHICLE.handbrakeForce,
   maxSteer: VEHICLE.maxSteer,
   steerSpeed: VEHICLE.steerSpeed,
   maxSteerLateralAccel: VEHICLE.maxSteerLateralAccel,
@@ -125,6 +133,8 @@ export const TUNING: Tuning = {
   tireSlipAnglePeak: TIRE_LATERAL.slipAnglePeak,
   tireSlipAngleFalloff: TIRE_LATERAL.slipAngleFalloff,
   tireSlipAngleFloor: TIRE_LATERAL.slipAngleFloor,
+  tireCombinedSlipFloor: TIRE_LATERAL.combinedSlipFloor,
+  tireCombinedSlipFalloff: TIRE_LATERAL.combinedSlipFalloff,
   axleFront: {
     rideStiffnessMult: 1,
     rideDampingMult: 1,

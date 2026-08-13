@@ -56,6 +56,8 @@ const SLIDERS: Slider[] = [
   { label: 'slipPeak (°)', description: 'Slip angle where lateral grip begins falling. Higher values feel forgiving; lower values enter a slide earlier.', min: 4, max: 16, step: 0.25, get: () => TUNING.tireSlipAnglePeak * 180 / Math.PI, set: (v) => (TUNING.tireSlipAnglePeak = v * Math.PI / 180) },
   { label: 'slipFalloff', description: 'Sharpness of lateral grip loss after the peak slip angle. Higher values produce a more sudden breakaway.', min: 1, max: 12, step: 0.25, get: () => TUNING.tireSlipAngleFalloff, set: (v) => (TUNING.tireSlipAngleFalloff = v) },
   { label: 'slideGripFloor', description: 'Minimum fraction of lateral grip retained in a fully developed slide. Higher values make recovery easier.', min: 0.1, max: 0.9, step: 0.02, get: () => TUNING.tireSlipAngleFloor, set: (v) => (TUNING.tireSlipAngleFloor = v) },
+  { label: 'lockedGripFloor', description: 'Fraction of cornering grip a fully locked or fully spinning wheel keeps. Low values let the handbrake swing the tail out; 1 removes combined-slip coupling entirely.', min: 0.05, max: 1, step: 0.05, get: () => TUNING.tireCombinedSlipFloor, set: (v) => (TUNING.tireCombinedSlipFloor = v) },
+  { label: 'lockedGripFalloff', description: 'How quickly cornering grip is lost as a wheel slides past its peak slip ratio. Higher values break the rear away sooner under the handbrake.', min: 0.5, max: 8, step: 0.25, get: () => TUNING.tireCombinedSlipFalloff, set: (v) => (TUNING.tireCombinedSlipFalloff = v) },
   // Per-surface friction.
   { group: 'TERRAIN + ROLLING', label: 'surf.road', description: 'Base friction coefficient for asphalt road cells, before the fitted tire and axle multipliers.', min: 0, max: 2, step: 0.02, get: () => TUNING.surfaceFriction.road, set: (v) => (TUNING.surfaceFriction.road = v) },
   { label: 'surf.dirt', description: 'Base friction coefficient for ordinary dirt trail cells.', min: 0, max: 2, step: 0.02, get: () => TUNING.surfaceFriction.dirt, set: (v) => (TUNING.surfaceFriction.dirt = v) },
@@ -83,6 +85,7 @@ const SLIDERS: Slider[] = [
   { label: 'barFrontShare', description: 'Fraction of total anti-roll response assigned to the front axle. More front share generally promotes understeer; less promotes oversteer.', min: 0.1, max: 0.9, step: 0.02, get: () => TUNING.antiRollFrontShare, set: (v) => (TUNING.antiRollFrontShare = v) },
   // Drivetrain.
   { group: 'POWERTRAIN + STEERING', label: 'brakeForce', description: 'Maximum service-brake force per wheel before the tire friction budget applies its own cap.', min: 500, max: 6000, step: 50, get: () => TUNING.brakeForce, set: (v) => (TUNING.brakeForce = v) },
+  { label: 'handbrakeForce', description: 'Rear-axle handbrake force. Above the rear tire grip limit it is a mechanical lock; below it the handbrake only threshold-brakes and the tail never steps out.', min: 500, max: 16000, step: 250, get: () => TUNING.handbrakeForce, set: (v) => (TUNING.handbrakeForce = v) },
   { label: 'engineTorque×', description: 'Multiplier on engine torque before the selected gear and final drive. It changes acceleration and wheelspin without changing shift points.', min: 0.5, max: 1.6, step: 0.05, get: () => TUNING.engineTorqueMult, set: (v) => (TUNING.engineTorqueMult = v) },
   { label: 'engineBrake×', description: 'Multiplier on off-throttle compression and speed-based engine braking. 0 allows free coasting while in gear.', min: 0, max: 2, step: 0.05, get: () => TUNING.engineBrakeMult, set: (v) => (TUNING.engineBrakeMult = v) },
   { label: 'maxSteer (rad)', description: 'Low-speed mechanical steering-angle limit in radians. Speed and fitted parts may reduce the active limit.', min: 0.1, max: 0.8, step: 0.02, get: () => TUNING.maxSteer, set: (v) => (TUNING.maxSteer = v) },
@@ -340,6 +343,8 @@ function tuningRecord(): Record<string, RecordedValue> {
     tune_slip_peak_deg: TUNING.tireSlipAnglePeak * 180 / Math.PI,
     tune_slip_falloff: TUNING.tireSlipAngleFalloff,
     tune_slide_grip_floor: TUNING.tireSlipAngleFloor,
+    tune_locked_grip_floor: TUNING.tireCombinedSlipFloor,
+    tune_locked_grip_falloff: TUNING.tireCombinedSlipFalloff,
     tune_front_spring: TUNING.axleFront.rideStiffnessMult,
     tune_front_damping: TUNING.axleFront.rideDampingMult,
     tune_front_roll_constraint: TUNING.axleFront.rollStiffnessMult,
@@ -362,6 +367,7 @@ function tuningRecord(): Record<string, RecordedValue> {
     tune_mud_rolling: TUNING.rollingResistanceMudMult,
     tune_deep_mud_rolling: TUNING.rollingResistanceDeepMudMult,
     tune_brake_force: TUNING.brakeForce,
+    tune_handbrake_force: TUNING.handbrakeForce,
     tune_engine_torque: TUNING.engineTorqueMult,
     tune_engine_brake: TUNING.engineBrakeMult,
     tune_max_steer: TUNING.maxSteer,
@@ -834,6 +840,8 @@ export const TIRE_LONG_FRICTION = ${f(TIRE_LONG_FRICTION * t.tireLongGripMult)};
 //   slipAnglePeak: ${f(t.tireSlipAnglePeak)}, // ${(t.tireSlipAnglePeak * 180 / Math.PI).toFixed(2)} deg
 //   slipAngleFalloff: ${f(t.tireSlipAngleFalloff)},
 //   slipAngleFloor: ${f(t.tireSlipAngleFloor)},
+//   combinedSlipFloor: ${f(t.tireCombinedSlipFloor)},
+//   combinedSlipFalloff: ${f(t.tireCombinedSlipFalloff)},
 // ANTI_ROLL.*:
 //   torqueStiffness: ${f(ANTI_ROLL.torqueStiffness * t.antiRollStiffnessMult, 0)}, // x${f(t.antiRollStiffnessMult, 2)}
 //   torqueDamping: ${f(ANTI_ROLL.torqueDamping * t.antiRollDampingMult, 0)}, // x${f(t.antiRollDampingMult, 2)}
@@ -849,6 +857,7 @@ export const TIRE_LONG_FRICTION = ${f(TIRE_LONG_FRICTION * t.tireLongGripMult)};
 //   engineBrakeSpeedCoef: ${f(ENGINE.engineBrakeSpeedCoef * t.engineBrakeMult)},
 // VEHICLE.* (drive feel):
 //   brakeForce: ${f(t.brakeForce, 0)},
+//   handbrakeForce: ${f(t.handbrakeForce, 0)},
 //   maxSteer: ${f(t.maxSteer, 2)},
 //   steerSpeed: ${f(t.steerSpeed, 2)},
 //   maxSteerLateralAccel: ${f(t.maxSteerLateralAccel)}, // ${(t.maxSteerLateralAccel / 9.81).toFixed(2)} g

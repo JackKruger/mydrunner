@@ -83,6 +83,19 @@ export const VEHICLE = {
   // AWD torque split front:rear. 0.5/0.5 for symmetric 4x4 feel.
   driveSplit: { front: 0.5, rear: 0.5 },
   brakeForce: 4500,
+  // The handbrake is a mechanical lock, not a weaker copy of the foot brake,
+  // so it needs its own force above the rear tyre's grip. It reused
+  // brakeForce for a long time, and 4500 N is less than half of what a rear
+  // tyre can hold: measured peak rear gripLimit across all seven bases is
+  // 9826 N (overlander, road, mid-corner load transfer), 5482 N for the
+  // lightest (dustback-rs), and ~1200 N in mud. The clamp therefore always
+  // bound on brake force rather than grip, and the wheel settled into a
+  // perfect-ABS equilibrium at ~8% slip instead of locking. Sized above the
+  // measured peak with headroom for pressure and grip multipliers, so the
+  // binding constraint becomes the tyre's own sliding tail — which is what
+  // makes the rear step out. Raising it further buys nothing: past the grip
+  // cap the tyre, not the cable, is the limit.
+  handbrakeForce: 12_000,
   maxSteer: 0.72,
   // Owner physics now runs locally, so input already reaches the steering
   // model without the old server round trip. Keep enough travel time for
@@ -294,6 +307,19 @@ export const TIRE_LATERAL = {
   // Minimum lateral grip retained once fully sliding — keeps a sliding
   // tyre recoverable instead of zero-grip (you can counter-steer out).
   slipAngleFloor: 0.35,
+  // Combined slip: how much cornering force survives LONGITUDINAL sliding.
+  // The pair above shapes lateral force against slip *angle*; these two do
+  // it against slip *ratio*, which nothing used to read at all. A locked
+  // wheel kept ~50% of its lateral force (measured 3192 N of a 6000 N
+  // budget at slip ratio -0.94), so the rear could never step out under the
+  // handbrake. Floor is lower than slipAngleFloor because a wheel sliding
+  // along its rolling direction has far less tread displacement left for
+  // cornering than one merely running at a big slip angle — but non-zero
+  // for the same reason: a locked tyre stays recoverable.
+  combinedSlipFloor: 0.15,
+  // Sharpness of that decay across [peakSlip, 1]. Higher breaks away sooner
+  // after the wheel passes its peak-slip knee.
+  combinedSlipFalloff: 3.5,
   // Velocity floor (m/s) for the slip-angle denominator. Below this the
   // angle is computed against a fixed reference rather than the actual
   // (tiny) forward speed, so low-speed manoeuvres don't register as full

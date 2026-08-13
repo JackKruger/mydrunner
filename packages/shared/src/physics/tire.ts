@@ -132,3 +132,36 @@ export function lateralGripFromSlipAngle(
   const decay = Math.exp(-over * TUNING.tireSlipAngleFalloff);
   return floor + (1 - floor) * decay;
 }
+
+/** Lateral grip multiplier as a function of LONGITUDINAL slip — the
+ *  combined-slip term. The friction ellipse alone is not this: it scales a
+ *  longitudinal and a lateral *demand* by a common factor, preserving
+ *  whatever ratio the two independent models asked for. Real friction on a
+ *  sliding patch points opposite the slide, so a wheel sliding along its
+ *  rolling direction has almost no tread displacement left to make
+ *  cornering force with. Without this term a fully locked wheel kept about
+ *  half its lateral force, which is what stopped a handbrake from ever
+ *  breaking the rear loose: the tyre could not slide because it kept its
+ *  grip, and kept its grip because it was not sliding.
+ *
+ *  Deliberately shaped as the mirror of lateralGripFromSlipAngle — flat
+ *  through the linear region, exponential decay to a floor past it — so the
+ *  two curves read as a matched pair. The knee is the surface's own
+ *  peakSlip, the same one longitudinalGripFromSlip uses, so deep mud (0.40)
+ *  tolerates far more wheelspin before losing cornering force than road
+ *  (0.10) does. The excess is normalised over [peakSlip, 1] rather than in
+ *  units of peakSlip: the latter drives road to the floor by ~0.3 slip,
+ *  which is too abrupt to catch and drive. The floor keeps a locked tyre
+ *  recoverable rather than zero-grip, matching slipAngleFloor's intent. */
+/** @hotloop */
+export function lateralGripFromLongitudinalSlip(
+  slip: number,
+  peakSlip: number,
+): number {
+  const a = Math.min(1, Math.abs(slip));
+  const peak = Math.max(1e-4, Math.min(0.99, peakSlip));
+  if (a <= peak) return 1.0;
+  const floor = TUNING.tireCombinedSlipFloor;
+  const decay = Math.exp(-((a - peak) / (1 - peak)) * TUNING.tireCombinedSlipFalloff);
+  return floor + (1 - floor) * decay;
+}

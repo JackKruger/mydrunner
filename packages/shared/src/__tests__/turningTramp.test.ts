@@ -28,6 +28,7 @@ interface TurningSummary {
   maxAbsWheelVerticalVelocity: number;
   maxAbsAxleRideVelocity: number;
   maxAbsAxleRollVelocity: number;
+  settledAxleRollVelocity: number;
   minTreadFraction: number;
   minSuspensionAlignment: number;
   minGripLimit: number;
@@ -127,6 +128,12 @@ function runTurningRig(mode: PressureMode): TurningSummary {
   let maxAbsWheelVerticalVelocity = 0;
   let maxAbsAxleRideVelocity = 0;
   let maxAbsAxleRollVelocity = 0;
+  // Tramp is a sustained oscillation, so the peak alone cannot see it: the
+  // rig starts by slamming a velocity step and full steer in on one tick,
+  // and the largest sample is always that step response. Track the settled
+  // window separately — if the axle is really tramping it is still ringing
+  // at the end, and if it is not, this stays small however big the peak was.
+  let settledAxleRollVelocity = 0;
   let minTreadFraction = 1;
   let minSuspensionAlignment = 1;
   let minGripLimit = Infinity;
@@ -169,6 +176,9 @@ function runTurningRig(mode: PressureMode): TurningSummary {
       );
       maxAbsAxleRideVelocity = Math.max(maxAbsAxleRideVelocity, Math.abs(axle.rideVelocity));
       maxAbsAxleRollVelocity = Math.max(maxAbsAxleRollVelocity, Math.abs(axle.rollVelocity));
+      if (tick >= 180) {
+        settledAxleRollVelocity = Math.max(settledAxleRollVelocity, Math.abs(axle.rollVelocity));
+      }
     }
 
     for (let wheelIndex = 0; wheelIndex < 4; wheelIndex++) {
@@ -218,6 +228,7 @@ function runTurningRig(mode: PressureMode): TurningSummary {
     maxAbsWheelVerticalVelocity,
     maxAbsAxleRideVelocity,
     maxAbsAxleRollVelocity,
+    settledAxleRollVelocity,
     minTreadFraction,
     minSuspensionAlignment,
     minGripLimit,
@@ -262,7 +273,17 @@ describe('flat-road turning anti-roll stability', () => {
       expect(run.maxAbsLateralG, diagnostics).toBeLessThan(1.2);
       expect(run.maxAbsWheelVerticalVelocity, diagnostics).toBeLessThan(0.5);
       expect(run.maxAbsAxleRideVelocity, diagnostics).toBeLessThan(0.25);
-      expect(run.maxAbsAxleRollVelocity, diagnostics).toBeLessThan(0.75);
+      // Peak, then settled. The peak bound was 0.75 when tyres kept full
+      // cornering force at any longitudinal slip; combined-slip weighting
+      // makes the axle answer the rig's one-tick velocity-and-full-steer
+      // step more sharply, and low pressure now peaks at 0.817 — on the
+      // FIRST sample, with only 3 of 180 samples above 0.75 and every one
+      // of those inside the first second. Mean (0.398 vs 0.384) and the
+      // settled window (0.367 vs 0.360) are unchanged, so this is a step
+      // response, not tramp. The settled bound below is the one that would
+      // actually catch tramp, and it is deliberately tight.
+      expect(run.maxAbsAxleRollVelocity, diagnostics).toBeLessThan(0.9);
+      expect(run.settledAxleRollVelocity, diagnostics).toBeLessThan(0.45);
     },
     20_000,
   );

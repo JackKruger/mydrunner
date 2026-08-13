@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   combineFrictionEllipse,
+  lateralGripFromLongitudinalSlip,
   lateralGripFromSlipAngle,
   loadSensitivityMultiplier,
   longitudinalGripFromSlip,
@@ -166,6 +167,76 @@ describe('lateralGripFromSlipAngle', () => {
       TUNING.tireSlipAnglePeak = saved.peak;
       TUNING.tireSlipAngleFalloff = saved.falloff;
       TUNING.tireSlipAngleFloor = saved.floor;
+    }
+  });
+});
+
+describe('lateralGripFromLongitudinalSlip', () => {
+  // The combined-slip term. Its absence is why a locked wheel used to keep
+  // about half its cornering force, and why the handbrake could never break
+  // the rear loose: the tyre could not slide because it kept its grip, and
+  // kept its grip because it was not sliding.
+  const ROAD_PEAK = 0.10; // SURFACE_INFO road traction.peakSlip
+  const MUD_PEAK = 0.40;  // deep mud
+
+  it('is 1.0 at and below the surface peak slip (free-rolling keeps full grip)', () => {
+    expect(lateralGripFromLongitudinalSlip(0, ROAD_PEAK)).toBeCloseTo(1.0, 5);
+    expect(lateralGripFromLongitudinalSlip(ROAD_PEAK * 0.5, ROAD_PEAK)).toBeCloseTo(1.0, 5);
+    expect(lateralGripFromLongitudinalSlip(ROAD_PEAK, ROAD_PEAK)).toBeCloseTo(1.0, 5);
+  });
+
+  it('collapses cornering grip for a fully locked wheel', () => {
+    const locked = lateralGripFromLongitudinalSlip(1, ROAD_PEAK);
+    expect(locked).toBeLessThan(0.25);
+    expect(locked).toBeGreaterThanOrEqual(TIRE_LATERAL.combinedSlipFloor);
+  });
+
+  it('never drops below the floor, so a sliding tyre stays recoverable', () => {
+    for (const slip of [0.5, 1, 2, -3]) {
+      expect(lateralGripFromLongitudinalSlip(slip, ROAD_PEAK))
+        .toBeGreaterThanOrEqual(TIRE_LATERAL.combinedSlipFloor);
+    }
+  });
+
+  it('is symmetric in sign: locking and spinning both cost lateral grip', () => {
+    expect(lateralGripFromLongitudinalSlip(0.6, ROAD_PEAK))
+      .toBeCloseTo(lateralGripFromLongitudinalSlip(-0.6, ROAD_PEAK), 5);
+  });
+
+  it('is monotonic non-increasing past the peak', () => {
+    const a = lateralGripFromLongitudinalSlip(0.2, ROAD_PEAK);
+    const b = lateralGripFromLongitudinalSlip(0.5, ROAD_PEAK);
+    const c = lateralGripFromLongitudinalSlip(0.9, ROAD_PEAK);
+    expect(a).toBeGreaterThanOrEqual(b);
+    expect(b).toBeGreaterThanOrEqual(c);
+  });
+
+  it('lets soft surfaces carry far more wheelspin before losing the rear', () => {
+    // The knee is the surface's own peakSlip, so mud stays hooked up at a
+    // slip ratio that has already cost a road tyre most of its cornering
+    // force. This is what keeps throttle-steering in a bog controllable.
+    expect(lateralGripFromLongitudinalSlip(0.35, MUD_PEAK))
+      .toBeGreaterThan(lateralGripFromLongitudinalSlip(0.35, ROAD_PEAK));
+  });
+
+  it('reads the live floor and falloff tuning', () => {
+    const saved = {
+      floor: TUNING.tireCombinedSlipFloor,
+      falloff: TUNING.tireCombinedSlipFalloff,
+    };
+    try {
+      TUNING.tireCombinedSlipFloor = 0.6;
+      TUNING.tireCombinedSlipFalloff = 20;
+      const locked = lateralGripFromLongitudinalSlip(1, ROAD_PEAK);
+      expect(locked).toBeGreaterThanOrEqual(0.6);
+      expect(locked).toBeLessThan(0.61);
+      // A steeper falloff must reach the floor sooner.
+      TUNING.tireCombinedSlipFalloff = 1;
+      expect(lateralGripFromLongitudinalSlip(0.5, ROAD_PEAK))
+        .toBeGreaterThan(locked);
+    } finally {
+      TUNING.tireCombinedSlipFloor = saved.floor;
+      TUNING.tireCombinedSlipFalloff = saved.falloff;
     }
   });
 });

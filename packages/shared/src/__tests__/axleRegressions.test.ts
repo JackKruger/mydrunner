@@ -599,11 +599,15 @@ describe('solid axle: repeated steps', () => {
 
     expect(low.pressurePsi, diagnostics).toBeLessThan(nominal.pressurePsi);
     expect(nominal.pressurePsi, diagnostics).toBeLessThan(high.pressurePsi);
-    // The corrected bar direction changes the crawler's body path over the
-    // edge, so contact distance is a secondary margin; transmitted tread
-    // impulse below remains the stronger pressure-wrap signal.
-    expect(low.ledgeAdvance, diagnostics).toBeGreaterThan(nominal.ledgeAdvance + 0.025);
-    expect(low.ledgeAdvance, diagnostics).toBeGreaterThan(high.ledgeAdvance + 0.07);
+    // ledgeAdvance (the z-span the tyre stayed in ledge contact over) used to
+    // be asserted here as a secondary margin. It was measured and dropped: it
+    // is not a signal. Across the whole 4->28 psi range it spanned 3.113 /
+    // 3.078 / 3.040 m — 2% total — and the high-pressure assertion required
+    // low > high + 0.07 against an actual gap of 0.073, so it passed by
+    // 0.003 m. Any change anywhere in the tyre model flips it, and it orders
+    // by neither pressure nor efficiency. Transmitted tread impulse is the
+    // real pressure-wrap signal, as the note here always said: it is
+    // monotonic in pressure with hundreds of newton-seconds of margin.
     expect(low.ledgeLongImpulse, diagnostics).toBeGreaterThan(nominal.ledgeLongImpulse + 50);
     expect(low.ledgeLongImpulse, diagnostics).toBeGreaterThan(high.ledgeLongImpulse + 150);
     for (const run of [low, nominal, high]) {

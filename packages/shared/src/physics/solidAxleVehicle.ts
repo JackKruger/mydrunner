@@ -66,10 +66,13 @@ import {
 // slipRatio / gripFromSlip kept in tire.ts for tests; not used here since
 // the impulse-clamped integrator below replaced the Pacejka groundTq path.
 // slipAngle / lateralGripFromSlipAngle ARE used to shape the lateral
-// force so the tyre breaks loose past its slip-angle peak.
+// force so the tyre breaks loose past its slip-angle peak, and
+// lateralGripFromLongitudinalSlip so a locked or spinning wheel gives up
+// the cornering force it is no longer able to make.
 import { rotateVecByQuat, rotateVecByQuatInto } from './util.js';
 import {
   combineFrictionEllipse,
+  lateralGripFromLongitudinalSlip,
   lateralGripFromSlipAngle,
   longitudinalGripFromSlip,
   relaxLongitudinalForce,
@@ -1756,9 +1759,13 @@ export class SolidAxleVehicle implements VehicleLike {
 
       const driveShare = (isFront ? frontShare : rearShare) * 0.5; // per wheel
       const driveTq = ag.hasDrive ? totalDrivelineTorque * driveShare : 0;
+      // The handbrake is rear-only and carries its own force: it has to
+      // exceed the rear tyre's grip to lock the wheel, where the service
+      // brake deliberately stays under it. Sharing brakeForce made the clamp
+      // below bind on force rather than grip, which is threshold braking.
       const brakeForceN =
         this.input.brake * TUNING.brakeForce
-        + (isFront ? 0 : this.input.handbrake * TUNING.brakeForce);
+        + (isFront ? 0 : this.input.handbrake * TUNING.handbrakeForce);
       const brakeTq = brakeForceN * this.geom.wheelRadius;
 
       // Surface-dependent rolling resistance. Mud and deep mud provide
@@ -2001,8 +2008,16 @@ export class SolidAxleVehicle implements VehicleLike {
       // out. The friction-circle clamp below still couples long+lat, so
       // wheelspin (high longitudinal force) ALSO steals lateral grip —
       // the "throttle oversteer in mud" feel.
+      //
+      // The ellipse is not enough on its own, though: it scales the two
+      // demands by a common factor and so preserves whatever ratio they
+      // asked for, which left a locked wheel holding about half its
+      // cornering force. lateralGripFromLongitudinalSlip is the missing
+      // combined-slip term — the tread displacement spent sliding along the
+      // rolling direction is not available to make lateral force with.
       const alpha = slipAngle(latV, longV);
-      const latGripMult = lateralGripFromSlipAngle(alpha, patch.traction.lateralPeakAngle);
+      const latGripMult = lateralGripFromSlipAngle(alpha, patch.traction.lateralPeakAngle)
+        * lateralGripFromLongitudinalSlip(longSlip, patch.traction.peakSlip);
       // A force directly proportional to patch velocity is a discrete
       // damper. At walking pace the full cornering stiffness can reverse the
       // patch velocity before the next 60 Hz sample; all four tyres then ask
