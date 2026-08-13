@@ -207,6 +207,7 @@ Rapier in single-threaded mode is deterministic given identical inputs and step 
 - **Tests use real components.** Server tests use real Rapier. Browser tests use real Playwright. There is no mocked physics or socket — bugs love mocks.
 - **Diagnostic hooks are dev-only.** `window.__scene` is guarded by `import.meta.env.DEV`. Production bundles do not expose it.
 - **Branching:** there is no `main`. The repository's default branch is `claude/add-claude-documentation-b6LkY` — the user deploys off it. Feature/review work happens on per-session `claude/...` branches which the user merges into the default branch via PR.
+- **GitHub authentication in agent shells:** `origin` is HTTPS and can fail by invoking unavailable `ksshaskpass` credentials. SSH authentication is configured for `git@github.com`; use the explicit SSH repository URL for non-interactive fetches and pushes (for example, `git push git@github.com:JackKruger/mydrunner.git HEAD:<branch>`). The `gh` CLI may not be installed, so PR workflows must check for it separately.
 - **No PRs unless asked.**
 - **Commit screenshots with each visual milestone** (`packages/e2e/screenshots/` is tracked) so the repo carries a visual changelog alongside the code one.
 

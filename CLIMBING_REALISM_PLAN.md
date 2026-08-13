@@ -6,6 +6,17 @@
 
 # Make tall obstacles climbable, the way a real crawler climbs them
 
+## Current stage checklist
+
+- [x] Stage 0 — lock Node 22 and verify all 15 exact golden fixtures.
+- [ ] Stage 1 — redesign heightfield ledge contact and isolate the 0.6 m rig.
+  The original two-line geometry proposal was attempted and reverted; see the
+  measured blocker below.
+- [ ] Stage 2 — pressure-dependent tread wrapping.
+- [ ] Stage 3 — low-range sway-bar disconnect.
+- [ ] Stage 4 — belly and slider diagnosis.
+- [ ] Stage 5 — final rebaseline and documentation after the physics stages.
+
 ## Context
 
 Writing the Milestone 2 regressions turned up that a prepared Outclaw (40-inch
