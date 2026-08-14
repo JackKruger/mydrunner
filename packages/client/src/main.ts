@@ -46,6 +46,7 @@ import {
   isHandbrakeOn,
   requestTransferCase,
   setDrivetrainControlsEnabled,
+  setForwardSpeed,
   setManualGear,
 } from './input.js';
 import { getTouchState, initTouchInput, onTouchEdge } from './touchInput.js';
@@ -776,6 +777,10 @@ function frame(): void {
     inputAcc += frameDt;
     let steps = 0;
     while (inputAcc >= FIXED_DT && steps < HARD_STEP_CAP) {
+      // Sampled per step, not per frame: the brake/reverse handoff in
+      // sampleInput() decides against the speed the truck actually has on the
+      // tick it is deciding for.
+      setForwardSpeed(localSimulation?.forwardSpeed() ?? 0);
       const input = sampleInput();
       if ((input.buttons & BUTTON_RESET) !== 0) winchController.detach();
       if (localSimulation) {

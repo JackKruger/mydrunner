@@ -374,6 +374,24 @@ export class LocalSimulation {
     return count;
   }
 
+  /** Signed speed along the chassis' own forward axis (m/s): positive driving
+   *  forward, negative rolling back. `telemetry().speed` is a magnitude and
+   *  cannot answer "which way is it going", which is what the input layer's
+   *  brake/reverse handoff needs. */
+  forwardSpeed(): number {
+    // Straight off the body rather than through getState(), which builds a
+    // whole VehicleState plus four wheel objects; this is read once per fixed
+    // tick on a phone. `this.current` can't serve because it is the render
+    // state and carries no velocity.
+    const { x, y, z, w } = this.vehicle.body.rotation();
+    const v = this.vehicle.body.linvel();
+    // Third column of the rotation matrix: the chassis' local +Z in world space.
+    const fx = 2 * (x * z + y * w);
+    const fy = 2 * (y * z - x * w);
+    const fz = 1 - 2 * (x * x + y * y);
+    return v.x * fx + v.y * fy + v.z * fz;
+  }
+
   telemetry(): {
     speed: number; rpm: number; gear: number; throttle: number;
     drivetrain: VehicleState['drivetrain']; damage: VehicleState['damage']; notice: string | null;
