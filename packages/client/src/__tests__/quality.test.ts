@@ -105,6 +105,7 @@ describe('the quality table', () => {
     const budgets: (keyof QualitySettings)[] = [
       'pixelRatioCap', 'terrainOctaves', 'cloudOctaves', 'waterOctaves',
       'maxParticles', 'trackSegments', 'menuPanoramaHz',
+      'groundCoverDensity', 'groundCoverDrawDistance',
     ];
     for (const field of budgets) {
       expect(QUALITY.low[field], field).toBeLessThanOrEqual(QUALITY.high[field] as number);

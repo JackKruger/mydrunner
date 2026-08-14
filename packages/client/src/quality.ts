@@ -88,6 +88,10 @@ export interface QualitySettings {
    *  menu, which on a phone is a thermal warm-up before the player has
    *  pressed anything. */
   menuPanoramaHz: number;
+  /** Cosmetic ground-cover samples per terrain cell (before biome filters). */
+  groundCoverDensity: number;
+  /** Maximum camera distance at which ground cover is drawn. */
+  groundCoverDrawDistance: number;
 }
 
 export const QUALITY: Record<QualityTier, QualitySettings> = {
@@ -117,6 +121,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     detailedSuspension: true,
     tireSegments: 36,
     menuPanoramaHz: 60,
+    groundCoverDensity: 1,
+    groundCoverDrawDistance: 115,
   },
   low: {
     tier: 'low',
@@ -140,6 +146,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     detailedSuspension: false,
     tireSegments: 20,
     menuPanoramaHz: 20,
+    groundCoverDensity: 0.38,
+    groundCoverDrawDistance: 62,
   },
 };
 
