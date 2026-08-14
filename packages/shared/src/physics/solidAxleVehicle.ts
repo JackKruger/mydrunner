@@ -1659,15 +1659,26 @@ export class SolidAxleVehicle implements VehicleLike {
     const engineThrottle = this.input.manualGear === null
       ? this.input.throttle
       : Math.max(0, this.input.throttle);
+    // Which way the driveline is being asked to push. In automatic that is the
+    // throttle's sign; once a lever is fitted the *gear* supplies direction and
+    // the pedal is only ever power, so its sign says nothing. Reading the pedal
+    // in manual made every manual reverse look like a permanent direction fight
+    // (see carrierForEngine): the engine was told the wheels were stopped for
+    // as long as the truck reversed, so the tacho froze at its throttle target
+    // and the rev limiter — which only exists downstream of wheel speed — never
+    // engaged. Reverse then accelerated without bound, past 270 km/h.
+    const commandedDir = this.input.manualGear === null
+      ? Math.sign(engineThrottle)
+      : engineThrottle === 0 ? 0 : Math.sign(this.input.manualGear);
     // Shift speed follows motion in the commanded direction. A truck rolling
     // backwards on a climb must remain in first instead of upshifting through
     // the forward gears as its downhill speed rises.
-    const commandedSpeed = engineThrottle === 0
+    const commandedSpeed = commandedDir === 0
       ? Math.abs(longSpeed)
-      : Math.max(0, Math.sign(engineThrottle) * longSpeed);
+      : Math.max(0, commandedDir * longSpeed);
     const vehicleAngVel = commandedSpeed / this.geom.wheelRadius;
-    const carrierForEngine = engineThrottle !== 0
-      && longSpeed * Math.sign(engineThrottle) < 0
+    const carrierForEngine = commandedDir !== 0
+      && longSpeed * commandedDir < 0
       ? 0
       : signedCarrier;
     const engineOut = stepEngine(

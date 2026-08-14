@@ -196,10 +196,19 @@ export function stepEngine(
     state.shiftCooldown = 0;
   } else if (wantsForward && gIdx <= ENGINE.neutralGear) {
     nextGear = ENGINE.firstGear;
+    // A direction change is not an RPM-triggered shift and must not inherit
+    // one's cooldown. The counter only ticks down inside the forward branch
+    // below, so a shuttle through reverse or neutral froze whatever was left
+    // of it and then spent it blocking the first upshift after the truck was
+    // moving forward again - the box sat in first, over-revving, for up to
+    // shiftHoldTicks however long the reverse leg took.
+    state.shiftCooldown = 0;
   } else if (wantsReverse && gIdx >= ENGINE.firstGear) {
     nextGear = ENGINE.reverseGear;
+    state.shiftCooldown = 0;
   } else if (wantsReverse && gIdx === ENGINE.neutralGear) {
     nextGear = ENGINE.reverseGear;
+    state.shiftCooldown = 0;
   } else if (gIdx >= ENGINE.firstGear) {
     // Forward auto-shifting based on chassis speed (vehicleAngVel), NOT
     // wheel spin. Wheel angVel inflates when tires slip (stuck on hill,
