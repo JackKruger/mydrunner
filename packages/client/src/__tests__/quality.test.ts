@@ -103,7 +103,7 @@ describe('the quality table', () => {
     // numeric field is a budget and every boolean is a feature, so low must
     // be <= high on the numbers and must not enable anything high disables.
     const budgets: (keyof QualitySettings)[] = [
-      'pixelRatioCap', 'terrainOctaves', 'cloudOctaves', 'waterOctaves',
+      'pixelRatioCap', 'terrainOctaves', 'terrainTextureResolution', 'cloudOctaves', 'waterOctaves',
       'maxParticles', 'trackSegments', 'menuPanoramaHz',
     ];
     for (const field of budgets) {
@@ -111,7 +111,8 @@ describe('the quality table', () => {
     }
 
     const features: (keyof QualitySettings)[] = [
-      'antialias', 'shadows', 'terrainSecondaryBlend', 'cloudFineLayer',
+      'antialias', 'shadows', 'terrainSecondaryBlend', 'terrainTriplanarSampling',
+      'terrainNormalMaps', 'cloudFineLayer',
       'waterRippleNormal', 'waterFilaments', 'detailedSuspension',
     ];
     for (const field of features) {
