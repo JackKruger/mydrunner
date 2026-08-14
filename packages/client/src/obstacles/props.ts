@@ -2,13 +2,13 @@
 
 import * as THREE from 'three';
 import {
-  BARREL_COLORS, RUST_COLORS, TRUNK_COLOR, metal, solid,
+  BARREL_COLORS, RUST_COLORS, TRUNK_COLOR, metal, paintedMetal, solid, timber,
 } from './materials.js';
 import { box, cone, cyl, lyingCyl, plane, repeatX, torus } from './prims.js';
 import type { ObjectMeshBuilder } from './types.js';
 
 const barrel: ObjectMeshBuilder = (ctx, o) => {
-  const mat = solid(ctx, ctx.pick(BARREL_COLORS, o, 'tint'), 0.75);
+  const mat = paintedMetal(ctx, ctx.pick(BARREL_COLORS, o, 'tint'), 2);
   const rim = metal(ctx, 0x9a9a92, 0.55);
   return [
     cyl(o.size, o.size, o.height, mat, { y: o.height / 2 }, 12),
@@ -19,8 +19,8 @@ const barrel: ObjectMeshBuilder = (ctx, o) => {
 };
 
 const crate: ObjectMeshBuilder = (ctx, o) => {
-  const body = solid(ctx, 0x9a7448, 0.92);
-  const batten = solid(ctx, 0x7a5a34, 0.94);
+  const body = timber(ctx, 0x9a7448, 2);
+  const batten = timber(ctx, 0x7a5a34, 3);
   const w = o.size * 2;
   const len = o.length ?? w;
   const out: THREE.Object3D[] = [box(len, o.height, w, body, { y: o.height / 2 })];
@@ -39,7 +39,7 @@ const crate: ObjectMeshBuilder = (ctx, o) => {
 };
 
 const pallet: ObjectMeshBuilder = (ctx, o) => {
-  const mat = solid(ctx, 0xa8875c, 0.95);
+  const mat = timber(ctx, 0xa8875c, 3);
   const w = o.size * 2;
   const len = o.length ?? 1.2;
   const out: THREE.Object3D[] = [];

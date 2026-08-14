@@ -44,6 +44,8 @@ export interface CarMesh {
     front: THREE.Object3D;
     rear: THREE.Object3D;
   };
+  /** Cosmetic accumulation only; authoritative handling remains in physics. */
+  updateDirt(dtSeconds: number, mudContact: number, waterContact: number): void;
 }
 
 export interface TireDeformer {
@@ -53,11 +55,21 @@ export interface TireDeformer {
 }
 
 interface Materials {
-  body: THREE.MeshStandardMaterial;
+  body: THREE.MeshPhysicalMaterial;
   trim: THREE.MeshStandardMaterial;
   glass: THREE.MeshStandardMaterial;
   chrome: THREE.MeshStandardMaterial;
   black: THREE.MeshStandardMaterial;
+  dirt: { value: number };
+  rubberDetail: THREE.Texture;
+}
+
+function detailTexture(name: string, repeat: number, color = false): THREE.Texture {
+  const texture = new THREE.TextureLoader().load(`/assets/materials/${name}`);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(repeat, repeat);
+  if (color) texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
 function meshForBox(spec: VisualBox, material: THREE.Material, name?: string): THREE.Mesh {
@@ -95,8 +107,33 @@ function addTube(
 function makeMaterials(bodyColor: number, finish: PaintFinish = 'gloss'): Materials {
   const roughness = finish === 'matte' ? 0.9 : finish === 'satin' ? 0.66 : 0.42;
   const metalness = finish === 'matte' ? 0.02 : 0.15;
+  const dirt = { value: 0 };
+  const paintDetail = detailTexture('painted-metal-detail.svg', 5);
+  const glassVariation = detailTexture('glass-imperfections.svg', 3);
+  const rubberDetail = detailTexture('rubber-detail.svg', 7);
+  const body = new THREE.MeshPhysicalMaterial({
+    color: bodyColor, roughness, metalness, name: 'paint.primary',
+    normalMap: paintDetail, normalScale: new THREE.Vector2(0.07, 0.07),
+    clearcoat: finish === 'gloss' ? 0.82 : finish === 'satin' ? 0.35 : 0.04,
+    clearcoatRoughness: finish === 'gloss' ? 0.16 : finish === 'satin' ? 0.38 : 0.75,
+  });
+  body.onBeforeCompile = (shader) => {
+    shader.uniforms.vehicleDirt = dirt;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vehicleLocalPosition;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvehicleLocalPosition = position;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float vehicleDirt;\nvarying vec3 vehicleLocalPosition;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float dirtLower = 1.0 - smoothstep(0.05, 1.15, vehicleLocalPosition.y);
+        float dirtRear = smoothstep(0.15, 1.4, -vehicleLocalPosition.z);
+        float dirtNoise = 0.72 + 0.28 * sin(vehicleLocalPosition.x * 19.0 + vehicleLocalPosition.z * 13.0);
+        float dirtMask = clamp(max(dirtLower, dirtRear * 0.58) * dirtNoise * vehicleDirt, 0.0, 0.88);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.19, 0.105, 0.045), dirtMask);`);
+  };
+  body.customProgramCacheKey = () => 'vehicle-paint-detail-dirt-v2';
   return {
-    body: new THREE.MeshStandardMaterial({ color: bodyColor, roughness, metalness, name: 'paint.primary' }),
+    body,
     trim: new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.85, metalness: 0 }),
     glass: new THREE.MeshStandardMaterial({
       color: 0x29343d,
@@ -104,15 +141,20 @@ function makeMaterials(bodyColor: number, finish: PaintFinish = 'gloss'): Materi
       metalness: 0.08,
       transparent: true,
       opacity: 0.72,
+      roughnessMap: glassVariation,
     }),
     chrome: new THREE.MeshStandardMaterial({ color: 0xb8b8b8, roughness: 0.35, metalness: 0.7 }),
     black: new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.6 }),
+    dirt,
+    rubberDetail,
   };
 }
 
 function deformableTireMaterial(
   r: number,
   w: number,
+  dirt: { value: number },
+  rubberDetail?: THREE.Texture,
 ): { material: THREE.MeshStandardMaterial; depth: THREE.MeshDepthMaterial; distance: THREE.MeshDistanceMaterial; uniforms: { deflection: { value: number }; normal: { value: THREE.Vector3 }; shoulderBulge: { value: number } } } {
   const uniforms = {
     deflection: { value: 0 },
@@ -138,19 +180,25 @@ function deformableTireMaterial(
     shader.uniforms.tireDeflection = uniforms.deflection;
     shader.uniforms.tireContactNormal = uniforms.normal;
     shader.uniforms.tireShoulderBulge = uniforms.shoulderBulge;
+    shader.uniforms.vehicleDirt = dirt;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\nuniform float tireDeflection;\nuniform vec3 tireContactNormal;\nuniform float tireShoulderBulge;${treadPattern ? '\nvarying vec3 tireRestPosition;' : ''}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n${treadPattern ? 'tireRestPosition = position;' : ''}\n${vertexPatch}`);
     if (treadPattern) {
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 tireRestPosition;')
+        .replace('#include <common>', '#include <common>\nvarying vec3 tireRestPosition;\nuniform float vehicleDirt;')
         .replace('#include <color_fragment>', `#include <color_fragment>
           float tireAngle = atan(tireRestPosition.z, tireRestPosition.y);
           float tireBlocks = step(0.46, fract(tireAngle * 1.2732395 + tireRestPosition.x * 5.0));
-          diffuseColor.rgb *= mix(0.76, 1.08, tireBlocks);`);
+          float sidewall = smoothstep(0.58, 0.96, abs(tireRestPosition.x) / ${Math.max(0.001, w * .5).toFixed(7)});
+          diffuseColor.rgb *= mix(0.76, 1.08, tireBlocks);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16, 0.085, 0.035), vehicleDirt * (0.46 + sidewall * 0.38));`);
     }
   };
-  const material = new THREE.MeshStandardMaterial({ color: 0x0e0e0e, roughness: 0.95 });
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x0e0e0e, roughness: 0.95, normalMap: rubberDetail,
+    normalScale: new THREE.Vector2(0.16, 0.16),
+  });
   material.onBeforeCompile = (shader) => hook(shader, true);
   material.customProgramCacheKey = () => 'directional-tire-v1';
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
@@ -162,7 +210,7 @@ function deformableTireMaterial(
   return { material, depth, distance, uniforms };
 }
 
-function buildSingleWheel(r: number, w: number, build?: VehicleBuild): { group: THREE.Group; tire: TireDeformer } {
+function buildSingleWheel(r: number, w: number, build?: VehicleBuild, dirt = { value: 0 }, rubberDetail?: THREE.Texture): { group: THREE.Group; tire: TireDeformer } {
   const tireGeo = new THREE.CylinderGeometry(r, r, w, activeQuality().tireSegments, 8);
   tireGeo.rotateZ(Math.PI / 2);
   // Round the carcass shoulders while retaining a broad tread belt.
@@ -182,7 +230,7 @@ function buildSingleWheel(r: number, w: number, build?: VehicleBuild): { group: 
   }
   positions.needsUpdate = true;
   tireGeo.computeVertexNormals();
-  const tireShader = deformableTireMaterial(r, w);
+  const tireShader = deformableTireMaterial(r, w, dirt, rubberDetail);
   const rimGeo = new THREE.CylinderGeometry(r * 0.6, r * 0.6, w + 0.02, 14);
   rimGeo.rotateZ(Math.PI / 2);
   const steel = build?.wheelId.endsWith('.classic-steel') || build?.wheelId.endsWith('.reinforced-rally-steel') || false;
@@ -249,7 +297,7 @@ function buildSingleWheel(r: number, w: number, build?: VehicleBuild): { group: 
  *  signature of solid-axle 4x4s. Wheels are at fixed local +/- trackHalf
  *  inside the axle group, so steering and spin still apply per-wheel
  *  while the axle itself moves them as one unit. */
-function buildAxles(group: THREE.Group, build: VehicleBuild): {
+function buildAxles(group: THREE.Group, build: VehicleBuild, dirt: { value: number }, rubberDetail: THREE.Texture): {
   axles: [THREE.Group, THREE.Group];
   wheels: THREE.Object3D[];
   tires: TireDeformer[];
@@ -300,7 +348,7 @@ function buildAxles(group: THREE.Group, build: VehicleBuild): {
     const wheelXOffset = ag.trackHalf;
     const wheelW = geom.wheelWidth;
     for (let side = 0; side < 2; side++) {
-      const builtWheel = buildSingleWheel(geom.wheelRadius, wheelW, build);
+      const builtWheel = buildSingleWheel(geom.wheelRadius, wheelW, build, dirt, rubberDetail);
       const wheel = builtWheel.group;
       wheel.position.set(side === 0 ? -wheelXOffset : +wheelXOffset, 0, 0);
       axle.add(wheel);
@@ -909,7 +957,7 @@ export function buildCarMesh(value: CarKind | VehicleBuild, _isLocal: boolean, _
   }
   addBaseCharacter(group, layout, mats, build);
   addAccessories(group, layout, mats, build);
-  const { axles, wheels, tires } = buildAxles(group, build);
+  const { axles, wheels, tires } = buildAxles(group, build, mats.dirt, mats.rubberDetail);
   const suspension = buildSuspensionVisual(group, axles, build);
   const points = Physics.geomFor(build).recoveryPoints;
   const recovery = {
@@ -922,7 +970,18 @@ export function buildCarMesh(value: CarKind | VehicleBuild, _isLocal: boolean, _
     recovery[key].position.set(points[key].x, points[key].y, points[key].z);
     group.add(recovery[key]);
   }
-  return { group, wheels, tires, axles, suspension, recovery };
+  let dirtAmount = 0;
+  return {
+    group, wheels, tires, axles, suspension, recovery,
+    updateDirt(dtSeconds, mudContact, waterContact) {
+      // Deep mud coats quickly; ordinary mud builds over several wheel turns.
+      dirtAmount += mudContact * dtSeconds * 0.22;
+      // Only sustained water contact cleans the truck, rather than a single splash.
+      dirtAmount -= waterContact * dtSeconds * 0.16;
+      dirtAmount = THREE.MathUtils.clamp(dirtAmount, 0, 1);
+      mats.dirt.value += (dirtAmount - mats.dirt.value) * Math.min(1, dtSeconds * 4);
+    },
+  };
 }
 
 /** Hash a player id string to a stable small int for color selection. */

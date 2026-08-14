@@ -77,6 +77,7 @@ interface VehicleVisual {
   build: VehicleBuild;
   buildRevision: number;
   recovery: { fairlead: THREE.Object3D; front: THREE.Object3D; rear: THREE.Object3D };
+  updateDirt(dtSeconds: number, mudContact: number, waterContact: number): void;
 }
 
 export interface WinchPick {
@@ -368,6 +369,7 @@ export class Scene {
       build,
       buildRevision,
       recovery: built.recovery,
+      updateDirt: built.updateDirt,
     };
     v.group.userData.playerId = id;
     this.vehicles.set(id, v);
@@ -747,6 +749,16 @@ export class Scene {
       );
     }
     this.effects.update(frameDt);
+
+    const terrain = this.terrainData;
+    if (terrain) {
+      for (const v of this.vehicles.values()) {
+        const surface = Physics.sampleSurface(terrain, v.group.position.x, v.group.position.z);
+        const mud = surface === Physics.Surface.DeepMud ? 1 : surface === Physics.Surface.Mud ? 0.5 : 0;
+        const water = Physics.sampleWaterDepth(terrain, v.group.position.x, v.group.position.z) > 0.12 ? 1 : 0;
+        v.updateDirt(Math.min(frameDt, 100) / 1000, mud, water);
+      }
+    }
 
     // Minimap dots come from the posed visuals, so they show exactly what
     // the player sees (owner simulation locally, interpolation remotely).

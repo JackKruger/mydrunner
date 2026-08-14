@@ -44,6 +44,7 @@ export const RUST_COLORS = [0x7a4a32, 0x6b4530, 0x8a5a3c];
 export interface MeshCtx {
   mat<T extends THREE.Material>(key: string, make: () => T): T;
   geo<T extends THREE.BufferGeometry>(key: string, make: () => T): T;
+  texture(name: string, repeat?: number): THREE.Texture;
   h(o: Obstacle, salt: string): number;
   pick<T>(palette: readonly T[], o: Obstacle, salt: string): T;
 }
@@ -51,6 +52,7 @@ export interface MeshCtx {
 export function createMeshCtx(): MeshCtx {
   const mats = new Map<string, THREE.Material>();
   const geos = new Map<string, THREE.BufferGeometry>();
+  const textures = new Map<string, THREE.Texture>();
   return {
     mat<T extends THREE.Material>(key: string, make: () => T): T {
       let m = mats.get(key) as T | undefined;
@@ -62,10 +64,44 @@ export function createMeshCtx(): MeshCtx {
       if (!g) { g = make(); geos.set(key, g); }
       return g;
     },
+    texture(name: string, repeat = 2): THREE.Texture {
+      const key = `texture:${name}:${repeat}`;
+      let texture = textures.get(key);
+      if (!texture) {
+        texture = new THREE.TextureLoader().load(`/assets/materials/${name}`);
+        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(repeat, repeat);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        textures.set(key, texture);
+      }
+      return texture;
+    },
     h: (o, salt) => hash01(o.id, salt),
     pick: (palette, o, salt) => pick(palette, o.id, salt),
   };
 }
+
+export type DetailKind = 'painted-metal-detail.svg' | 'galvanized-steel.svg'
+  | 'timber-grain.svg' | 'rust-mask.svg' | 'dust-mask.svg' | 'mud-mask.svg';
+
+/** Cached textured surfaces. A MeshCtx owns one texture per detail/repeat pair,
+ * and all matching obstacle parts share both it and the resulting material. */
+export function detailed(
+  ctx: MeshCtx, kind: DetailKind, color: number, roughness = 0.85,
+  metalness = 0, repeat = 2,
+): THREE.MeshStandardMaterial {
+  const key = `detail:${kind}:${color}:${roughness}:${metalness}:${repeat}`;
+  return ctx.mat(key, () => new THREE.MeshStandardMaterial({
+    color, roughness, metalness, map: ctx.texture(kind, repeat),
+  }));
+}
+
+export const timber = (ctx: MeshCtx, color: number, repeat = 3) =>
+  detailed(ctx, 'timber-grain.svg', color, 0.94, 0, repeat);
+export const galvanized = (ctx: MeshCtx, color = 0xaeb3b1, repeat = 3) =>
+  detailed(ctx, 'galvanized-steel.svg', color, 0.68, 0.62, repeat);
+export const paintedMetal = (ctx: MeshCtx, color: number, repeat = 2) =>
+  detailed(ctx, 'painted-metal-detail.svg', color, 0.72, 0.38, repeat);
 
 /** A plain flat-shaded standard material, cached by its colour. */
 export function solid(
