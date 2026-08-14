@@ -7,6 +7,7 @@ import {
   createStockBuild,
   decodeVehicleGarage,
   normalizeVehicleBuild,
+  normalizeVehicleBuildDetailed,
   partCompatibility,
   resolveVehicleSpec,
   type NamedVehicleBuild,
@@ -180,6 +181,22 @@ export class WorkshopUI {
     this.callbacks = null;
   }
 
+  /** Commit a selection change and re-render.
+   *
+   *  `partCompatibility` only gates the dependent end of a requirement — it
+   *  refuses 37s without the lift — but says nothing about removing a
+   *  prerequisite while its dependant is fitted. Those clicks are legal and
+   *  reach `normalizeVehicleBuildDetailed`, which resolves them by reverting
+   *  the dependant to stock. Show the reason it gives: dropping the lift used
+   *  to swap the player's tyres back with nothing on screen to say why. */
+  private applySelection(next: unknown): void {
+    const result = normalizeVehicleBuildDetailed(next);
+    this.selected = result.build;
+    this.renderControls();
+    if (result.issues.length > 0) this.setStatus(result.issues[0]!, true);
+    else this.setStatus('');
+  }
+
   private renderControls(): void {
     if (!this.root || !this.content) return;
     const catalog = VEHICLE_PART_CATALOGS[this.selected.baseId];
@@ -228,8 +245,7 @@ export class WorkshopUI {
     for (const option of list) {
       const compatibility = partCompatibility(this.selected, slot, option.id);
       this.addChoice(option.id, option.name, option.description, this.selected[slot] === option.id, compatibility.enabled, compatibility.reason, () => {
-        this.selected = normalizeVehicleBuild({ ...this.selected, [slot]: option.id });
-        this.renderControls();
+        this.applySelection({ ...this.selected, [slot]: option.id });
       });
     }
   }
@@ -237,8 +253,7 @@ export class WorkshopUI {
   private renderLockers(): void {
     if (this.selected.baseId === 'dustback-rs') {
       this.addToggle('Rear limited-slip differential', 'Moderately couples rear wheel speeds continuously; no runtime locker switch.', this.selected.rearLocker, (checked) => {
-        this.selected = normalizeVehicleBuild({ ...this.selected, rearLocker: checked, frontLocker: false });
-        this.renderControls();
+        this.applySelection({ ...this.selected, rearLocker: checked, frontLocker: false });
       });
       return;
     }
@@ -281,7 +296,7 @@ export class WorkshopUI {
     for (const saved of this.garage.builds) {
       const row = document.createElement('div'); row.className = 'workshop-saved';
       const load = document.createElement('button'); load.innerHTML = `<strong>${escapeHtml(saved.name)}</strong><span>${resolveVehicleSpec(saved.build).displayName}</span>`;
-      load.addEventListener('click', () => { this.selected = normalizeVehicleBuild(saved.build); this.renderControls(); });
+      load.addEventListener('click', () => { this.applySelection(saved.build); });
       const rename = document.createElement('button'); rename.textContent = 'Rename';
       rename.addEventListener('click', () => {
         const name = window.prompt('Build name', saved.name)?.trim();

@@ -11,7 +11,7 @@ import { GRAVITY_Y, WATER } from '../constants.js';
 import { TUNING } from '../tuning.js';
 import { WATER_NONE, isWet, type TerrainData } from './terrain.js';
 import { sampleHeightBilinear } from './terrain.js';
-import { rotateVecByQuat } from './util.js';
+import { rotateVecByQuatInto } from './util.js';
 import type { VehicleGeom } from './vehicleGeom.js';
 
 export interface Vec2 {
@@ -19,13 +19,23 @@ export interface Vec2 {
   z: number;
 }
 
-/** Grid coordinates of a world point, or null out of bounds. */
-function gridCoords(t: TerrainData, x: number, z: number): { u: number; v: number } | null {
+// Grid coordinates of the sample in flight. computeWaterLoad runs inside the
+// `@hotloop` phaseWater, and the allocation guard cannot see into callees, so
+// every helper down here writes into a caller-owned or module-owned slot
+// instead of returning a fresh object. Owner physics is single-threaded and
+// these helpers never re-enter, so one slot each is enough.
+const _grid = { u: 0, v: 0 };
+
+/** Resolve a world point to grid coordinates in `_grid`. Returns false, and
+ *  leaves `_grid` stale, when the point is off the map. @hotloop */
+function gridCoordsInto(t: TerrainData, x: number, z: number): boolean {
   const n = t.resolution;
   const u = (x / t.size + 0.5) * (n - 1);
   const v = (z / t.size + 0.5) * (n - 1);
-  if (u < 0 || u > n - 1 || v < 0 || v > n - 1) return null;
-  return { u, v };
+  if (u < 0 || u > n - 1 || v < 0 || v > n - 1) return false;
+  _grid.u = u;
+  _grid.v = v;
+  return true;
 }
 
 /**
@@ -39,31 +49,29 @@ function gridCoords(t: TerrainData, x: number, z: number): { u: number; v: numbe
  * right up to the edge, which is what a real waterline looks like.
  */
 export function sampleWaterLevel(t: TerrainData, x: number, z: number): number {
-  const g = gridCoords(t, x, z);
-  if (!g) return WATER_NONE;
+  if (!gridCoordsInto(t, x, z)) return WATER_NONE;
   const n = t.resolution;
-  const c0 = Math.floor(g.u);
-  const r0 = Math.floor(g.v);
+  const c0 = Math.floor(_grid.u);
+  const r0 = Math.floor(_grid.v);
   const c1 = Math.min(c0 + 1, n - 1);
   const r1 = Math.min(r0 + 1, n - 1);
-  const fu = g.u - c0;
-  const fv = g.v - r0;
+  const fu = _grid.u - c0;
+  const fv = _grid.v - r0;
 
   let acc = 0;
   let wsum = 0;
   const w = t.waterLevel;
-  const corners: Array<[number, number]> = [
-    [r0 * n + c0, (1 - fu) * (1 - fv)],
-    [r0 * n + c1, fu * (1 - fv)],
-    [r1 * n + c0, (1 - fu) * fv],
-    [r1 * n + c1, fu * fv],
-  ];
-  for (const [idx, weight] of corners) {
-    const lvl = w[idx] ?? WATER_NONE;
-    if (!isWet(lvl)) continue;
-    acc += lvl * weight;
-    wsum += weight;
-  }
+  // Unrolled rather than looped over a corner table: the table was rebuilt on
+  // every call, and this is on the per-tick water path (four hull corners, the
+  // intake, and one depth query per wheel).
+  const l00 = w[r0 * n + c0] ?? WATER_NONE;
+  const l10 = w[r0 * n + c1] ?? WATER_NONE;
+  const l01 = w[r1 * n + c0] ?? WATER_NONE;
+  const l11 = w[r1 * n + c1] ?? WATER_NONE;
+  if (isWet(l00)) { const weight = (1 - fu) * (1 - fv); acc += l00 * weight; wsum += weight; }
+  if (isWet(l10)) { const weight = fu * (1 - fv); acc += l10 * weight; wsum += weight; }
+  if (isWet(l01)) { const weight = (1 - fu) * fv; acc += l01 * weight; wsum += weight; }
+  if (isWet(l11)) { const weight = fu * fv; acc += l11 * weight; wsum += weight; }
   if (wsum <= 0) return WATER_NONE;
   return acc / wsum;
 }
@@ -87,15 +95,14 @@ export function sampleWaterDepth(t: TerrainData, x: number, z: number): number {
 export function sampleWaterFlow(t: TerrainData, x: number, z: number, out: Vec2): Vec2 {
   out.x = 0;
   out.z = 0;
-  const g = gridCoords(t, x, z);
-  if (!g) return out;
+  if (!gridCoordsInto(t, x, z)) return out;
   const n = t.resolution;
-  const c0 = Math.floor(g.u);
-  const r0 = Math.floor(g.v);
+  const c0 = Math.floor(_grid.u);
+  const r0 = Math.floor(_grid.v);
   const c1 = Math.min(c0 + 1, n - 1);
   const r1 = Math.min(r0 + 1, n - 1);
-  const fu = g.u - c0;
-  const fv = g.v - r0;
+  const fu = _grid.u - c0;
+  const fv = _grid.v - r0;
 
   const i00 = r0 * n + c0;
   const i10 = r0 * n + c1;
@@ -206,6 +213,15 @@ export function createWaterLoad(): WaterLoad {
 
 const _flow: Vec2 = { x: 0, z: 0 };
 const _corner: Vec3 = { x: 0, y: 0, z: 0 };
+// World-space results of the seven per-tick local->world rotations below.
+// `rotateVecByQuatInto` reads its input fully before writing `out`, so these
+// could alias `_corner`; they are kept separate because the drag block reads
+// `fwd` and `right` after `_corner` has been reused for the centre of pressure.
+const _cornerWorld: Vec3 = { x: 0, y: 0, z: 0 };
+const _fwd: Vec3 = { x: 0, y: 0, z: 0 };
+const _right: Vec3 = { x: 0, y: 0, z: 0 };
+const _AXIS_FORWARD: Vec3 = { x: 0, y: 0, z: 1 };
+const _AXIS_RIGHT: Vec3 = { x: 1, y: 0, z: 0 };
 
 /** Hull corner offsets in chassis-local space, as fractions of the
  *  chassis half-extents. The four bottom corners: sampling the bottom
@@ -251,7 +267,7 @@ export function computeWaterLoad(
     _corner.x = sx * ext.x;
     _corner.y = -ext.y;
     _corner.z = sz * ext.z;
-    const w = rotateVecByQuat(_corner, pose.r);
+    const w = rotateVecByQuatInto(_corner, pose.r, _cornerWorld);
     const px = pose.t.x + w.x;
     const py = pose.t.y + w.y;
     const pz = pose.t.z + w.z;
@@ -299,8 +315,8 @@ export function computeWaterLoad(
 
     // Split the horizontal relative velocity into the chassis's own
     // forward and right axes so the flank can drag harder than the nose.
-    const fwd = rotateVecByQuat({ x: 0, y: 0, z: 1 }, pose.r);
-    const right = rotateVecByQuat({ x: 1, y: 0, z: 0 }, pose.r);
+    const fwd = rotateVecByQuatInto(_AXIS_FORWARD, pose.r, _fwd);
+    const right = rotateVecByQuatInto(_AXIS_RIGHT, pose.r, _right);
     // Flatten to horizontal: a pitched-up chassis should not turn
     // longitudinal drag into lift.
     const fLen = Math.hypot(fwd.x, fwd.z) || 1;
@@ -328,7 +344,7 @@ export function computeWaterLoad(
     _corner.x = 0;
     _corner.y = Math.min(ext.y, -ext.y + span * submerged * 0.5);
     _corner.z = 0;
-    const cp = rotateVecByQuat(_corner, pose.r);
+    const cp = rotateVecByQuatInto(_corner, pose.r, _cornerWorld);
     out.dragPoint.x = pose.t.x + cp.x;
     out.dragPoint.y = pose.t.y + cp.y;
     out.dragPoint.z = pose.t.z + cp.z;
@@ -343,7 +359,7 @@ export function computeWaterLoad(
   _corner.x = 0;
   _corner.y = geom.airIntakeY;
   _corner.z = 0;
-  const iw = rotateVecByQuat(_corner, pose.r);
+  const iw = rotateVecByQuatInto(_corner, pose.r, _cornerWorld);
   const ix = pose.t.x + iw.x;
   const iy = pose.t.y + iw.y;
   const iz = pose.t.z + iw.z;

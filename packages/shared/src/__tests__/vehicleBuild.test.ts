@@ -10,6 +10,7 @@ import {
   resolveVehicleSpec,
 } from '../vehicleBuild.js';
 import { geomFor } from '../physics/vehicleGeom.js';
+import type { VehicleBuild } from '../types.js';
 
 describe('vehicle builds', () => {
   it('creates a valid stock build for all production bases', () => {
@@ -204,5 +205,46 @@ describe('vehicle builds', () => {
     expect(portal.verticalOffset).toBeCloseTo(0.08, 8);
     expect(portal.tubeRadius).toBeCloseTo(standard.tubeRadius * 0.75, 8);
     expect(portal.housingHalfExtents.x).toBeCloseTo(standard.housingHalfExtents.x * 0.75, 8);
+  });
+
+  // partCompatibility gates only the dependent end of each requirement; the
+  // prerequisite end is legal to click and is resolved by the normalizer
+  // reverting the dependant to stock. The workshop shows the issue text that
+  // resolution produces (WorkshopUI.applySelection), so a rule that stopped
+  // reporting itself here would put the UI back to silently swapping a
+  // player's parts out from under them.
+  describe('prerequisite removal reports itself', () => {
+    const rig = [
+      { suspensionId: 'ridgeback.suspension.flex-100' },
+      { axleId: 'ridgeback.axle.portal-240' },
+      { tireId: 'ridgeback.tire.xt-40-wide' },
+      { frontBarId: 'ridgeback.frontBar.steel-winch' },
+      { winchId: 'ridgeback.winch.fitted' },
+    ].reduce<VehicleBuild>(
+      (build, patch) => normalizeVehicleBuildDetailed({ ...build, ...patch }).build,
+      createStockBuild('ridgeback'),
+    );
+
+    it('assembles the fully prepared rig without complaint', () => {
+      expect(normalizeVehicleBuildDetailed(rig).issues).toEqual([]);
+      expect(rig.tireId).toBe('ridgeback.tire.xt-40-wide');
+      expect(rig.winchId).toBe('ridgeback.winch.fitted');
+    });
+
+    for (const [slot, optionId, dependant] of [
+      ['suspensionId', 'ridgeback.suspension.factory', 'tireId'],
+      ['axleId', 'ridgeback.axle.factory', 'tireId'],
+      ['frontBarId', 'ridgeback.frontBar.factory', 'winchId'],
+    ] as const) {
+      it(`explains dropping ${slot} while ${dependant} depends on it`, () => {
+        // The workshop leaves the button live: nothing gates this direction.
+        expect(partCompatibility(rig, slot, optionId).enabled).toBe(true);
+
+        const result = normalizeVehicleBuildDetailed({ ...rig, [slot]: optionId });
+        expect(result.build[dependant]).not.toBe(rig[dependant]);
+        expect(result.issues.length).toBeGreaterThan(0);
+        expect(result.issues[0]).toMatch(/require/);
+      });
+    }
   });
 });

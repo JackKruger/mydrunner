@@ -14,6 +14,8 @@ import {
 import { World, initRapier } from '../physics/world.js';
 import type { CarKind, VehicleBuild } from '../types.js';
 import { createStockBuild } from '../vehicleBuild.js';
+import { geomFor } from '../physics/vehicleGeom.js';
+import { computeWaterLoad, createWaterLoad, createWaterState } from '../physics/water.js';
 
 beforeAll(async () => {
   await initRapier();
@@ -345,5 +347,40 @@ describe('resetTo', () => {
     v.resetTo({ position: { x: 0, y: 30, z: 0 } });
     expect(v.waterStatus().flood).toBe(0);
     world.dispose();
+  });
+});
+
+// `phaseWater` carries the @hotloop mark, but hotLoopAllocation.test.ts is an
+// AST guard over the marked body's own syntax — it cannot see into
+// computeWaterLoad or the sampling helpers underneath it. That is exactly
+// where the allocations were: a rebuilt corner table per level sample (nine a
+// tick), a grid-coordinate object per sample, and seven local->world rotations
+// through the allocating rotateVecByQuat. This measures the real thing instead.
+describe('water force path allocation', () => {
+  it('computes a submerged load without allocating', () => {
+    const terrain = pondWorld({ level: 3 }).terrain;
+    const geom = geomFor(createStockBuild('ridgeback'));
+    const state = createWaterState();
+    const load = createWaterLoad();
+    const pose = {
+      t: { x: 0, y: 1.2, z: 0 },
+      r: { x: 0, y: 0, z: 0, w: 1 },
+      lv: { x: 1.5, y: -0.2, z: 0.4 },
+      av: { x: 0.05, y: 0.1, z: 0.02 },
+    };
+
+    // Warm up so JIT and lazy allocations are not counted as steady state.
+    for (let i = 0; i < 5_000; i++) computeWaterLoad(terrain, geom, state, pose, 1 / 60, load);
+    expect(load.submergedFrac).toBeGreaterThan(0);
+
+    const iterations = 50_000;
+    const before = process.memoryUsage().heapUsed;
+    for (let i = 0; i < iterations; i++) computeWaterLoad(terrain, geom, state, pose, 1 / 60, load);
+    const perCall = (process.memoryUsage().heapUsed - before) / iterations;
+
+    // A steady-state allocation-free loop lands near zero; GC running mid-run
+    // can even make it negative. The pre-fix path allocated ~35 objects a
+    // call, so anything under a couple of bytes proves the slots are reused.
+    expect(perCall).toBeLessThan(2);
   });
 });
