@@ -440,6 +440,14 @@ export class SolidAxleVehicle implements VehicleLike {
   private debugDrivenCarrierRpm = 0;
   private debugDifferentialReactionTorque = 0;
   private debugVelocityInitialized = false;
+  /** How many wheels held a sidewall steep constraint on the previous tick,
+   *  and this tick's running count. The budget divisor is deliberately lagged
+   *  one tick: contact and suspension interleave per axle in fixed [front,
+   *  rear] order, so the rear axle's contacts do not exist yet when the front
+   *  axle solves. A live count would hand the two axles different divisors
+   *  within one tick and make the front axle's share depend on solve order. */
+  private ledgeConstraintWheels = 0;
+  private ledgeConstraintWheelsPending = 0;
   private readonly debugPreviousLinVel: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly debugAcceleration: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly axleDebug: [{
@@ -684,6 +692,8 @@ export class SolidAxleVehicle implements VehicleLike {
     this.debugDrivenCarrierRpm = 0;
     this.debugDifferentialReactionTorque = 0;
     this.debugVelocityInitialized = false;
+    this.ledgeConstraintWheels = 0;
+    this.ledgeConstraintWheelsPending = 0;
     this.debugAcceleration.x = 0;
     this.debugAcceleration.y = 0;
     this.debugAcceleration.z = 0;
@@ -781,6 +791,8 @@ export class SolidAxleVehicle implements VehicleLike {
     const ledgeContacts = this._ledgeContacts;
     const ledgeSemantics = this._ledgeSemantics;
     const ledgeLoads = this._ledgeLoads;
+    this.ledgeConstraintWheels = this.ledgeConstraintWheelsPending;
+    this.ledgeConstraintWheelsPending = 0;
     for (let wheelIndex = 0; wheelIndex < 4; wheelIndex++) {
       wheelBases[wheelIndex] = null;
       ledgeContacts[wheelIndex] = null;
@@ -1211,6 +1223,12 @@ export class SolidAxleVehicle implements VehicleLike {
       // separate sidewall constraint below.
       if (contactSet.count > 0 && !w.volumeSupport) {
         const contactBudgetShare = 1 / contactSet.count;
+        // Slack at one or two steep contacts, binding at three or four.
+        const wheelMassShare = Math.min(
+          LEDGE_CONTACT.normalMassFraction,
+          LEDGE_CONTACT.normalMassBudget / Math.max(1, this.ledgeConstraintWheels),
+        );
+        this.ledgeConstraintWheelsPending++;
         let totalNormalForce = 0;
         for (let contactIndex = 0; contactIndex < contactSet.count; contactIndex++) {
           const constraintContact = contactSet.contacts[contactIndex]!;
@@ -1227,7 +1245,7 @@ export class SolidAxleVehicle implements VehicleLike {
             constraintContact.penetration,
             normalSpeed,
             (VEHICLE.mass * this.geom.massMult)
-              * LEDGE_CONTACT.normalMassFraction * contactBudgetShare,
+              * wheelMassShare * contactBudgetShare,
             dt,
             w.previousTireDeflection,
             carcass.maxDeflection,

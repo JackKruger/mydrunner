@@ -398,6 +398,13 @@ export const LEDGE_CONTACT = {
   // Normal velocity is resolved inelastically (no spring energy to rebound
   // from). Each of a usual two-wheel axle contact owns half the sprung mass.
   normalMassFraction: 0.5,
+  // ...but that share is per wheel, so a row of obstacles catching all four
+  // tyres in one tick would claim twice the sprung mass and manufacture
+  // chassis momentum. Cap the vehicle-wide total instead of cutting the
+  // per-wheel share: at one or two steep contacts the cap is slack and the
+  // tuned single-wheel and single-axle ledge behaviour is untouched, while
+  // three or four contacts divide this budget between them.
+  normalMassBudget: 1,
   normalCorrectionRate: 5,
   maxNormalCorrectionSpeed: 0.15,
   maxForce: 45_000,

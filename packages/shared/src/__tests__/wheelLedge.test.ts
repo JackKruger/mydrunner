@@ -1,5 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { LEDGE_CONTACT } from '../constants.js';
 import { BUTTON_FRONT_LOCKER, BUTTON_RANGE, BUTTON_REAR_LOCKER, EMPTY_INPUT } from '../types.js';
 import { createStockBuild } from '../vehicleBuild.js';
 import type { VehicleBuild } from '../types.js';
@@ -593,6 +594,50 @@ describe('solid axle sharp-step traversal', () => {
       worstVerticalSpeed,
       `vertical ejection grew to ${worstVerticalSpeed.toFixed(1)} m/s`,
     ).toBeLessThan(50);
+  }, 30_000);
+
+  // The sidewall normal constraint gives each wheel `normalMassFraction` of
+  // the sprung mass. That is right for the one- and two-wheel contacts every
+  // other test here exercises, but it is per wheel, so obstacles catching all
+  // four tyres in one tick would claim twice the vehicle's mass and
+  // manufacture chassis momentum. `normalMassBudget` caps the vehicle-wide
+  // total rather than cutting the per-wheel share, and these two assertions
+  // are the whole contract: slack where the ledge tuning was done, live when
+  // it binds. Cutting the per-wheel share instead fails the first one — it
+  // silently halves the ordinary two-wheel axle contact, which is what makes
+  // a 0.35 m log unclearable.
+  function ledgeRunSignature(budget: number): string {
+    const shipped = LEDGE_CONTACT.normalMassBudget;
+    (LEDGE_CONTACT as { normalMassBudget: number }).normalMassBudget = budget;
+    try {
+      const run = runRoundObstacle(createStockBuild('ridgeback'), 'rocks', 0.25, 400);
+      return [
+        run.clearedTick,
+        run.finalZ.toFixed(6),
+        run.maxVerticalSpeed.toFixed(6),
+        run.maxDrivenLedgeForce.toFixed(6),
+      ].join('|');
+    } finally {
+      (LEDGE_CONTACT as { normalMassBudget: number }).normalMassBudget = shipped;
+    }
+  }
+
+  it('leaves a two-wheel ledge contact untouched but binds when tightened', () => {
+    const shipped = ledgeRunSignature(LEDGE_CONTACT.normalMassBudget);
+
+    // A budget of 4 * normalMassFraction can never bind: it is exactly what
+    // four wheels claiming the per-wheel share would total.
+    expect(
+      ledgeRunSignature(4 * LEDGE_CONTACT.normalMassFraction),
+      'the shipped budget must not alter a two-wheel axle ledge contact',
+    ).toBe(shipped);
+
+    // Tightened below 2 * normalMassFraction the same two contacts divide it,
+    // which proves the constant is a live reader and not decoration.
+    expect(
+      ledgeRunSignature(LEDGE_CONTACT.normalMassFraction),
+      'tightening the vehicle-wide budget must change a two-wheel ledge contact',
+    ).not.toBe(shipped);
   }, 30_000);
 
   it('stalls stably at paired 0.70 m boulders without driven ledge lift', () => {
