@@ -1,13 +1,13 @@
 // Buildings and the big fixed hardware.
 
 import * as THREE from 'three';
-import { CONTAINER_COLORS, metal, solid } from './materials.js';
+import { CONTAINER_COLORS, galvanized, metal, paintedMetal, solid, timber } from './materials.js';
 import { box, cyl, lyingCyl, plankDeck, repeatX, ribbedBox, torus } from './prims.js';
 import type { ObjectMeshBuilder } from './types.js';
 
 const shippingContainer: ObjectMeshBuilder = (ctx, o) => {
   const tint = ctx.pick(CONTAINER_COLORS, o, 'tint');
-  const body = solid(ctx, tint, 0.85);
+  const body = paintedMetal(ctx, tint, 4);
   const rib = solid(ctx, tint, 0.95);
   const dark = solid(ctx, 0x2a2622, 0.9);
   const len = o.length ?? 6;
@@ -22,7 +22,7 @@ const shippingContainer: ObjectMeshBuilder = (ctx, o) => {
 };
 
 const waterTank: ObjectMeshBuilder = (ctx, o) => {
-  const body = solid(ctx, 0x8a9a8c, 0.9);
+  const body = galvanized(ctx, 0x8a9a8c, 5);
   const rib = solid(ctx, 0x76877a, 0.92);
   const roof = metal(ctx, 0xa8b0aa, 0.6);
   const out: THREE.Object3D[] = [
@@ -60,8 +60,8 @@ const shed: ObjectMeshBuilder = (ctx, o) => {
 };
 
 const jetty: ObjectMeshBuilder = (ctx, o) => {
-  const deckMat = solid(ctx, 0x8a7050, 0.94);
-  const post = solid(ctx, 0x5a4a38, 0.96);
+  const deckMat = timber(ctx, 0x8a7050, 6);
+  const post = timber(ctx, 0x5a4a38, 4);
   const len = o.length ?? 8;
   const w = o.size * 2;
   const boards = Math.max(4, Math.round(w / 0.24));

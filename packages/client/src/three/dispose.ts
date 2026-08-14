@@ -29,10 +29,16 @@ export function disposeMaterial(mat: THREE.Material): void {
   const m = mat as THREE.Material & {
     map?: THREE.Texture | null;
     normalMap?: THREE.Texture | null;
+    roughnessMap?: THREE.Texture | null;
+    metalnessMap?: THREE.Texture | null;
+    alphaMap?: THREE.Texture | null;
     emissiveMap?: THREE.Texture | null;
   };
   m.map?.dispose();
   m.normalMap?.dispose();
+  m.roughnessMap?.dispose();
+  m.metalnessMap?.dispose();
+  m.alphaMap?.dispose();
   m.emissiveMap?.dispose();
   mat.dispose();
 }
