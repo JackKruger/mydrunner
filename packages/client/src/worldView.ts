@@ -23,6 +23,7 @@ import { MarkerMeshes, type MarkerViewOptions } from './markers.js';
 import { Sky } from './sky.js';
 import { disposeObject3D } from './three/dispose.js';
 import { activeQuality, type QualitySettings } from './quality.js';
+import { GroundCover } from './groundCover.js';
 
 /** Sun direction, fog colour and fog range are duplicated in
  *  terrainShader.ts's uniforms. Retune one, retune the other. */
@@ -59,6 +60,8 @@ export class WorldView {
   private obstacles: Obstacles | null = null;
   private landmarks: LandmarkMeshes | null = null;
   private markers: MarkerMeshes | null = null;
+  private groundCover: GroundCover | null = null;
+  private currentTerrain: Physics.TerrainData | null = null;
   private readonly quality: QualitySettings;
   readonly stencilSupported: boolean;
   private readonly markerOptions: MarkerViewOptions;
@@ -153,6 +156,7 @@ export class WorldView {
    *  to call repeatedly — the game calls it on every welcome (reconnects
    *  included), the editor whenever a change alters the whole world. */
   setWorld(v: WorldVisuals): void {
+    this.currentTerrain = v.terrain;
     if (this.terrainPlaceholder) {
       this.scene.remove(this.terrainPlaceholder);
       (this.terrainPlaceholder.material as THREE.Material).dispose();
@@ -199,6 +203,17 @@ export class WorldView {
     }
     this.obstacles = new Obstacles(list, this.quality);
     this.scene.add(this.obstacles.group);
+    if (this.currentTerrain) this.refreshGroundCover(this.currentTerrain, list);
+  }
+
+  /** Re-run after terrain or authored-object rebuilds in the editor. */
+  refreshGroundCover(terrain: Physics.TerrainData, obstacles: readonly Physics.Obstacle[]): void {
+    if (this.groundCover) {
+      this.scene.remove(this.groundCover.group);
+      this.groundCover.dispose();
+    }
+    this.groundCover = new GroundCover(terrain, obstacles, this.quality);
+    this.scene.add(this.groundCover.group);
   }
 
   refreshLandmarks(landmarks: Physics.Landmarks): void {
@@ -268,6 +283,12 @@ export class WorldView {
   }
 
   dispose(): void {
+    this.currentTerrain = null;
+    if (this.groundCover) {
+      this.scene.remove(this.groundCover.group);
+      this.groundCover.dispose();
+      this.groundCover = null;
+    }
     if (this.terrainMeshRef) {
       this.scene.remove(this.terrainMeshRef.mesh);
       this.terrainMeshRef.dispose();
