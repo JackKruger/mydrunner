@@ -563,6 +563,7 @@ function considerCollider(collider: RAPIER.Collider): boolean {
     query.maxClimbHeight,
     query.edgeAdvance,
     query.climbScratch,
+    query.wheelAxle,
   );
   // Pure upward support belongs to the suspension ray. A mixed
   // up/back corner normal is retained only when the same collider has a
@@ -713,6 +714,7 @@ const probeRay = {
 
 const intoHorizontal: ContactVec3 = { x: 0, y: 0, z: 0 };
 const forwardHorizontal: ContactVec3 = { x: 0, y: 0, z: 0 };
+const climbAxleUnit: ContactVec3 = { x: 0, y: 0, z: 0 };
 
 /** Writes the arc direction into `outDirection` and returns the top surface's
  *  Y, or null when there is no reachable top. @hotloop */
@@ -728,6 +730,7 @@ function findClimbTargetInto(
   maxClimbHeight: number,
   edgeAdvance: number,
   outDirection: ContactVec3,
+  wheelAxle: ContactVec3 | undefined,
 ): number | null {
   intoHorizontal.x = -faceNormal.x;
   intoHorizontal.y = 0;
@@ -773,6 +776,27 @@ function findClimbTargetInto(
     outDirection.x = targetX - wheelCenter.x;
     outDirection.y = topY + wheelRadius - wheelCenter.y;
     outDirection.z = targetZ - wheelCenter.z;
+    // A wheel can only drive in its own plane. `facePoint` is the witness
+    // Rapier returned on the obstacle, and for a log lying parallel to the
+    // wheel axle the true contact is a line segment, so that witness's
+    // axle-parallel coordinate is arbitrary within the overlap and unstable
+    // to 1e-9 between ticks and between the left and right wheel. Left
+    // unprojected it lands here as a lateral component of the drive
+    // direction, gets multiplied by maxDriveForce and applied off-centre —
+    // measured at 6.2 kN of lateral force per wheel, a third of the
+    // vehicle's weight, on a course with no steering input at all.
+    // Projecting onto the plane perpendicular to the axle is what
+    // contactFrameInto already guarantees for the ordinary longitudinal; the
+    // climb direction bypassed it.
+    if (wheelAxle) {
+      normalizeInto(wheelAxle, climbAxleUnit);
+      const axial = dot(outDirection, climbAxleUnit);
+      outDirection.x -= climbAxleUnit.x * axial;
+      outDirection.y -= climbAxleUnit.y * axial;
+      outDirection.z -= climbAxleUnit.z * axial;
+      // Aimed straight along the axle there is no climb left to describe.
+      if (lengthSq(outDirection) < 1e-12) return null;
+    }
     normalizeInto(outDirection, outDirection);
     if (dot(outDirection, forwardHorizontal) <= 0) return null;
     return topY;
