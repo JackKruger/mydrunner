@@ -1078,7 +1078,21 @@ export class SolidAxleVehicle implements VehicleLike {
       contactSet.count = 0;
       contactSet.primaryContactIndex = -1;
       contactSet.driveContactIndex = -1;
+      // Whether this wheel's contacts still need their own normal constraint.
+      // False only for the heightfield reconstruction below, whose witness is
+      // the suspension's own volume-support hit — the ride force already
+      // reacts that normal, so constraining it again would double it.
+      //
+      // This used to be spelled `!w.volumeSupport`, which conflates "the
+      // suspension already owns this normal" with "the tyre-volume sweep found
+      // ground". A wheel standing on flat terrain and pressed against a log has
+      // volume support *and* an unreacted face: the suspension is holding it up
+      // against the ground while nothing at all resists the log. Measured on
+      // the six-log course, the left and right wheel sat in different branches
+      // of this gate for 1333 of ~2400 ticks.
+      let ownsNormalConstraint = true;
       if (w.volumeSupport && w.contactNormal.y < LEDGE_CONTACT.maxSupportNormalY) {
+        ownsNormalConstraint = false;
         const terrainLedge = findHeightfieldLedgeContactInto(
           this.world.terrain,
           center,
@@ -1101,7 +1115,7 @@ export class SolidAxleVehicle implements VehicleLike {
           contactSet.primaryContactIndex = 0;
           contactSet.driveContactIndex = terrainLedge.climbDirection ? 0 : -1;
         }
-      } else if (!w.volumeSupport) {
+      } else {
         findSteepWheelContactsInto(
           this.world.world,
           this.wheelShape,
@@ -1180,7 +1194,7 @@ export class SolidAxleVehicle implements VehicleLike {
         scratch.series,
       );
       let bridgeActive = false;
-      if (ledge && !w.volumeSupport && (semantics?.treadFraction ?? 0) > 0) {
+      if (ledge && ownsNormalConstraint && (semantics?.treadFraction ?? 0) > 0) {
         w.ledgeHandoff = true;
         w.ledgeHandoffGrace = LEDGE_CONTACT.handoffGraceTicks;
         bridgeActive = true;
@@ -1221,7 +1235,7 @@ export class SolidAxleVehicle implements VehicleLike {
       // volume-support hit, so its suspension reaction already owns the
       // contact normal. Discrete scenery has no such support and keeps the
       // separate sidewall constraint below.
-      if (contactSet.count > 0 && !w.volumeSupport) {
+      if (contactSet.count > 0 && ownsNormalConstraint) {
         const contactBudgetShare = 1 / contactSet.count;
         // Slack at one or two steep contacts, binding at three or four.
         const wheelMassShare = Math.min(
