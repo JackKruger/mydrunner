@@ -408,6 +408,20 @@ export const LEDGE_CONTACT = {
   normalCorrectionRate: 5,
   maxNormalCorrectionSpeed: 0.15,
   maxForce: 45_000,
+  // ...but that is a cap per contact, and nothing bounded the total. Four
+  // wheels each running saturated is ~3000 N.s in a single tick on a 1800 kg
+  // truck: 1.67 m/s of delta-v, or a sustained 10 g. The constraint also
+  // resolves inelastically against the tick's cached velocity, so it does not
+  // ease off as penetration clears — a saturated contact is a constant-force
+  // pump, and roughly 34 consecutive saturated ticks is all it takes to reach
+  // the 56 m/s vertical ejection measured on the six-log crawl course.
+  //
+  // Bound what every ledge normal constraint together may add to the chassis
+  // in one tick. Gravity contributes 0.16 m/s per tick, so this leaves ample
+  // headroom to arrest a real impact over a few ticks while making the
+  // runaway arithmetically impossible. Sized in delta-v rather than force so
+  // it means the same thing on every vehicle mass.
+  maxNormalDeltaVPerTick: 0.35,
   // Tangential ledge drive is a compliant tread reaction, not a winch. A
   // separate cap prevents a high-grip prepared tyre from converting its
   // entire axle load into a one-tick upward launch at a square corner.

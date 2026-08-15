@@ -448,6 +448,8 @@ export class SolidAxleVehicle implements VehicleLike {
    *  within one tick and make the front axle's share depend on solve order. */
   private ledgeConstraintWheels = 0;
   private ledgeConstraintWheelsPending = 0;
+  /** Remaining vehicle-wide ledge normal impulse for this tick (N.s). */
+  private ledgeNormalImpulseBudget = 0;
   private readonly debugPreviousLinVel: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly debugAcceleration: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly axleDebug: [{
@@ -694,6 +696,7 @@ export class SolidAxleVehicle implements VehicleLike {
     this.debugVelocityInitialized = false;
     this.ledgeConstraintWheels = 0;
     this.ledgeConstraintWheelsPending = 0;
+    this.ledgeNormalImpulseBudget = 0;
     this.debugAcceleration.x = 0;
     this.debugAcceleration.y = 0;
     this.debugAcceleration.z = 0;
@@ -793,6 +796,8 @@ export class SolidAxleVehicle implements VehicleLike {
     const ledgeLoads = this._ledgeLoads;
     this.ledgeConstraintWheels = this.ledgeConstraintWheelsPending;
     this.ledgeConstraintWheelsPending = 0;
+    this.ledgeNormalImpulseBudget = VEHICLE.mass * this.geom.massMult
+      * LEDGE_CONTACT.maxNormalDeltaVPerTick;
     for (let wheelIndex = 0; wheelIndex < 4; wheelIndex++) {
       wheelBases[wheelIndex] = null;
       ledgeContacts[wheelIndex] = null;
@@ -1265,10 +1270,17 @@ export class SolidAxleVehicle implements VehicleLike {
             carcass.maxDeflection,
             LEDGE_CONTACT.normalCorrectionRate * TUNING.tireSidewallCorrectionMult,
             LEDGE_CONTACT.maxNormalCorrectionSpeed * TUNING.tireSidewallCorrectionMult,
-            LEDGE_CONTACT.maxForce * dt * contactBudgetShare,
+            // Per-contact cap, and then whatever is left of the vehicle-wide
+            // one. Without the second term four saturated contacts pump the
+            // chassis at 10 g with nothing to stop them.
+            Math.min(
+              LEDGE_CONTACT.maxForce * dt * contactBudgetShare,
+              Math.max(0, this.ledgeNormalImpulseBudget),
+            ),
             SIDEWALL_RELEASE_RATE,
             scratch.sidewall,
           );
+          this.ledgeNormalImpulseBudget -= constraint.impulse;
           const normalForce = constraint.impulse / dt;
           totalNormalForce += normalForce;
           if (!w.contact || constraint.deflection > w.tireDeflection) {
