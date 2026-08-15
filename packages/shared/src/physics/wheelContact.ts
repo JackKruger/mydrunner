@@ -403,6 +403,7 @@ const query = {
   normal: { x: 0, y: 0, z: 0 },
   axleUnit: { x: 0, y: 0, z: 0 },
   witness: { x: 0, y: 0, z: 0 },
+  witnessDegenerate: false,
   wheelRadius: 0,
   prediction: 0,
   maxSupportNormalY: 0,
@@ -518,6 +519,12 @@ function considerCollider(collider: RAPIER.Collider): boolean {
   // discrete face creates false sidewall or climb contacts on flat ground.
   if (collider.shapeType() === RAPIER_HEIGHTFIELD_SHAPE_TYPE) return true;
 
+  // Only a cylinder can share the wheel cylinder's axis and make the contact
+  // witness degenerate. A box kerb or step gives Rapier a well-defined witness
+  // on a face, and rebuilding that one throws away real information -- measured
+  // as a 19.6 m/s launch off a 0.55 m step when this was applied to everything.
+  query.witnessDegenerate = collider.shapeType() === RAPIER_CYLINDER_SHAPE_TYPE;
+
   const delta = query.delta;
   const prediction = query.prediction;
   let timeOfImpact = 1;
@@ -613,7 +620,7 @@ function witnessInto(
 ): ContactVec3 {
   out.x = point.x; out.y = point.y; out.z = point.z;
   const axle = query.wheelAxle;
-  if (!axle) return out;
+  if (!axle || !query.witnessDegenerate) return out;
   const unit = normalizeInto(axle, query.axleUnit);
   const centre = query.currentCenter;
   const offset = (point.x - centre.x) * unit.x
@@ -853,6 +860,8 @@ const CLIMB_PROBE_SCALES = [0.10, 0.22, 0.38, 0.58, 0.80, 1.0] as const;
 // Rapier 0.14 ShapeType.HeightField. Kept local so this deterministic helper
 // can retain a type-only Rapier import rather than adding runtime init work.
 const RAPIER_HEIGHTFIELD_SHAPE_TYPE = 7;
+// Rapier 0.14 ShapeType.Cylinder.
+const RAPIER_CYLINDER_SHAPE_TYPE = 10;
 
 function interactionGroupsMatch(a: number, b: number): boolean {
   const membershipA = (a >>> 16) & 0xffff;
