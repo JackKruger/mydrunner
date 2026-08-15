@@ -139,6 +139,7 @@ export function cautionStripeMaterial(ctx: MeshCtx): THREE.MeshStandardMaterial 
       c.fill();
     }
     const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
     tex.anisotropy = 4;

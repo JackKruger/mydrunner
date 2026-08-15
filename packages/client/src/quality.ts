@@ -39,6 +39,9 @@ export interface QualitySettings {
    *  inside a fixed 200 m box every frame regardless of where the player is,
    *  and it is the largest single draw-call cost in the scene. */
   shadows: boolean;
+  /** Use the wider PCF kernel when shadows are enabled. Low tier keeps its
+   *  existing no-shadow path and therefore pays no cost for this setting. */
+  softShadows: boolean;
   /** FBM octaves in the terrain surface shader. */
   terrainOctaves: number;
   /** The second surface lookup that softens cell-aligned surface boundaries.
@@ -103,6 +106,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     pixelRatioCap: 1.5,
     antialias: true,
     shadows: true,
+    softShadows: true,
     terrainOctaves: 3,
     terrainSecondaryBlend: true,
     // Past the far plane, so `detail` is 1 everywhere the camera can see.
@@ -129,6 +133,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     pixelRatioCap: 1,
     antialias: false,
     shadows: false,
+    softShadows: false,
     terrainOctaves: 2,
     terrainSecondaryBlend: false,
     terrainDetailNear: 45,
