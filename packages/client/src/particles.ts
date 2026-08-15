@@ -107,7 +107,7 @@ class SolidRenderer extends PoolBase {
   private readonly mat: THREE.MeshBasicMaterial; private readonly matrix=new THREE.Matrix4();
   private readonly quat=new THREE.Quaternion(); private readonly axis=new THREE.Vector3(); private readonly scale=new THREE.Vector3();
   constructor(capacity:number){ super(capacity); this.geo=new THREE.IcosahedronGeometry(.07,0);this.mat=new THREE.MeshBasicMaterial();this.object=new THREE.InstancedMesh(this.geo,this.mat,capacity);this.object.frustumCulled=false;this.flush(); }
-  emit(p:Particle):void { const index=this.cursor;super.emit(p);this.object.setColorAt(index,p.color); }
+  override emit(p:Particle):void { const index=this.cursor;super.emit(p);this.object.setColorAt(index,p.color); }
   protected flush():void { for(let i=0;i<this.capacity;i++){const p=this.pool[i]!;const a=p.active?1-p.ageMs/p.lifeMs:0;const s=p.active?p.scale*(p.endScale+a*(1.2-p.endScale)):0;this.axis.set(Math.sin(p.rotation),1,Math.cos(p.rotation)).normalize();this.quat.setFromAxisAngle(this.axis,p.rotation+p.ageMs*.004);this.scale.set(s,s*(.6+.4*Math.abs(Math.sin(p.rotation))),s);this.matrix.compose(p.pos,this.quat,this.scale);this.object.setMatrixAt(i,this.matrix);}this.object.instanceMatrix.needsUpdate=true;if(this.object.instanceColor)this.object.instanceColor.needsUpdate=true; }
   dispose():void { this.geo.dispose();this.mat.dispose();this.object.dispose(); }
 }

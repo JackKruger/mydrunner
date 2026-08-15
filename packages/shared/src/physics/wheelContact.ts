@@ -402,6 +402,8 @@ const query = {
   impactCenter: { x: 0, y: 0, z: 0 },
   normal: { x: 0, y: 0, z: 0 },
   axleUnit: { x: 0, y: 0, z: 0 },
+  witness: { x: 0, y: 0, z: 0 },
+  witnessDegenerate: false,
   wheelRadius: 0,
   prediction: 0,
   maxSupportNormalY: 0,
@@ -517,6 +519,12 @@ function considerCollider(collider: RAPIER.Collider): boolean {
   // discrete face creates false sidewall or climb contacts on flat ground.
   if (collider.shapeType() === RAPIER_HEIGHTFIELD_SHAPE_TYPE) return true;
 
+  // Only a cylinder can share the wheel cylinder's axis and make the contact
+  // witness degenerate. A box kerb or step gives Rapier a well-defined witness
+  // on a face, and rebuilding that one throws away real information -- measured
+  // as a 19.6 m/s launch off a 0.55 m step when this was applied to everything.
+  query.witnessDegenerate = collider.shapeType() === RAPIER_CYLINDER_SHAPE_TYPE;
+
   const delta = query.delta;
   const prediction = query.prediction;
   let timeOfImpact = 1;
@@ -563,6 +571,7 @@ function considerCollider(collider: RAPIER.Collider): boolean {
     query.maxClimbHeight,
     query.edgeAdvance,
     query.climbScratch,
+    query.wheelAxle,
   );
   // Pure upward support belongs to the suspension ray. A mixed
   // up/back corner normal is retained only when the same collider has a
@@ -576,10 +585,54 @@ function considerCollider(collider: RAPIER.Collider): boolean {
   const proximity = Math.max(0, prediction - Math.max(0, contact.distance));
   const severity = penetration + proximity;
   retainCandidate(
-    contact.point1, normal, climbTopY, contact.distance, penetration,
+    witnessInto(contact.point1, normal, query.witness),
+    normal, climbTopY, contact.distance, penetration,
     collider.friction(), timeOfImpact, severity,
   );
   return true;
+}
+
+/** Stabilise the axle-parallel coordinate of a discrete contact witness.
+ *
+ *  The wheel proxy is a cylinder whose axis is the wheel axle. A log lying
+ *  square across the path is a parallel cylinder, which is the degenerate case
+ *  for GJK/EPA: the true contact is a line segment across the tyre, so the
+ *  witness Rapier picks along that line is arbitrary and unstable to 1e-9
+ *  between ticks *and between the left and right wheel of an axle*. The point
+ *  is applied with `applyImpulseAtPoint`, so an unstable axle-parallel
+ *  coordinate is an unstable moment arm — a yaw couple on a vehicle taking no
+ *  steering input.
+ *
+ *  How far along the axle the resultant genuinely acts is only meaningful to
+ *  the extent the normal points along the axle. A purely radial normal (a log
+ *  across the path) bears on a patch symmetric about the wheel's mid-plane, so
+ *  the resultant belongs at the centre whatever witness came back. A pure
+ *  sidewall normal really does bear at the rim, and keeps its offset. Blend by
+ *  |normal . axle| so the two limits are exact and everything between is
+ *  continuous — no threshold to flicker across.
+ *
+ *  This is the discrete-collider analogue of the analytic reconstruction
+ *  heightfields already get. @hotloop */
+function witnessInto(
+  point: ContactVec3,
+  normal: ContactVec3,
+  out: ContactVec3,
+): ContactVec3 {
+  out.x = point.x; out.y = point.y; out.z = point.z;
+  const axle = query.wheelAxle;
+  if (!axle || !query.witnessDegenerate) return out;
+  const unit = normalizeInto(axle, query.axleUnit);
+  const centre = query.currentCenter;
+  const offset = (point.x - centre.x) * unit.x
+    + (point.y - centre.y) * unit.y
+    + (point.z - centre.z) * unit.z;
+  const axial = Math.abs(dot(normal, unit));
+  // Remove the share of the offset the normal does not justify.
+  const shed = offset * (1 - Math.min(1, axial));
+  out.x -= unit.x * shed;
+  out.y -= unit.y * shed;
+  out.z -= unit.z * shed;
+  return out;
 }
 
 /** Keep the strongest representative of each distinct constraint plane. */
@@ -713,6 +766,7 @@ const probeRay = {
 
 const intoHorizontal: ContactVec3 = { x: 0, y: 0, z: 0 };
 const forwardHorizontal: ContactVec3 = { x: 0, y: 0, z: 0 };
+const climbAxleUnit: ContactVec3 = { x: 0, y: 0, z: 0 };
 
 /** Writes the arc direction into `outDirection` and returns the top surface's
  *  Y, or null when there is no reachable top. @hotloop */
@@ -728,6 +782,7 @@ function findClimbTargetInto(
   maxClimbHeight: number,
   edgeAdvance: number,
   outDirection: ContactVec3,
+  wheelAxle: ContactVec3 | undefined,
 ): number | null {
   intoHorizontal.x = -faceNormal.x;
   intoHorizontal.y = 0;
@@ -773,6 +828,27 @@ function findClimbTargetInto(
     outDirection.x = targetX - wheelCenter.x;
     outDirection.y = topY + wheelRadius - wheelCenter.y;
     outDirection.z = targetZ - wheelCenter.z;
+    // A wheel can only drive in its own plane. `facePoint` is the witness
+    // Rapier returned on the obstacle, and for a log lying parallel to the
+    // wheel axle the true contact is a line segment, so that witness's
+    // axle-parallel coordinate is arbitrary within the overlap and unstable
+    // to 1e-9 between ticks and between the left and right wheel. Left
+    // unprojected it lands here as a lateral component of the drive
+    // direction, gets multiplied by maxDriveForce and applied off-centre —
+    // measured at 6.2 kN of lateral force per wheel, a third of the
+    // vehicle's weight, on a course with no steering input at all.
+    // Projecting onto the plane perpendicular to the axle is what
+    // contactFrameInto already guarantees for the ordinary longitudinal; the
+    // climb direction bypassed it.
+    if (wheelAxle) {
+      normalizeInto(wheelAxle, climbAxleUnit);
+      const axial = dot(outDirection, climbAxleUnit);
+      outDirection.x -= climbAxleUnit.x * axial;
+      outDirection.y -= climbAxleUnit.y * axial;
+      outDirection.z -= climbAxleUnit.z * axial;
+      // Aimed straight along the axle there is no climb left to describe.
+      if (lengthSq(outDirection) < 1e-12) return null;
+    }
     normalizeInto(outDirection, outDirection);
     if (dot(outDirection, forwardHorizontal) <= 0) return null;
     return topY;
@@ -784,6 +860,8 @@ const CLIMB_PROBE_SCALES = [0.10, 0.22, 0.38, 0.58, 0.80, 1.0] as const;
 // Rapier 0.14 ShapeType.HeightField. Kept local so this deterministic helper
 // can retain a type-only Rapier import rather than adding runtime init work.
 const RAPIER_HEIGHTFIELD_SHAPE_TYPE = 7;
+// Rapier 0.14 ShapeType.Cylinder.
+const RAPIER_CYLINDER_SHAPE_TYPE = 10;
 
 function interactionGroupsMatch(a: number, b: number): boolean {
   const membershipA = (a >>> 16) & 0xffff;

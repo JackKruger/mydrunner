@@ -44,7 +44,15 @@
 //     pressure and soft-ground sinkage. No wire layout change, but two
 //     builds either side of it disagree about how a truck behaves, which
 //     is exactly what this guard exists to stop.
-export const PROTOCOL_VERSION = 16;
+// 17: obstacle contact and driveline limits, plus the RPM/reverse drivetrain
+//     fixes that landed alongside them. No wire layout change, but a truck
+//     either side of this behaves differently against logs, rocks and kerbs:
+//     the ledge drive direction is projected into the wheel's own plane, the
+//     discrete contact witness is reconstructed rather than taken raw, a wheel
+//     on flat ground can now see an obstacle it is pressed against, the ledge
+//     normal constraints share a vehicle-wide per-tick bound, and the locked
+//     centre transfer can no longer spin a gripping wheel backwards.
+export const PROTOCOL_VERSION = 17;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // The client-owned vehicle simulation advances at this fixed cadence.
@@ -391,6 +399,21 @@ export const SUSPENSION = {
 // kerb/rock face until the axle centre has crossed it. The hybrid wheel
 // contact path represents each tyre as a cylinder for steep-face queries,
 // then transfers the collision and drive reactions to the chassis.
+// Driveline limits that are properties of the mechanism rather than of a
+// particular vehicle build.
+export const DRIVELINE = {
+  // The locked centre transfer equalises the front and rear carrier speeds
+  // every tick. That rigidity is correct for a part-time transfer case, but
+  // the solve happens after the ground torque and without reference to it, so
+  // an unbounded correction can spin a wheel that has grip backwards to make
+  // the two carriers meet -- which is a yaw couple, not a drivetrain.
+  //
+  // Chosen just above the ~1980 N.m of torque a loaded stock tyre can react
+  // at the contact patch, so a genuine driveline bind still transmits while a
+  // runaway wheel can no longer drag its partners to an arbitrary speed.
+  centerTransferMaxReactionNm: 2_200,
+} as const;
+
 export const LEDGE_CONTACT = {
   // `contactShape` reports contacts up to this separation so the velocity
   // damper can begin resisting a face before the visual tyre penetrates it.
@@ -408,6 +431,20 @@ export const LEDGE_CONTACT = {
   normalCorrectionRate: 5,
   maxNormalCorrectionSpeed: 0.15,
   maxForce: 45_000,
+  // ...but that is a cap per contact, and nothing bounded the total. Four
+  // wheels each running saturated is ~3000 N.s in a single tick on a 1800 kg
+  // truck: 1.67 m/s of delta-v, or a sustained 10 g. The constraint also
+  // resolves inelastically against the tick's cached velocity, so it does not
+  // ease off as penetration clears — a saturated contact is a constant-force
+  // pump, and roughly 34 consecutive saturated ticks is all it takes to reach
+  // the 56 m/s vertical ejection measured on the six-log crawl course.
+  //
+  // Bound what every ledge normal constraint together may add to the chassis
+  // in one tick. Gravity contributes 0.16 m/s per tick, so this leaves ample
+  // headroom to arrest a real impact over a few ticks while making the
+  // runaway arithmetically impossible. Sized in delta-v rather than force so
+  // it means the same thing on every vehicle mass.
+  maxNormalDeltaVPerTick: 0.35,
   // Tangential ledge drive is a compliant tread reaction, not a winch. A
   // separate cap prevents a high-grip prepared tyre from converting its
   // entire axle load into a one-tick upward launch at a square corner.

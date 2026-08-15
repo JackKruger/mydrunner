@@ -100,20 +100,20 @@ Snapshots never mutate the locally owned body. Remote proxies collide only with 
 
 Shared:
 
-- `packages/shared/src/constants.ts` — every compile-time tunable: protocol/tick rates, vehicle mass / axle springs / drive split, surface friction, anti-roll bar, camera spring, and the `TERRAIN.default*` that define the production world. Tuning lives here, code does not.
+- `packages/shared/src/constants.ts` — every compile-time tunable: protocol/tick rates, vehicle mass / axle springs / drive split, surface friction, anti-roll bar, camera spring, `DRIVELINE` (transfer-case reaction limits), and the `TERRAIN.default*` that define the production world. Tuning lives here, code does not. `LEDGE_CONTACT.maxForce` is the cautionary entry: it is read by six unrelated call sites (carcass force, suspension side force, the post-anti-roll clamp, travel stops, the axle-tube probe), so retuning it to change ledge behaviour silently retunes four other limits — add a named constant instead, as `maxNormalDeltaVPerTick` does.
 - `packages/shared/src/tuning.ts` — `TUNING`: live-mutable values read by owner physics and seeded from `constants.ts`. The client debug panel mutates its local instance immediately. Suspension rates are per-`CarKind`, so `TUNING.axleFront` / `axleRear` are multipliers rather than absolutes.
 - `packages/shared/src/types.ts` — `PlayerInput`, `VehicleState`, `WorldSnapshot`, `CarKind` (+ `normalizeCarKind`). Wire-shape contract.
 - `packages/shared/src/net/messages.ts` — `ClientMessage` / `ServerMessage` discriminated unions, `encode` / `decode*`. `decodeClient` strictly validates shape and rejects non-finite numbers — it is the trust boundary for everything a client can send. Welcome carries a `MapHandshake { id, rev }` + spawn pose + `protocolVersion`; `hello` carries name + carKind + `v`; snapshots include each player's `carKind`. A version mismatch is *not* thrown in `decodeClient` — it decodes normally and `index.ts` answers with a `bye`, because a throw there is swallowed by the ws handler and the player would sit on a dead socket with nothing on screen.
 - `packages/shared/src/physics/world.ts` — `World` wraps a `RAPIER.World`, owns the heightfield collider + map of vehicles + obstacles + landmarks. **Note: heights are transposed before being handed to Rapier** (Rapier reads column-major; our generator is row-major).
-- `packages/shared/src/physics/solidAxleVehicle.ts` — `SolidAxleVehicle`: the owner-authoritative vehicle model. `preStep()` is now only the phase order itself — `phaseBegin` (one pose/velocity capture, force reset, driver controls, steering), then per axle in [front, rear] order `phaseContact` (two contact iterations, beam probes, rut/water/surface reads, the volumetric tyre query and its carcass/sidewall response) followed by `phaseSuspension` (beam integration, wheel-end ride forces, sway bar, travel stops), then `phaseWater`, `phaseEngine`, `phaseDriveline` and `phaseTyreSoil`. Contact and suspension interleave **per axle**: hoisting them into two whole-vehicle passes reorders the impulses each axle applies and is a different simulation, not a refactor. Every phase is `@hotloop`-marked and allocation-free, working out of the preallocated `_axleScratch` / `_ledgeContactSets` / `_contactFrames` slots and passing scalars forward through `VehicleStepContext`. Each wheel can retain two independent steep constraints, but their effective-mass and impulse budgets are shared and only one validated forward patch can transmit drive. Anti-roll transfer is an internal equal/opposite pair in the corrected direction: the more-compressed wheel end gains support and the opposite end loses the same amount. In 4L only, `ANTI_ROLL.lowRangeFrontDisconnect` scales the front bar to zero; the rear bar is unchanged.
-- `packages/shared/src/physics/wheelContact.ts` — exact tyre-cylinder queries for sharp faces, bounded radius-scaled reachable-top probing and contact frames. Discrete queries retain up to two independent contacts and separately select a stable forward climb patch; walls, rear faces and oversized round obstacles remain collision-only. Ordinary and moderate heightfield slopes stay on volumetric support. A heightfield face steeper than `LEDGE_CONTACT.maxSupportNormalY` can enter the ledge path only after a reachable upper surface is validated; because Rapier 0.14 may return the heightfield cylinder cast but no follow-up `contactShape`, terrain ledges reconstruct the witness from that cast analytically. There are no hidden edge motors or pitch torques.
+- `packages/shared/src/physics/solidAxleVehicle.ts` — `SolidAxleVehicle`: the owner-authoritative vehicle model. `preStep()` is now only the phase order itself — `phaseBegin` (one pose/velocity capture, force reset, driver controls, steering), then per axle in [front, rear] order `phaseContact` (two contact iterations, beam probes, rut/water/surface reads, the volumetric tyre query and its carcass/sidewall response) followed by `phaseSuspension` (beam integration, wheel-end ride forces, sway bar, travel stops), then `phaseWater`, `phaseEngine`, `phaseDriveline` and `phaseTyreSoil`. Contact and suspension interleave **per axle**. What that ordering protects is narrower than it looks: every phase reads the pose and velocity captured once in `phaseBegin`, never the live body, so what matters is the order in which *forces* reach the chassis — not the order of the queries that decide them. Moving where an impulse lands relative to the suspension step is a physics change, and needs the goldens re-baselined deliberately rather than as a side effect. Moving read-only work is not, and the goldens will prove it. Every phase is `@hotloop`-marked and allocation-free, working out of the preallocated `_axleScratch` / `_ledgeContactSets` / `_contactFrames` slots and passing scalars forward through `VehicleStepContext`. Each wheel can retain two independent steep constraints, but their effective-mass and impulse budgets are shared and only one validated forward patch can transmit drive. Ledge contacts are gated on `ownsNormalConstraint` — "does this contact still need its own normal constraint?" — rather than on `!volumeSupport`: the heightfield reconstruction derives its witness from the suspension's own volume-support hit, so the ride force already reacts that normal, while a log against a wheel standing on flat ground has no such reaction and does need one. All the ledge normal constraints together may add at most `LEDGE_CONTACT.maxNormalDeltaVPerTick` to the chassis in a tick; the per-contact `maxForce` cap alone let four saturated contacts pump it at 10 g. Anti-roll transfer is an internal equal/opposite pair in the corrected direction: the more-compressed wheel end gains support and the opposite end loses the same amount. In 4L only, `ANTI_ROLL.lowRangeFrontDisconnect` scales the front bar to zero; the rear bar is unchanged.
+- `packages/shared/src/physics/wheelContact.ts` — exact tyre-cylinder queries for sharp faces, bounded radius-scaled reachable-top probing and contact frames. Discrete queries retain up to two independent contacts and separately select a stable forward climb patch; walls, rear faces and oversized round obstacles remain collision-only. Ordinary and moderate heightfield slopes stay on volumetric support. A heightfield face steeper than `LEDGE_CONTACT.maxSupportNormalY` can enter the ledge path only after a reachable upper surface is validated; because Rapier 0.14 may return the heightfield cylinder cast but no follow-up `contactShape`, terrain ledges reconstruct the witness from that cast analytically. That reconstruction covers **heightfields only** — a discrete collider whose follow-up `contactShape` returns null simply drops the contact for the tick, which is the outstanding D2 below. The driven climb direction is projected onto the plane perpendicular to the wheel axle before use: it is built from the witness point on the obstacle, and without the projection that witness's axle-parallel coordinate becomes a lateral force multiplied by `maxDriveForce` and applied off-centre. This is the guarantee `contactFrameInto` already provides for the ordinary longitudinal, which the climb direction used to bypass. There are no hidden edge motors or pitch torques.
 - `packages/shared/src/physics/axle.ts` — unsprung axle beam state (heave + roll DOFs, mass/inertia response, articulation and progressive travel stops). Pure functions, no Rapier handles.
 - `packages/shared/src/physics/wheelDynamics.ts` — per-wheel angular-velocity integrator (drive/brake/ground/rolling torques using the selected wheel assembly's derived inertia). Pure functions.
 - `packages/shared/src/physics/engine.ts` — engine + automatic gearbox: real crankshaft torque, gearbox/final-drive/low-range multiplication, driven-carrier RPM, chassis-speed-based shift logic, plus the flood/restart state machine (`stepEngineFlooding`). A drowned engine short-circuits `stepEngine` before the RPM floor and winds down to zero, which fades the audio and reads as 0 on the tacho with no wire change. **RPM is derived, not integrated** — there is no flywheel, so `rpmTarget` reads it back off the driven carrier, blending from a throttle-shaped stall target at rest to rigid coupling by 8 rad/s. Everything that pins the needle follows from that: hold the wheels (brake, handbrake, a bog) and the tacho parks at a constant for as long as you hold them, and anything that lies to `stepEngine` about wheel speed disables the rev limiter outright, because the limiter exists only downstream of that number. `shiftCooldown` ticks down **only** inside the forward auto-shift branch, so every direction change clears it rather than freezing it for the length of the reverse leg.
 - `packages/shared/src/physics/vehicleGeom.ts` — per-`CarKind` physics identity: axle placement, spring rates, mass/power multipliers, `airIntakeY` (chassis-local; what makes the Patrol's snorkel matter and the bike drown first), `spawnYAboveGround`, `restWheelPositions`.
 - `packages/shared/src/physics/tire.ts` / `tireCarcass.ts` — live longitudinal/lateral slip curves, force relaxation, load sensitivity, friction-ellipse combination, compliant carcass force, and pressure scaling. Pressure also scales ledge edge advance and tread traction: airing down wraps farther around an edge and transmits more ledge impulse, while high pressure does less. Launch and hill holding blend to a bounded static constraint below 0.5 m/s. Lateral grip is shaped by **two** curves, and they are a matched pair: `lateralGripFromSlipAngle` against slip *angle*, `lateralGripFromLongitudinalSlip` against slip *ratio*. The second is the combined-slip term and the ellipse is not a substitute for it — `combineFrictionEllipse` scales a longitudinal and a lateral *demand* by a common factor, preserving whatever ratio two independent models asked for, so before it existed a fully locked wheel kept ~50% of its cornering force and the handbrake could not break the rear loose at all. It multiplies into `dynamicLatForce` only, never the static lateral hold: at rest `rawLatForce` collapses to `staticTargetLatForce` regardless, so hill-holding is mathematically untouched.
 - `packages/shared/src/physics/soil.ts` — per-wheel mud/deep-mud sinkage, contact footprint, shear build-up, compaction, slip work and bulldozing resistance. Leaving soft ground releases sink and clears local disturbance.
-- `packages/shared/src/physics/differential.ts` — deterministic open/locked/LSD carrier and angular-impulse primitives. Locked reactions conserve wheel angular momentum; the Dustback LSD is capped by its torque-bias ratio and preload.
+- `packages/shared/src/physics/differential.ts` — deterministic open/locked/LSD carrier and angular-impulse primitives. Locked reactions conserve wheel angular momentum; the Dustback LSD is capped by its torque-bias ratio and preload. `solveCenterTransferImpulse` reduces algebraically to "set both carriers to their mean", and that rigidity is right for a part-time case — but it is solved *after* the ground torque and with no reference to it, so unbounded it will spin a wheel that has grip backwards to make the two carriers meet, which is a yaw couple rather than a drivetrain. The correction is therefore bounded by `DRIVELINE.centerTransferMaxReactionNm` and may not push a wheel with ground contact through zero; wheels in the air are unconstrained.
 - `packages/shared/src/physics/terrain.ts` — deterministic FBM-noise heightmap + Surface enum + exhaustive `SURFACE_INFO` traction/soil metadata (the single label/friction-key/minimap-colour/tyre-curve table) + hill-climb trail layers. Rolling hills, one Gaussian mountain peak, scattered mud bogs and multiple roads.
 - `packages/shared/src/physics/objectCatalog.ts` — `OBJECT_INFO`: one source of truth for placeable object metadata and collider parts. Every owner client builds these independently, so collider-layout changes require a protocol bump to keep connected client builds compatible.
 - `packages/shared/src/physics/obstacles.ts` — deterministic rock + tree placement. Three passes: medium scatter, dense small-rock detail, and a corridor of boulders along the rocky hill climb up the mountain. `spawnObstacleColliders` is a loop over the catalog, and leaves each body at the origin with the colliders carrying full world transforms: Rapier stores both as f32, so anchor-plus-offset rounds twice and moved a dozen rocks 0.1 mm off the pre-table behaviour.
@@ -217,12 +217,58 @@ Rapier in single-threaded mode is deterministic given identical inputs and step 
 
 Named here so it stays visible rather than being rediscovered. In rough priority order:
 
-1. **`solidAxleVehicle.ts` is still ~2,750 lines even with `preStep()` split into named phases.** The phase boundaries are explicit and guarded now (see the key-files entry), but the phases still live on one class and share its scratch fields, so `phaseTyreSoil` alone is ~400 lines. Any further extraction must retain the single chassis pose/velocity read, the front/rear then left/right iteration order, and the per-axle contact→suspension interleave; a whole-vehicle pass per phase would change the physics.
+1. **`solidAxleVehicle.ts` is still ~2,750 lines even with `preStep()` split into named phases.** The phase boundaries are explicit and guarded now (see the key-files entry), but the phases still live on one class and share its scratch fields, so `phaseTyreSoil` alone is ~400 lines. Any further extraction must retain the single chassis pose/velocity read and the order in which forces reach the chassis. The front/rear then left/right iteration order and the per-axle contact→suspension interleave matter only insofar as they determine that — hoisting read-only work (a query pass) out of them is safe and the goldens will confirm it; hoisting force application is a physics change.
 2. **Part effects are string-suffix tests divorced from the catalog** (`resolveVehicleSpec`). See the `vehicleBuild.ts` entry above.
 3. **Build compatibility rules are written twice** — `normalizeVehicleBuildDetailed` enforces them, `partCompatibility` restates them for UI copy. When they drift the workshop offers a part the server then refuses.
 4. **`main.ts` (~900 lines)** keeps ~30 module-level `let`s shadowing the last snapshot's HUD fields, plus a ~275-line `start()`. Adding a HUD field costs four edits in one file.
 5. **The server pulls Rapier in transitively.** `Room` imports the `Physics` barrel for `geomFor` / `spawnYAboveGround` / `sampleHeightBilinear`, which drags in `world.ts` and its base64 WASM. "The server does not simulate vehicles" is true of behaviour but not of the dependency graph; a Rapier-free spec entry point would make it structurally true.
 6. **The full `VehicleBuild` tuple rides every snapshot at 30 Hz** (~18 of ~138 B/player) even though `buildRevision` already signals change and `Scene` already keys off it. Harmless at the current player counts; the first thing to fix if a room ever gets large.
+
+## Outstanding obstacle-contact work
+
+`logCrawl.test.ts` drives a stock Ridgeback at a crawl into six logs laid square
+across its path. The course is symmetric about x = 0 and the steering input is
+zero for the whole run, so roll, yaw and lateral drift all have a correct answer
+of approximately zero. **The test is red on purpose** and is the acceptance
+criterion for the three items below — make it green by fixing these, never by
+widening a threshold.
+
+Four fixes have landed (climb-direction projection, the `ownsNormalConstraint`
+gate, the vehicle-wide ledge impulse bound, the centre-transfer limit). Measured
+over an 18-cell radius × range × throttle matrix they took traversals cleared
+from 1/18 to 7/18 and worst chassis vertical speed from a 94.6 m/s ejection to
+2.6 m/s. Worst lateral drift is still 8.1 m and worst yaw 136°.
+
+In the order they should be attempted:
+
+1. **D2 — the degenerate parallel-cylinder witness.** The main remaining cause of
+   yaw and drift, and the one metric that did not improve across all four landed
+   fixes. Needs an analytic witness reconstruction for discrete colliders, like
+   the one heightfields already have, plus a single consistent `penetration`
+   definition: the direct `contactShape` path measures geometric distance while
+   the `castShape` path synthesises a swept overshoot, and at crawl speed the
+   per-tick travel exceeds `LEDGE_CONTACT.prediction`, so the two alternate on
+   approach and disagree about how deep the same contact is.
+2. **D1 second half — the ledge force basis is not orthogonal.** `tireLong` is
+   now the projected climb direction but `tireLat` is still
+   `ledgeFrame.lateral`, built from a different vector. They are not
+   perpendicular, so `longV` and `latV` double-count the same velocity component
+   and `combineFrictionEllipse` operates in a skewed basis.
+3. **D4 — the ledge mass budget is still one tick stale.**
+   `LEDGE_CONTACT.normalMassBudget` is divided by the *previous* tick's wheel
+   count, so on the entry tick of a four-wheel catch each wheel claims half the
+   sprung mass — twice the vehicle, which is exactly the failure the constant
+   was added to prevent. `maxNormalDeltaVPerTick` now bounds the consequence but
+   the divisor is still wrong. Fixing it properly means hoisting contact
+   *discovery* into one whole-vehicle pass while force application stays per
+   axle, which the revised rule in the `solidAxleVehicle.ts` entry permits.
+
+Two dead ends, recorded so they are not re-chased. **`Math.sign(longSlip)`** is
+not a discontinuity: `longitudinalGripFromSlip(0) = 0`, so the sign is
+multiplied by a term that vanishes at zero and the product is an odd, continuous
+function. **`Math.sign(axialDot)`** is correct cylinder support-mapping geometry
+— a cylinder on a tilted plane really does contact at the rim edge, and JS
+`Math.sign(0)` is 0 so the centred case is right.
 
 ## Periodic architecture review
 
@@ -248,44 +294,6 @@ This file should be updated when the architecture changes. If you (future Claude
 
 The MVP loop is complete: connect → pick a rig → run canonical local physics → upload owner state → see remote trucks through buffered interpolation and collide through local kinematic proxies.
 
-### Shipped
-- Mobile HUD layout: one `.hud-dock` column for the bottom-centre instruments, a collapsible transmission panel, and an aux tray split into always-on trail controls plus a toggled pit group. Panels are translucent, slimmed and edge-hugging on touch, and a full-screen toggle (`fullscreen.ts`, aux tray + menu setting) buys back the browser chrome. `player-ui.spec.ts` pins the whole panel set as non-overlapping and on-screen across six phone viewports in three panel states; `mobile-hud-screenshot.spec.ts` captures what they cost the windscreen.
-- Mobile graphics tier (`quality.ts`): auto-detected `high`/`low` preset covering pixel ratio, MSAA, shadows, three procedural shaders, a scenery distance cull, particle instancing and the menu panorama rate. Render-only — physics, tick rate and the wire protocol are untouched, and the determinism test still guards that.
-- Surface-name HUD.
-- Engine sound (RPM-driven via `AudioContext`).
-- Mud splatter particles in deep mud.
-- Player nameplate above each remote vehicle.
-- Pitch-aware chase camera + corner swing + sky cam follow.
-- Hilux / Ute / Motorbike variants + name/car localStorage persistence.
-- Touch / mobile controls (analog steer pad + pedals + aux).
-- Combined-slip tyre curves, physical differentials, player tyre pressure, soft-ground sinkage, and synchronized session ruts.
-- Minimap / map overview.
-- Text chat (T to open; rate-limited + sanitised server-side).
-- Client-owned vehicle physics with fixed-tick render interpolation.
-- Local player-collision proxies aligned to rendered remote poses.
-- Mountain switchback trail with per-traverse features (whoops, rocky step, mud puddle).
-- Multiple roads: north loop (dirt circuit), south bog trail, east gravel connector.
-- Procedural sky dome: gradient + warm horizon band + 5-octave FBM clouds + sun disc with glow.
-- Physics-driven water: buoyancy, drag, authored current, per-kind engine drowning with a manual restart, depth-tinted surface with flow-scrolled ripples, wheel spray and bow wave, an editor water tool, and a river ford across the main road.
-- Physics-driven winching: server-authoritative attachments to strong scenery or vehicle recovery points, load-limited reeling, overload cable failure, replicated cable visuals, HUD/audio feedback, and touch controls.
-
-- Persistent workshop builds: seven fictional bases, nine part slots, paint, lockers, named build slots, server-leased garage bays and a build revision on the wire.
-- Vehicle damage (body / engine / steering) with collision and flooding causes, and bullbar-dependent engine protection.
-- Selectable transfer case (2H / 4H / 4L) + front/rear lockers, and an H-pattern manual gearbox alongside the automatic. `solveCenterTransferImpulse` equalises the front and rear carrier speeds every tick whenever the case is not 2H — a rigid centre, with no open or viscous option. That is what makes the handbrake behave differently by range: in 2H the rear locks outright and the tail swings, while in 4H the unbraked front axle feeds speed back through the transfer case, the rear settles short of a full lock and the front is dragged toward one as well. Correct for a part-time transfer case, and the reason a handbrake turn is a 2H manoeuvre.
-- Handbrake as a mechanical rear lock (`VEHICLE.handbrakeForce`, sized above the measured 9826 N peak rear grip) plus the combined-slip tyre term that lets a locked wheel actually give up its cornering force. The rotation is emergent: nothing applies a yaw torque, the handbrake only ever changes brake torque on the two rear wheels.
-- Asset designer at `/asset-editor.html`: low-poly modelling over the same procedural vocabulary the game builds from.
-- Main-menu live map panorama.
-- Protocol-version handshake refusing mismatched client/server builds.
-- Single Pages deploy workflow (the scaffold `static.yml` raced it and shipped the raw repo).
-- `SURFACE_INFO`: one table replacing three parallel per-surface lookups.
-- Production-world test coverage at the shipped 320 m / res-128 geometry.
-- Map documents loaded by the relay, owner client and editor, with a revision handshake refusing mismatched bundles.
-- Level editor at `/editor.html`: sculpt / smooth / flatten / paint brushes, ground-relative or exact-world-Y object placement, spawn placement, marker placement, undo, and JSON / `.ts`-module export.
-- Garage bays as authored content: a marker tool (`0`) places, aims, labels and sizes them, and `markers.ts` paints the bay — slab, outline, chevrons, wheel stop, floating beacon — from the marker itself in the game and the editor alike.
-- `OBJECT_INFO`: one catalog replacing five hand-copied kind lists, and 40 placeable objects on top of it (natural, trail, props, markers).
-- Placement ghost: a translucent copy of the object under the cursor, aimed with the wheel or `[` / `]`, built by the same mesh path as the real thing.
-- Offline preview from the editor: **Preview in game** hands the live document to `/index.html?preview=1` in a new tab, which drives it on the local Rapier sim with no server.
-
 ### Content
 - Cargo objective: spawn a crate to deliver from A to B; mass affects vehicle handling.
 - Multiple truck loadouts (light, heavy, winch-equipped).
@@ -296,7 +304,6 @@ The MVP loop is complete: connect → pick a rig → run canonical local physics
 - Voice chat (scoped and shelved — WebRTC P2P + WS signaling is the chosen approach).
 
 ### Wire-format optimisation
-- ~~Move snapshots to msgpack~~ / ~~quantize positions/quaternions~~ — shipped (see `messages.ts`).
 - Binary deltas — only changed players, only changed fields.
 
 ### Stretch
@@ -318,7 +325,8 @@ The MVP loop is complete: connect → pick a rig → run canonical local physics
 
 - **`@dimforge/rapier3d-compat 0.14` exposes `setWheelRollInfluence` in TypeScript types but the WASM binding throws at runtime.** Don't use it; tune via CoM offset, track width, friction multipliers, and steer rate instead.
 - **Rapier heightfield is column-major.** `World.buildTerrain()` transposes our row-major heights before calling `ColliderDesc.heightfield`. If you change the generator's indexing, update the transpose.
-- **The prepared Outclaw's 0.9 m isolated-ledge stall is not a belly/slider stall.** The wheel ledge contacts plus front axle tube and housing probes stop it before the chassis reaches the face. The chassis/damage manifold path records no belly contact or impulse, so do not tune chassis friction or add slider assistance to address that rig.
+- **A wheel proxy against a log is two parallel cylinders**, which is the degenerate case for GJK/EPA. The wheel cylinder's axis is the wheel axle; a log lying square across the path shares it. The true contact is a line segment, so the witness Rapier returns is arbitrary along that line and unstable to 1e-9 between ticks *and between the left and right wheel of an axle*. Anything derived from that witness's axle-parallel coordinate has to be projected out or it becomes a yaw couple on a vehicle taking no steering input. Same family as the heightfield `contactShape` gotcha above, and not yet fully addressed — see D2.
+- **The prepared Outclaw's 0.9 m isolated-ledge stall is not a belly/slider stall.** The wheel ledge contacts plus front axle tube and housing probes stop it before the chassis reaches the face. The chassis/damage manifold path records no belly contact or impulse, so do not tune chassis friction or add slider assistance to address that rig. Note that `axleRegressions.test.ts` asserts this through `axleTubeTicks > 300`, a proxy for how long the tube stayed in contact rather than for the claim itself; it currently fails at 245 while the real invariants (`chassisManifoldTicks` and `chassisImpulse` both 0) still hold. Fix the threshold to match the behaviour, not the behaviour to match the threshold.
 - **Single global room.** `Room` is instantiated once in `index.ts`. Sharding requires a `RoomManager` — straightforward but unbuilt.
 - **Relay loop is deadline-based `setTimeout` at 30 Hz.** It drops missed broadcasts after a long pause rather than bursting stale snapshots.
 - **Owner state is quantized and shape-validated at decode.** The room ignores stale/non-finite direct updates; there is intentionally no anti-cheat simulation.

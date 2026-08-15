@@ -22,6 +22,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import {
   ANTI_ROLL,
+  DRIVELINE,
   ENGINE,
   FIXED_DT,
   GRAVITY_Y,
@@ -448,6 +449,8 @@ export class SolidAxleVehicle implements VehicleLike {
    *  within one tick and make the front axle's share depend on solve order. */
   private ledgeConstraintWheels = 0;
   private ledgeConstraintWheelsPending = 0;
+  /** Remaining vehicle-wide ledge normal impulse for this tick (N.s). */
+  private ledgeNormalImpulseBudget = 0;
   private readonly debugPreviousLinVel: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly debugAcceleration: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly axleDebug: [{
@@ -694,6 +697,7 @@ export class SolidAxleVehicle implements VehicleLike {
     this.debugVelocityInitialized = false;
     this.ledgeConstraintWheels = 0;
     this.ledgeConstraintWheelsPending = 0;
+    this.ledgeNormalImpulseBudget = 0;
     this.debugAcceleration.x = 0;
     this.debugAcceleration.y = 0;
     this.debugAcceleration.z = 0;
@@ -793,6 +797,8 @@ export class SolidAxleVehicle implements VehicleLike {
     const ledgeLoads = this._ledgeLoads;
     this.ledgeConstraintWheels = this.ledgeConstraintWheelsPending;
     this.ledgeConstraintWheelsPending = 0;
+    this.ledgeNormalImpulseBudget = VEHICLE.mass * this.geom.massMult
+      * LEDGE_CONTACT.maxNormalDeltaVPerTick;
     for (let wheelIndex = 0; wheelIndex < 4; wheelIndex++) {
       wheelBases[wheelIndex] = null;
       ledgeContacts[wheelIndex] = null;
@@ -1078,7 +1084,21 @@ export class SolidAxleVehicle implements VehicleLike {
       contactSet.count = 0;
       contactSet.primaryContactIndex = -1;
       contactSet.driveContactIndex = -1;
+      // Whether this wheel's contacts still need their own normal constraint.
+      // False only for the heightfield reconstruction below, whose witness is
+      // the suspension's own volume-support hit — the ride force already
+      // reacts that normal, so constraining it again would double it.
+      //
+      // This used to be spelled `!w.volumeSupport`, which conflates "the
+      // suspension already owns this normal" with "the tyre-volume sweep found
+      // ground". A wheel standing on flat terrain and pressed against a log has
+      // volume support *and* an unreacted face: the suspension is holding it up
+      // against the ground while nothing at all resists the log. Measured on
+      // the six-log course, the left and right wheel sat in different branches
+      // of this gate for 1333 of ~2400 ticks.
+      let ownsNormalConstraint = true;
       if (w.volumeSupport && w.contactNormal.y < LEDGE_CONTACT.maxSupportNormalY) {
+        ownsNormalConstraint = false;
         const terrainLedge = findHeightfieldLedgeContactInto(
           this.world.terrain,
           center,
@@ -1101,7 +1121,7 @@ export class SolidAxleVehicle implements VehicleLike {
           contactSet.primaryContactIndex = 0;
           contactSet.driveContactIndex = terrainLedge.climbDirection ? 0 : -1;
         }
-      } else if (!w.volumeSupport) {
+      } else {
         findSteepWheelContactsInto(
           this.world.world,
           this.wheelShape,
@@ -1180,7 +1200,7 @@ export class SolidAxleVehicle implements VehicleLike {
         scratch.series,
       );
       let bridgeActive = false;
-      if (ledge && !w.volumeSupport && (semantics?.treadFraction ?? 0) > 0) {
+      if (ledge && ownsNormalConstraint && (semantics?.treadFraction ?? 0) > 0) {
         w.ledgeHandoff = true;
         w.ledgeHandoffGrace = LEDGE_CONTACT.handoffGraceTicks;
         bridgeActive = true;
@@ -1221,7 +1241,7 @@ export class SolidAxleVehicle implements VehicleLike {
       // volume-support hit, so its suspension reaction already owns the
       // contact normal. Discrete scenery has no such support and keeps the
       // separate sidewall constraint below.
-      if (contactSet.count > 0 && !w.volumeSupport) {
+      if (contactSet.count > 0 && ownsNormalConstraint) {
         const contactBudgetShare = 1 / contactSet.count;
         // Slack at one or two steep contacts, binding at three or four.
         const wheelMassShare = Math.min(
@@ -1251,10 +1271,17 @@ export class SolidAxleVehicle implements VehicleLike {
             carcass.maxDeflection,
             LEDGE_CONTACT.normalCorrectionRate * TUNING.tireSidewallCorrectionMult,
             LEDGE_CONTACT.maxNormalCorrectionSpeed * TUNING.tireSidewallCorrectionMult,
-            LEDGE_CONTACT.maxForce * dt * contactBudgetShare,
+            // Per-contact cap, and then whatever is left of the vehicle-wide
+            // one. Without the second term four saturated contacts pump the
+            // chassis at 10 g with nothing to stop them.
+            Math.min(
+              LEDGE_CONTACT.maxForce * dt * contactBudgetShare,
+              Math.max(0, this.ledgeNormalImpulseBudget),
+            ),
             SIDEWALL_RELEASE_RATE,
             scratch.sidewall,
           );
+          this.ledgeNormalImpulseBudget -= constraint.impulse;
           const normalForce = constraint.impulse / dt;
           totalNormalForce += normalForce;
           if (!w.contact || constraint.deflection > w.tireDeflection) {
@@ -1760,14 +1787,52 @@ export class SolidAxleVehicle implements VehicleLike {
         dt,
         this._scratchDifferential,
       );
-      const frontDelta = center.leftAngularVelocity - postFrontCarrier;
-      const rearDelta = center.rightAngularVelocity - postRearCarrier;
+      let frontDelta = center.leftAngularVelocity - postFrontCarrier;
+      let rearDelta = center.rightAngularVelocity - postRearCarrier;
+      // The locked centre is rigid on purpose — that is what a part-time
+      // transfer case is — but it is solved after the ground torque and with
+      // no reference to it, so it will happily spin a gripping wheel
+      // backwards to make the two carrier speeds meet. A tyre with load on it
+      // cannot do that: the ground would resist. When one wheel runs away
+      // (in low range the drive torque is 2.26x the available grip torque, so
+      // it does) the mean it drags the others to is far from any speed the
+      // ground would allow, and the wheel that ends up reversed generates
+      // longitudinal force opposing its mirror image — a pure yaw couple on a
+      // vehicle with no steering input. Measured at 178 ticks of a contacting
+      // wheel driven backwards while the chassis moved forward.
+      //
+      // Limit the correction to what the tyres could actually react. Wheels
+      // with no contact are unconstrained and keep the full delta.
+      frontDelta = this.limitCarrierDelta(frontDelta, dt, 0, 1);
+      rearDelta = this.limitCarrierDelta(rearDelta, dt, 2, 3);
       this.wheels[0]!.angVel += frontDelta;
       this.wheels[1]!.angVel += frontDelta;
       this.wheels[2]!.angVel += rearDelta;
       this.wheels[3]!.angVel += rearDelta;
       this.debugDifferentialReactionTorque += Math.abs(center.reactionTorque);
     }
+  }
+
+  /** Bound one axle's centre-transfer speed correction to what its tyres could
+   *  actually react. A wheel in the air is unconstrained and keeps the full
+   *  delta; a wheel with load on it cannot be spun through zero by the
+   *  driveline alone, because the ground would resist. @hotloop */
+  private limitCarrierDelta(
+    delta: number,
+    dt: number,
+    leftIndex: number,
+    rightIndex: number,
+  ): number {
+    const maxStep = (DRIVELINE.centerTransferMaxReactionNm * dt)
+      / Math.max(1e-4, this.geom.spec.wheelInertiaKgM2);
+    let limited = clamp(delta, -maxStep, maxStep);
+    for (let side = 0; side < 2; side++) {
+      const w = this.wheels[side === 0 ? leftIndex : rightIndex]!;
+      if (!w.contact) continue;
+      if (w.angVel > 0 && w.angVel + limited < 0) limited = Math.max(limited, -w.angVel);
+      else if (w.angVel < 0 && w.angVel + limited > 0) limited = Math.min(limited, -w.angVel);
+    }
+    return limited;
   }
 
   /** 6. Per-wheel tyre forces, soil response and spin integration.
@@ -1896,8 +1961,22 @@ export class SolidAxleVehicle implements VehicleLike {
       if (ledge && ledgeFrame && treadFraction > 0) {
         const edgeWrapScale = this.tireEdgeWrapPressureScale * TUNING.tireEdgeWrapMult;
         cp = ledge.point;
-        tireLong = ledge.climbDirection ?? ledgeFrame.longitudinal;
-        tireLat = ledgeFrame.lateral;
+        // The pair has to be orthogonal or `longV` and `latV` double-count the
+        // same velocity component and the friction ellipse works in a skewed
+        // basis. `ledgeFrame` is an orthonormal triad, so its own longitudinal
+        // and lateral belong together — but the climb direction is a different
+        // vector (hub toward a target above the crest), and pairing it with
+        // `ledgeFrame.lateral` was mixing two bases. `wheelContact` projects the
+        // climb direction perpendicular to the axle, so when it is in use the
+        // axle itself is the exactly-orthogonal lateral, and it is the right
+        // direction anyway: lateral tyre force acts across the tread.
+        if (ledge.climbDirection) {
+          tireLong = ledge.climbDirection;
+          tireLat = basis.axle;
+        } else {
+          tireLong = ledgeFrame.longitudinal;
+          tireLat = ledgeFrame.lateral;
+        }
         surfMult = clamp(ledge.friction, 0, 2) * LEDGE_CONTACT.tractionMultiplier
           * edgeWrapScale * treadFraction;
         normalLoad = Math.max(0, w.volumeSupport ? (w.lastForce ?? 0) : ledgeLoads[wIdx]!);
