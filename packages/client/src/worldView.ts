@@ -24,13 +24,7 @@ import { Sky } from './sky.js';
 import { disposeObject3D } from './three/dispose.js';
 import { activeQuality, type QualitySettings } from './quality.js';
 import { GroundCover } from './groundCover.js';
-
-/** Sun direction, fog colour and fog range are duplicated in
- *  terrainShader.ts's uniforms. Retune one, retune the other. */
-const FOG_COLOR = 0xd6e2ec;
-const FOG_NEAR = 180;
-const FOG_FAR = 480;
-const SUN_POS = { x: 50, y: 80, z: 30 };
+import { createOutdoorEnvironment, RENDER_ENVIRONMENT } from './renderEnvironment.js';
 
 /** What the world is made of. The game composes this from the terrain
  *  handshake; the editor composes it from the map being edited. */
@@ -65,6 +59,7 @@ export class WorldView {
   private readonly quality: QualitySettings;
   readonly stencilSupported: boolean;
   private readonly markerOptions: MarkerViewOptions;
+  private readonly disposeEnvironment: () => void;
 
   /** `quality` defaults to the resolved tier so the game gets it for free.
    *  The editor passes QUALITY.high explicitly — it exists to show the world
@@ -80,6 +75,9 @@ export class WorldView {
     // bandwidth cost on every frame, and at pixelRatioCap 1.0 the crispness
     // it was buying has already been given up.
     this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, stencil: true });
+    this.renderer.outputColorSpace = RENDER_ENVIRONMENT.outputColorSpace;
+    this.renderer.toneMapping = RENDER_ENVIRONMENT.toneMapping;
+    this.renderer.toneMappingExposure = RENDER_ENVIRONMENT.exposure;
     this.stencilSupported = this.renderer.getContextAttributes()?.stencil ?? false;
     // Cap pixel ratio. Uncapped on a 2x or 3x display the GPU pays 4-9x
     // the fragment cost - the difference between 60 FPS and 20 FPS on
@@ -96,20 +94,24 @@ export class WorldView {
     // terrain.ts's receiveShadow is inert. What is lost is scenery and
     // vehicle self-shadowing, which is a visible change, not a free one.
     this.renderer.shadowMap.enabled = quality.shadows;
-    // PCFSoft is the default and is several samples per fragment on the
-    // shadow-casting pass. PCF (basic) halves that with barely visible
-    // quality loss at our shadow map resolution.
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // High tier uses the wider soft-PCF kernel. Low tier retains the basic
+    // selection even though its shadow pass is disabled, preserving its
+    // existing zero-cost behaviour if shadows remain off.
+    this.renderer.shadowMap.type = quality.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     canvasParent.appendChild(this.renderer.domElement);
+
+    const environment = createOutdoorEnvironment(this.renderer);
+    this.scene.environment = environment.texture;
+    this.disposeEnvironment = environment.dispose;
 
     // Procedural sky dome replaces the flat background colour. Fog still
     // matches the horizon tint so distant terrain melts into the sky.
-    this.scene.fog = new THREE.Fog(FOG_COLOR, FOG_NEAR, FOG_FAR);
+    this.scene.fog = new THREE.Fog(RENDER_ENVIRONMENT.fog.color, RENDER_ENVIRONMENT.fog.near, RENDER_ENVIRONMENT.fog.far);
     this.sky = new Sky(quality);
     this.scene.add(this.sky.mesh);
 
-    const sun = new THREE.DirectionalLight(0xfff4dd, 1.4);
-    sun.position.set(SUN_POS.x, SUN_POS.y, SUN_POS.z);
+    const sun = new THREE.DirectionalLight(RENDER_ENVIRONMENT.sun.color, RENDER_ENVIRONMENT.sun.intensity);
+    sun.position.set(RENDER_ENVIRONMENT.sun.position.x, RENDER_ENVIRONMENT.sun.position.y, RENDER_ENVIRONMENT.sun.position.z);
     // Both flags matter: leaving the light configured to cast while the
     // shadow map is disabled still costs the shadow-camera bookkeeping.
     sun.castShadow = quality.shadows;
@@ -125,7 +127,7 @@ export class WorldView {
     // edges with the larger texel pitch.
     sun.shadow.bias = -0.0008;
     this.scene.add(sun);
-    this.scene.add(new THREE.HemisphereLight(0xb8d0e2, 0x66553c, 0.6));
+    this.scene.add(new THREE.HemisphereLight(RENDER_ENVIRONMENT.hemisphere.skyColor, RENDER_ENVIRONMENT.hemisphere.groundColor, RENDER_ENVIRONMENT.hemisphere.intensity));
 
     // Placeholder ground until the world arrives. Replaced by setWorld().
     const placeholder = new THREE.Mesh(
@@ -315,6 +317,8 @@ export class WorldView {
       this.markers = null;
     }
     disposeObject3D(this.sky.mesh);
+    this.scene.environment = null;
+    this.disposeEnvironment();
     this.renderer.dispose();
   }
 }

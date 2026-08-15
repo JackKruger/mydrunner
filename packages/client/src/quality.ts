@@ -39,6 +39,9 @@ export interface QualitySettings {
    *  inside a fixed 200 m box every frame regardless of where the player is,
    *  and it is the largest single draw-call cost in the scene. */
   shadows: boolean;
+  /** Use the wider PCF kernel when shadows are enabled. Low tier keeps its
+   *  existing no-shadow path and therefore pays no cost for this setting. */
+  softShadows: boolean;
   /** FBM octaves in the terrain surface shader. */
   terrainOctaves: number;
   /** Maximum source size requested for each terrain material map; zero keeps
@@ -110,6 +113,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     pixelRatioCap: 1.5,
     antialias: true,
     shadows: true,
+    softShadows: true,
     terrainOctaves: 3,
     terrainTextureResolution: 256,
     terrainTriplanarSampling: true,
@@ -139,6 +143,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     pixelRatioCap: 1,
     antialias: false,
     shadows: false,
+    softShadows: false,
     terrainOctaves: 2,
     terrainTextureResolution: 0,
     terrainTriplanarSampling: false,

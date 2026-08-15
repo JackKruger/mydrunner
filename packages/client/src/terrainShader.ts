@@ -11,14 +11,13 @@
 // the shader jitters the world-space lookup with FBM noise so cell-aligned
 // boundaries become irregular and organic.
 //
-// The lighting and fog constants below are duplicated from Scene's
-// THREE.Fog and directional light on purpose: this is a raw ShaderMaterial,
-// so scene lights never reach it. If you retune one, retune the other or
-// the terrain will light differently from everything standing on it.
+// This is a raw ShaderMaterial, so scene lights never reach it. Its uniforms
+// are populated from renderEnvironment.ts, the same source as WorldView.
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 import { activeQuality, buildTerrainFragment, type QualitySettings } from './quality.js';
+import { RENDER_ENVIRONMENT } from './renderEnvironment.js';
 
 const VERT = /* glsl */ `
 varying vec3 vWorldPos;
@@ -317,7 +316,8 @@ export function makeTerrainMaterial(
   terrain: Physics.TerrainData,
   quality: QualitySettings = activeQuality(),
 ): THREE.ShaderMaterial {
-  const sunDir = new THREE.Vector3(50, 80, 30).normalize();
+  const env = RENDER_ENVIRONMENT;
+  const sunDir = new THREE.Vector3(env.sun.position.x, env.sun.position.y, env.sun.position.z).normalize();
 
   // Pack the surface map into an 8-bit single-channel texture. Three.js
   // doesn't expose a clean `R8` format on WebGL 1, so we use Luminance
@@ -331,17 +331,18 @@ export function makeTerrainMaterial(
   const surfaceMap = new THREE.DataTexture(dataRgba, n, n, THREE.RGBAFormat, THREE.UnsignedByteType);
   surfaceMap.magFilter = THREE.NearestFilter;
   surfaceMap.minFilter = THREE.NearestFilter;
+  surfaceMap.colorSpace = THREE.NoColorSpace;
   surfaceMap.needsUpdate = true;
 
   const materialMaps = quality.terrainTextureResolution > 0 ? loadTerrainTextures() : {};
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uSunDir: { value: sunDir },
-      uSunColor: { value: new THREE.Color(0xfff4dd).multiplyScalar(1.4) },
-      uAmbient: { value: new THREE.Color(0xd6e2ec).multiplyScalar(0.45) },
-      uFogColor: { value: new THREE.Color(0xd6e2ec) },
-      uFogNear: { value: 180 },
-      uFogFar: { value: 480 },
+      uSunColor: { value: new THREE.Color(env.sun.color).multiplyScalar(env.sun.intensity) },
+      uAmbient: { value: new THREE.Color(env.hemisphere.skyColor).multiplyScalar(env.shaderAmbientIntensity) },
+      uFogColor: { value: new THREE.Color(env.fog.color) },
+      uFogNear: { value: env.fog.near },
+      uFogFar: { value: env.fog.far },
       uSurfaceMap: { value: surfaceMap },
       uTerrainSize: { value: terrain.size },
       // Unused (and undeclared in the GLSL) unless the tier asks for the

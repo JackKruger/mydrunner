@@ -109,6 +109,7 @@ export class GroundCover {
     // alpha rather than transparent blending, preserving early depth writes.
     const pixels = new Uint8Array([255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255, 255, 255, 0]);
     this.atlas = new THREE.DataTexture(pixels, 2, 2, THREE.RGBAFormat);
+    this.atlas.colorSpace = THREE.SRGBColorSpace;
     this.atlas.needsUpdate = true;
     const specs: Record<GroundCoverKind, [THREE.BufferGeometry, number]> = {
       grass: [plane, 0x5d7f35], scrub: [plane, 0x6c7040], stone: [stone, 0x77736b],
