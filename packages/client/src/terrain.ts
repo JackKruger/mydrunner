@@ -9,7 +9,7 @@
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
-import { makeTerrainMaterial, packSurfaces, surfaceTextureOf } from './terrainShader.js';
+import { makeTerrainMaterial, packSurfaces, surfaceTextureOf, terrainTexturesOf } from './terrainShader.js';
 import { activeQuality, type QualitySettings } from './quality.js';
 
 export class TerrainMesh {
@@ -119,7 +119,7 @@ export class TerrainMesh {
    *  automatically with backoff, rebuilding terrain each welcome). */
   dispose(): void {
     this.geometry.dispose();
-    surfaceTextureOf(this.material)?.dispose();
+    for (const texture of terrainTexturesOf(this.material)) texture.dispose();
     this.material.dispose();
   }
 }

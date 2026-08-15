@@ -14,14 +14,14 @@
 //   does not. Still water over a flowing river reads as a bug, and worse,
 //   it hides the current that is about to push the truck sideways.
 //
-// The lighting and fog constants are duplicated from worldView.ts for the
-// same reason terrainShader.ts duplicates them: this is a raw
-// ShaderMaterial, so scene lights never reach it. Retune one, retune all
-// three or the river will light differently from the bank it sits in.
+// This is a raw ShaderMaterial, so scene lights never reach it. Its uniforms
+// are populated from renderEnvironment.ts, the same source as WorldView and
+// terrainShader.ts, so the river cannot drift away from the bank lighting.
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 import { activeQuality, buildWaterFragment, type QualitySettings } from './quality.js';
+import { RENDER_ENVIRONMENT } from './renderEnvironment.js';
 
 const VERT = /* glsl */ `
 attribute float aWet;
@@ -225,6 +225,7 @@ export function makeWaterMaterial(
   terrain: Physics.TerrainData,
   quality: QualitySettings = activeQuality(),
 ): THREE.ShaderMaterial {
+  const env = RENDER_ENVIRONMENT;
   const n = terrain.resolution;
   const flowData = new Uint8Array(n * n * 4);
   packFlow(terrain, flowData, { r0: 0, c0: 0, rows: n, cols: n });
@@ -233,16 +234,17 @@ export function makeWaterMaterial(
   // nearest sampling would make the ripples visibly step at cell edges.
   flowMap.magFilter = THREE.LinearFilter;
   flowMap.minFilter = THREE.LinearFilter;
+  flowMap.colorSpace = THREE.NoColorSpace;
   flowMap.needsUpdate = true;
 
   return new THREE.ShaderMaterial({
     uniforms: {
-      uSunDir: { value: new THREE.Vector3(50, 80, 30).normalize() },
-      uSunColor: { value: new THREE.Color(0xfff4dd).multiplyScalar(1.4) },
-      uAmbient: { value: new THREE.Color(0xd6e2ec).multiplyScalar(0.45) },
-      uFogColor: { value: new THREE.Color(0xd6e2ec) },
-      uFogNear: { value: 180 },
-      uFogFar: { value: 480 },
+      uSunDir: { value: new THREE.Vector3(env.sun.position.x, env.sun.position.y, env.sun.position.z).normalize() },
+      uSunColor: { value: new THREE.Color(env.sun.color).multiplyScalar(env.sun.intensity) },
+      uAmbient: { value: new THREE.Color(env.hemisphere.skyColor).multiplyScalar(env.shaderAmbientIntensity) },
+      uFogColor: { value: new THREE.Color(env.fog.color) },
+      uFogNear: { value: env.fog.near },
+      uFogFar: { value: env.fog.far },
       uTime: { value: 0 },
       uFlowMap: { value: flowMap },
       uFlowRange: { value: FLOW_RANGE },

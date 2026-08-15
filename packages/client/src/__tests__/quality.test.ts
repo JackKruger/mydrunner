@@ -113,7 +113,8 @@ describe('the quality table', () => {
     }
 
     const features: (keyof QualitySettings)[] = [
-      'antialias', 'shadows', 'terrainSecondaryBlend', 'cloudFineLayer',
+      'antialias', 'shadows', 'terrainSecondaryBlend', 'terrainTriplanarSampling',
+      'terrainNormalMaps', 'cloudFineLayer',
       'waterRippleNormal', 'waterFilaments', 'detailedSuspension',
     ];
     for (const field of features) {

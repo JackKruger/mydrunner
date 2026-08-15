@@ -68,7 +68,7 @@ function detailTexture(name: string, repeat: number, color = false): THREE.Textu
   const texture = new THREE.TextureLoader().load(`/assets/materials/${name}`);
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(repeat, repeat);
-  if (color) texture.colorSpace = THREE.SRGBColorSpace;
+  texture.colorSpace = color ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   return texture;
 }
 

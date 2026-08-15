@@ -44,6 +44,7 @@ function makeTextTexture(text: string): { texture: THREE.Texture; aspect: number
   ctx.fillText(text, width / 2, height / 2 + 2);
 
   const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
   texture.needsUpdate = true;

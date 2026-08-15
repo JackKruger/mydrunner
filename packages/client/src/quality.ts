@@ -39,8 +39,18 @@ export interface QualitySettings {
    *  inside a fixed 200 m box every frame regardless of where the player is,
    *  and it is the largest single draw-call cost in the scene. */
   shadows: boolean;
+  /** Use the wider PCF kernel when shadows are enabled. Low tier keeps its
+   *  existing no-shadow path and therefore pays no cost for this setting. */
+  softShadows: boolean;
   /** FBM octaves in the terrain surface shader. */
   terrainOctaves: number;
+  /** Maximum source size requested for each terrain material map; zero keeps
+   *  the procedural-only path and avoids all terrain texture downloads. */
+  terrainTextureResolution: number;
+  /** World-space projection on all three axes, preventing stretched cliffs. */
+  terrainTriplanarSampling: boolean;
+  /** Sample tangent-space normal maps (requires textured terrain). */
+  terrainNormalMaps: boolean;
   /** The second surface lookup that softens cell-aligned surface boundaries.
    *  Costs a dependent texture fetch plus a whole extra surfaceColor() call on
    *  roughly a third of ground fragments. */
@@ -109,7 +119,11 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     pixelRatioCap: 1.5,
     antialias: true,
     shadows: true,
+    softShadows: true,
     terrainOctaves: 3,
+    terrainTextureResolution: 256,
+    terrainTriplanarSampling: true,
+    terrainNormalMaps: true,
     terrainSecondaryBlend: true,
     // Past the far plane, so `detail` is 1 everywhere the camera can see.
     terrainDetailNear: 1e9,
@@ -138,7 +152,11 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     pixelRatioCap: 1,
     antialias: false,
     shadows: false,
+    softShadows: false,
     terrainOctaves: 2,
+    terrainTextureResolution: 0,
+    terrainTriplanarSampling: false,
+    terrainNormalMaps: false,
     terrainSecondaryBlend: false,
     terrainDetailNear: 45,
     terrainDetailFar: 110,
@@ -236,6 +254,9 @@ export function glslPrelude(q: QualitySettings): string {
   // Derived from the numbers rather than the tier name, so the table stays
   // the single source of truth: push the band past the far plane and the fade
   // machinery compiles out entirely.
+  if (q.terrainTextureResolution > 0) lines.push('#define TERRAIN_TEXTURES 1');
+  if (q.terrainTriplanarSampling) lines.push('#define TERRAIN_TRIPLANAR 1');
+  if (q.terrainNormalMaps) lines.push('#define TERRAIN_NORMAL_MAPS 1');
   if (q.terrainDetailFar < 1e6) lines.push('#define TERRAIN_DETAIL_FADE 1');
   if (q.terrainSecondaryBlend) lines.push('#define TERRAIN_BLEND2 1');
   if (q.cloudFineLayer) lines.push('#define CLOUD_FINE 1');
