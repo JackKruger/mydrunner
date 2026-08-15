@@ -402,6 +402,7 @@ const query = {
   impactCenter: { x: 0, y: 0, z: 0 },
   normal: { x: 0, y: 0, z: 0 },
   axleUnit: { x: 0, y: 0, z: 0 },
+  witness: { x: 0, y: 0, z: 0 },
   wheelRadius: 0,
   prediction: 0,
   maxSupportNormalY: 0,
@@ -577,10 +578,54 @@ function considerCollider(collider: RAPIER.Collider): boolean {
   const proximity = Math.max(0, prediction - Math.max(0, contact.distance));
   const severity = penetration + proximity;
   retainCandidate(
-    contact.point1, normal, climbTopY, contact.distance, penetration,
+    witnessInto(contact.point1, normal, query.witness),
+    normal, climbTopY, contact.distance, penetration,
     collider.friction(), timeOfImpact, severity,
   );
   return true;
+}
+
+/** Stabilise the axle-parallel coordinate of a discrete contact witness.
+ *
+ *  The wheel proxy is a cylinder whose axis is the wheel axle. A log lying
+ *  square across the path is a parallel cylinder, which is the degenerate case
+ *  for GJK/EPA: the true contact is a line segment across the tyre, so the
+ *  witness Rapier picks along that line is arbitrary and unstable to 1e-9
+ *  between ticks *and between the left and right wheel of an axle*. The point
+ *  is applied with `applyImpulseAtPoint`, so an unstable axle-parallel
+ *  coordinate is an unstable moment arm — a yaw couple on a vehicle taking no
+ *  steering input.
+ *
+ *  How far along the axle the resultant genuinely acts is only meaningful to
+ *  the extent the normal points along the axle. A purely radial normal (a log
+ *  across the path) bears on a patch symmetric about the wheel's mid-plane, so
+ *  the resultant belongs at the centre whatever witness came back. A pure
+ *  sidewall normal really does bear at the rim, and keeps its offset. Blend by
+ *  |normal . axle| so the two limits are exact and everything between is
+ *  continuous — no threshold to flicker across.
+ *
+ *  This is the discrete-collider analogue of the analytic reconstruction
+ *  heightfields already get. @hotloop */
+function witnessInto(
+  point: ContactVec3,
+  normal: ContactVec3,
+  out: ContactVec3,
+): ContactVec3 {
+  out.x = point.x; out.y = point.y; out.z = point.z;
+  const axle = query.wheelAxle;
+  if (!axle) return out;
+  const unit = normalizeInto(axle, query.axleUnit);
+  const centre = query.currentCenter;
+  const offset = (point.x - centre.x) * unit.x
+    + (point.y - centre.y) * unit.y
+    + (point.z - centre.z) * unit.z;
+  const axial = Math.abs(dot(normal, unit));
+  // Remove the share of the offset the normal does not justify.
+  const shed = offset * (1 - Math.min(1, axial));
+  out.x -= unit.x * shed;
+  out.y -= unit.y * shed;
+  out.z -= unit.z * shed;
+  return out;
 }
 
 /** Keep the strongest representative of each distinct constraint plane. */
