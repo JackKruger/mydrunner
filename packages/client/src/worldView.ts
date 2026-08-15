@@ -24,6 +24,9 @@ import { Sky } from './sky.js';
 import { disposeObject3D } from './three/dispose.js';
 import { activeQuality, type QualitySettings } from './quality.js';
 import { GroundCover } from './groundCover.js';
+import {
+  PostProcessing, shouldUsePostProcessAntialias, type RenderPath,
+} from './postProcessing.js';
 
 /** Sun direction, fog colour and fog range are duplicated in
  *  terrainShader.ts's uniforms. Retune one, retune the other. */
@@ -65,6 +68,7 @@ export class WorldView {
   private readonly quality: QualitySettings;
   readonly stencilSupported: boolean;
   private readonly markerOptions: MarkerViewOptions;
+  private readonly postProcessing: PostProcessing | null;
 
   /** `quality` defaults to the resolved tier so the game gets it for free.
    *  The editor passes QUALITY.high explicitly — it exists to show the world
@@ -136,6 +140,13 @@ export class WorldView {
     placeholder.receiveShadow = true;
     this.scene.add(placeholder);
     this.terrainPlaceholder = placeholder;
+
+    const usesPostProcessing = quality.ambientOcclusion || quality.colorGrading
+      || quality.bloom || shouldUsePostProcessAntialias(quality);
+    this.postProcessing = usesPostProcessing
+      ? new PostProcessing(this.renderer, this.scene, new THREE.Camera(), quality)
+      : null;
+    this.postProcessing?.setSize(window.innerWidth, window.innerHeight);
   }
 
   /** Non-null once setWorld has run. The editor's brushes write through
@@ -268,18 +279,20 @@ export class WorldView {
 
   setSize(width: number, height: number): void {
     this.renderer.setSize(width, height);
+    this.postProcessing?.setSize(width, height);
   }
 
   /** Keeps the sky dome centred on the camera, then draws. Both callers
    *  need the sky follow, so it belongs here rather than in each loop. */
-  render(camera: THREE.Camera): void {
+  render(camera: THREE.Camera, path: RenderPath = 'gameplay'): void {
     this.sky.update(camera);
     // The one place per frame holding both the camera and the obstacle set.
     // A no-op unless the tier asks for culling.
     this.obstacles?.updateVisibility(camera.position.x, camera.position.z);
     this.waterMeshRef?.update();
     this.markers?.update();
-    this.renderer.render(this.scene, camera);
+    if (this.postProcessing) this.postProcessing.render(camera, path);
+    else this.renderer.render(this.scene, camera);
   }
 
   dispose(): void {
@@ -315,6 +328,7 @@ export class WorldView {
       this.markers = null;
     }
     disposeObject3D(this.sky.mesh);
+    this.postProcessing?.dispose();
     this.renderer.dispose();
   }
 }

@@ -106,6 +106,7 @@ describe('the quality table', () => {
       'pixelRatioCap', 'terrainOctaves', 'cloudOctaves', 'waterOctaves',
       'maxParticles', 'trackSegments', 'menuPanoramaHz',
       'groundCoverDensity', 'groundCoverDrawDistance',
+      'ambientOcclusionRadius', 'ambientOcclusionIntensity', 'bloomStrength', 'bloomRadius',
     ];
     for (const field of budgets) {
       expect(QUALITY.low[field], field).toBeLessThanOrEqual(QUALITY.high[field] as number);
@@ -114,10 +115,21 @@ describe('the quality table', () => {
     const features: (keyof QualitySettings)[] = [
       'antialias', 'shadows', 'terrainSecondaryBlend', 'cloudFineLayer',
       'waterRippleNormal', 'waterFilaments', 'detailedSuspension',
+      'ambientOcclusion', 'colorGrading', 'bloom', 'postProcessAntialias',
     ];
     for (const field of features) {
       if (QUALITY.low[field]) expect(QUALITY.high[field], field).toBe(true);
     }
+  });
+
+  it('keeps low-tier post processing off and bloom restricted to HDR highlights', () => {
+    expect(QUALITY.low.ambientOcclusion).toBe(false);
+    expect(QUALITY.low.colorGrading).toBe(false);
+    expect(QUALITY.low.bloom).toBe(false);
+    expect(QUALITY.low.postProcessAntialias).toBe(false);
+    expect(QUALITY.high.bloomThreshold).toBeGreaterThan(1);
+    expect(QUALITY.high.bloomStrength).toBeLessThan(0.25);
+    expect(QUALITY.high.colorSaturation).toBeLessThanOrEqual(1);
   });
 
   it('keeps high-tier terrain detail past anything the camera can reach', () => {

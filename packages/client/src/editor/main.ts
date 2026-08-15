@@ -600,7 +600,7 @@ function frame(): void {
   }
 
   if (painting && hoverHit) applyStroke(hoverHit, dt);
-  view.render(camera.camera);
+  view.render(camera.camera, 'editor');
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
