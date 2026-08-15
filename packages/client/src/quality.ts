@@ -92,6 +92,26 @@ export interface QualitySettings {
   groundCoverDensity: number;
   /** Maximum camera distance at which ground cover is drawn. */
   groundCoverDrawDistance: number;
+  /** Screen-space ambient occlusion. Kept deliberately subtle: it should
+   *  clarify wheel wells, rock contacts and building corners, not paint a
+   *  dark outline around the sky. */
+  ambientOcclusion: boolean;
+  ambientOcclusionRadius: number;
+  ambientOcclusionIntensity: number;
+  /** A restrained final colour adjustment. Values stay close to neutral so
+   *  shaded forest detail is retained and authored colours are not pushed. */
+  colorGrading: boolean;
+  colorSaturation: number;
+  colorContrast: number;
+  /** Bloom is thresholded above ordinary white, limiting it to water glints
+   *  and other genuinely HDR highlights. */
+  bloom: boolean;
+  bloomStrength: number;
+  bloomThreshold: number;
+  bloomRadius: number;
+  /** Post-process antialiasing is only used when the renderer has no MSAA.
+   *  Keeping the preference separate makes that non-duplication testable. */
+  postProcessAntialias: boolean;
 }
 
 export const QUALITY: Record<QualityTier, QualitySettings> = {
@@ -123,6 +143,17 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     menuPanoramaHz: 60,
     groundCoverDensity: 1,
     groundCoverDrawDistance: 115,
+    ambientOcclusion: true,
+    ambientOcclusionRadius: 7,
+    ambientOcclusionIntensity: 0.65,
+    colorGrading: true,
+    colorSaturation: 0.98,
+    colorContrast: 1.025,
+    bloom: true,
+    bloomStrength: 0.16,
+    bloomThreshold: 1.15,
+    bloomRadius: 0.18,
+    postProcessAntialias: true,
   },
   low: {
     tier: 'low',
@@ -148,6 +179,17 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     menuPanoramaHz: 20,
     groundCoverDensity: 0.38,
     groundCoverDrawDistance: 62,
+    ambientOcclusion: false,
+    ambientOcclusionRadius: 0,
+    ambientOcclusionIntensity: 0,
+    colorGrading: false,
+    colorSaturation: 1,
+    colorContrast: 1,
+    bloom: false,
+    bloomStrength: 0,
+    bloomThreshold: 1.15,
+    bloomRadius: 0,
+    postProcessAntialias: false,
   },
 };
 

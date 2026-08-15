@@ -257,7 +257,7 @@ export class Scene {
     this.menuLookPath.getPointAt(t, this._menuCameraLook);
     this.menuCamera.position.copy(this._menuCameraPos);
     this.menuCamera.lookAt(this._menuCameraLook);
-    this.view.render(this.menuCamera);
+    this.view.render(this.menuCamera, 'menu-panorama');
   }
 
   setWinchTarget(point: { x: number; y: number; z: number } | null, valid = false): void {
@@ -796,7 +796,7 @@ export class Scene {
       if (!renderedLinks.some((entry) => entry.id === link.id)) renderedLinks.push(link);
     }
     this.winchView.update(renderedLinks, this._winchEndpoint);
-    this.view.render(this.camera);
+    this.view.render(this.camera, 'gameplay');
   }
 
   /** Bound once rather than re-created per frame at the WinchView call site.
