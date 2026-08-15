@@ -1961,8 +1961,22 @@ export class SolidAxleVehicle implements VehicleLike {
       if (ledge && ledgeFrame && treadFraction > 0) {
         const edgeWrapScale = this.tireEdgeWrapPressureScale * TUNING.tireEdgeWrapMult;
         cp = ledge.point;
-        tireLong = ledge.climbDirection ?? ledgeFrame.longitudinal;
-        tireLat = ledgeFrame.lateral;
+        // The pair has to be orthogonal or `longV` and `latV` double-count the
+        // same velocity component and the friction ellipse works in a skewed
+        // basis. `ledgeFrame` is an orthonormal triad, so its own longitudinal
+        // and lateral belong together — but the climb direction is a different
+        // vector (hub toward a target above the crest), and pairing it with
+        // `ledgeFrame.lateral` was mixing two bases. `wheelContact` projects the
+        // climb direction perpendicular to the axle, so when it is in use the
+        // axle itself is the exactly-orthogonal lateral, and it is the right
+        // direction anyway: lateral tyre force acts across the tread.
+        if (ledge.climbDirection) {
+          tireLong = ledge.climbDirection;
+          tireLat = basis.axle;
+        } else {
+          tireLong = ledgeFrame.longitudinal;
+          tireLat = ledgeFrame.lateral;
+        }
         surfMult = clamp(ledge.friction, 0, 2) * LEDGE_CONTACT.tractionMultiplier
           * edgeWrapScale * treadFraction;
         normalLoad = Math.max(0, w.volumeSupport ? (w.lastForce ?? 0) : ledgeLoads[wIdx]!);
