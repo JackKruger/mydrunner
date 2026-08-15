@@ -22,6 +22,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import {
   ANTI_ROLL,
+  DRIVELINE,
   ENGINE,
   FIXED_DT,
   GRAVITY_Y,
@@ -1775,14 +1776,52 @@ export class SolidAxleVehicle implements VehicleLike {
         dt,
         this._scratchDifferential,
       );
-      const frontDelta = center.leftAngularVelocity - postFrontCarrier;
-      const rearDelta = center.rightAngularVelocity - postRearCarrier;
+      let frontDelta = center.leftAngularVelocity - postFrontCarrier;
+      let rearDelta = center.rightAngularVelocity - postRearCarrier;
+      // The locked centre is rigid on purpose — that is what a part-time
+      // transfer case is — but it is solved after the ground torque and with
+      // no reference to it, so it will happily spin a gripping wheel
+      // backwards to make the two carrier speeds meet. A tyre with load on it
+      // cannot do that: the ground would resist. When one wheel runs away
+      // (in low range the drive torque is 2.26x the available grip torque, so
+      // it does) the mean it drags the others to is far from any speed the
+      // ground would allow, and the wheel that ends up reversed generates
+      // longitudinal force opposing its mirror image — a pure yaw couple on a
+      // vehicle with no steering input. Measured at 178 ticks of a contacting
+      // wheel driven backwards while the chassis moved forward.
+      //
+      // Limit the correction to what the tyres could actually react. Wheels
+      // with no contact are unconstrained and keep the full delta.
+      frontDelta = this.limitCarrierDelta(frontDelta, dt, 0, 1);
+      rearDelta = this.limitCarrierDelta(rearDelta, dt, 2, 3);
       this.wheels[0]!.angVel += frontDelta;
       this.wheels[1]!.angVel += frontDelta;
       this.wheels[2]!.angVel += rearDelta;
       this.wheels[3]!.angVel += rearDelta;
       this.debugDifferentialReactionTorque += Math.abs(center.reactionTorque);
     }
+  }
+
+  /** Bound one axle's centre-transfer speed correction to what its tyres could
+   *  actually react. A wheel in the air is unconstrained and keeps the full
+   *  delta; a wheel with load on it cannot be spun through zero by the
+   *  driveline alone, because the ground would resist. @hotloop */
+  private limitCarrierDelta(
+    delta: number,
+    dt: number,
+    leftIndex: number,
+    rightIndex: number,
+  ): number {
+    const maxStep = (DRIVELINE.centerTransferMaxReactionNm * dt)
+      / Math.max(1e-4, this.geom.spec.wheelInertiaKgM2);
+    let limited = clamp(delta, -maxStep, maxStep);
+    for (let side = 0; side < 2; side++) {
+      const w = this.wheels[side === 0 ? leftIndex : rightIndex]!;
+      if (!w.contact) continue;
+      if (w.angVel > 0 && w.angVel + limited < 0) limited = Math.max(limited, -w.angVel);
+      else if (w.angVel < 0 && w.angVel + limited > 0) limited = Math.min(limited, -w.angVel);
+    }
+    return limited;
   }
 
   /** 6. Per-wheel tyre forces, soil response and spin integration.

@@ -391,6 +391,21 @@ export const SUSPENSION = {
 // kerb/rock face until the axle centre has crossed it. The hybrid wheel
 // contact path represents each tyre as a cylinder for steep-face queries,
 // then transfers the collision and drive reactions to the chassis.
+// Driveline limits that are properties of the mechanism rather than of a
+// particular vehicle build.
+export const DRIVELINE = {
+  // The locked centre transfer equalises the front and rear carrier speeds
+  // every tick. That rigidity is correct for a part-time transfer case, but
+  // the solve happens after the ground torque and without reference to it, so
+  // an unbounded correction can spin a wheel that has grip backwards to make
+  // the two carriers meet -- which is a yaw couple, not a drivetrain.
+  //
+  // Chosen just above the ~1980 N.m of torque a loaded stock tyre can react
+  // at the contact patch, so a genuine driveline bind still transmits while a
+  // runaway wheel can no longer drag its partners to an arbitrary speed.
+  centerTransferMaxReactionNm: 2_200,
+} as const;
+
 export const LEDGE_CONTACT = {
   // `contactShape` reports contacts up to this separation so the velocity
   // damper can begin resisting a face before the visual tyre penetrates it.
