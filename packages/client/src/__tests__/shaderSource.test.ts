@@ -56,6 +56,30 @@ describe('terrain shader', () => {
     }
   });
 
+  it('enables textured triplanar materials and normal maps only at high quality', () => {
+    const high = terrainSource('high');
+    const low = terrainSource('low');
+    expect(high).toContain('#define TERRAIN_TEXTURES 1');
+    expect(high).toContain('#define TERRAIN_TRIPLANAR 1');
+    expect(high).toContain('#define TERRAIN_NORMAL_MAPS 1');
+    expect(high).toContain('texture2D(map, p.zy)');
+    expect(high).toContain('weights /= max(dot(weights, vec3(1.0))');
+    expect(low).not.toContain('#define TERRAIN_TEXTURES 1');
+    expect(low).not.toContain('#define TERRAIN_TRIPLANAR 1');
+    expect(low).not.toContain('#define TERRAIN_NORMAL_MAPS 1');
+  });
+
+  it('keeps procedural fallback, boundary jitter, roughness and sampled-normal lighting', () => {
+    for (const tier of ['high', 'low'] as const) {
+      const source = terrainSource(tier);
+      expect(source).toContain('uniform sampler2D uSurfaceMap');
+      expect(source).toContain('vec2 lookup = wp + vec2(jx, jz) * 4.5');
+      expect(source).toContain('vec3 fallback = proceduralColor');
+      expect(source).toContain('float shininess = mix(72.0, 5.0, material.roughness)');
+      expect(source).toContain('vec3 N = normalize(material.normal)');
+    }
+  });
+
   it('states octave counts as preprocessor constants', () => {
     // GLSL ES 1.00 requires a constant loop bound; a uniform would not link.
     expect(terrainSource('high')).toContain('#define TERRAIN_OCTAVES 3');
