@@ -44,7 +44,15 @@
 //     pressure and soft-ground sinkage. No wire layout change, but two
 //     builds either side of it disagree about how a truck behaves, which
 //     is exactly what this guard exists to stop.
-export const PROTOCOL_VERSION = 16;
+// 17: obstacle contact and driveline limits, plus the RPM/reverse drivetrain
+//     fixes that landed alongside them. No wire layout change, but a truck
+//     either side of this behaves differently against logs, rocks and kerbs:
+//     the ledge drive direction is projected into the wheel's own plane, the
+//     discrete contact witness is reconstructed rather than taken raw, a wheel
+//     on flat ground can now see an obstacle it is pressed against, the ledge
+//     normal constraints share a vehicle-wide per-tick bound, and the locked
+//     centre transfer can no longer spin a gripping wheel backwards.
+export const PROTOCOL_VERSION = 17;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // The client-owned vehicle simulation advances at this fixed cadence.
