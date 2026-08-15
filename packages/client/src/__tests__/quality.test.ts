@@ -104,7 +104,8 @@ describe('the quality table', () => {
     // be <= high on the numbers and must not enable anything high disables.
     const budgets: (keyof QualitySettings)[] = [
       'pixelRatioCap', 'terrainOctaves', 'cloudOctaves', 'waterOctaves',
-      'maxParticles', 'trackSegments', 'menuPanoramaHz',
+      'maxParticles', 'particleDensity', 'particleAtlasFrames', 'softParticles',
+      'effectDrawDistance', 'trackSegments', 'menuPanoramaHz',
       'groundCoverDensity', 'groundCoverDrawDistance',
     ];
     for (const field of budgets) {

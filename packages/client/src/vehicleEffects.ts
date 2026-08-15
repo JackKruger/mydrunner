@@ -208,7 +208,7 @@ export class VehicleEffects {
         pose.position.y + bonnet.y,
         pose.position.z + bonnet.z,
         SMOKE_COLOR,
-        { spread: 0.35, rise: 0.9, riseVar: 0.5, lifeMs: 700, lifeVarMs: 450, scale: 1.2 },
+        { effect: 'smoke', spread: 0.35, rise: 0.9, riseVar: 0.5, lifeMs: 700, lifeVarMs: 450, scale: 1.2, gravity: 0.2, endScale: 2.4 },
       );
     }
   }
@@ -262,6 +262,7 @@ export class VehicleEffects {
       const count = Math.max(1, Math.round(intensity * 3));
       for (let n = 0; n < count; n++) {
         this.particles.emit(wx, wy, wz, SPRAY_COLOR, {
+          effect: 'water', contactY: wy,
           spread: 1.6,
           rise: 1.2 + intensity * 1.8,
           riseVar: 1.4,
@@ -289,6 +290,7 @@ export class VehicleEffects {
       const count = Math.min(3, Math.round(groundSpeed / 4));
       for (let n = 0; n < count; n++) {
         this.particles.emit(nx, level, nz, FOAM_COLOR, {
+          effect: 'water', contactY: level,
           spread: 2.4,
           rise: 1.0,
           riseVar: 1.2,
@@ -353,6 +355,9 @@ export class VehicleEffects {
       const throwSpeed = (0.55 + intensity * 1.7) * -Math.sign(wheelSnap.angVel);
       for (let n = 0; n < count; n++) {
         this.particles.emit(wx, wy, wz, style.color, {
+          effect: surf === Physics.Surface.Mud || surf === Physics.Surface.DeepMud ? 'mud'
+            : surf === Physics.Surface.Gravel ? 'gravel'
+              : surf === Physics.Surface.Grass ? 'grass' : 'dust',
           spread: style.spread,
           rise: style.rise + intensity * 0.5,
           riseVar: style.riseVar,
@@ -366,12 +371,28 @@ export class VehicleEffects {
           opacity: style.opacity,
         });
       }
+      // Contact debris is intentionally a bounded event per wheel/sample,
+      // not an update-rate loop. It therefore preserves snapshot determinism.
+      if (surf === Physics.Surface.Gravel || surf === Physics.Surface.Grass) {
+        this.particles.emit(wx, wy, wz, style.color, {
+          effect: surf === Physics.Surface.Gravel ? 'gravel' : 'grass',
+          spread: style.spread * 1.3, rise: .7, riseVar: 1.1,
+          biasX: forward.x * throwSpeed, biasZ: forward.z * throwSpeed,
+          lifeMs: 380, lifeVarMs: 180, scale: .45, gravity: -9.81, endScale: .2,
+        });
+      }
     }
   }
 
   update(frameDtMs: number): void {
     this.particles.update(frameDtMs);
     this.tracks.update(frameDtMs);
+  }
+
+  /** Batch-aware diagnostics; unlike counting scene children this remains
+   * meaningful when hundreds of particles share four draw objects. */
+  particleStats(): { active: number; emitted: number; drawCalls: number } {
+    return this.particles.stats();
   }
 
   dispose(): void {
