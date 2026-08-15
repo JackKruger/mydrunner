@@ -26,9 +26,7 @@ export interface PlayerTelemetry {
   /** Empty when the engine is fine. Otherwise the flooded / cranking
    *  prompt: a dead engine with no explanation reads as a broken game. */
   engineStatus: string;
-  tick?: number;
   fps?: number;
-  previewDiagnostic?: string;
   transferCase?: TransferCaseMode;
   frontLocked?: boolean;
   rearLocked?: boolean;
@@ -43,12 +41,10 @@ export interface PlayerTelemetry {
 
 export interface PlayerHudState extends PlayerTelemetry {
   connection: PlayerConnectionState;
-  version: string;
 }
 
 interface PlayerUIOptions {
   development: boolean;
-  version: string;
   onGearSelection?: (gear: ManualGear | null) => void;
   onTransferCaseSelection?: (mode: TransferCaseMode) => void;
 }
@@ -110,9 +106,7 @@ export class PlayerUI {
   private readonly gearText: HTMLElement;
   private readonly handbrakeText: HTMLElement;
   private readonly engineStatusText: HTMLElement;
-  private readonly tickText: HTMLElement;
   private readonly fpsText: HTMLElement;
-  private readonly previewDiagnosticText: HTMLElement;
   private readonly drivetrainText: HTMLElement;
   private readonly conditionText: HTMLElement;
   private readonly winchText: HTMLElement;
@@ -120,14 +114,12 @@ export class PlayerUI {
   private readonly shifter: HTMLElement;
   private readonly gearGate: HTMLElement;
   private readonly gearKnob: HTMLElement;
-  private readonly transmissionModeButton: HTMLButtonElement;
   private readonly shifterCollapseButton: HTMLButtonElement;
   private readonly shifterSummary: HTMLElement;
   private readonly transferGate: HTMLElement;
   private readonly transferKnob: HTMLElement;
   private readonly transferSlots: readonly HTMLButtonElement[];
   private manualGear: ManualGear | null = null;
-  private displayedGear: ManualGear = 0;
   private activePointer: number | null = null;
   private activeTransferPointer: number | null = null;
   private readonly onGearSelection: (gear: ManualGear | null) => void;
@@ -145,19 +137,16 @@ export class PlayerUI {
       surface: '',
       handbrake: false,
       engineStatus: '',
-      tick: 0,
       fps: 0,
-      previewDiagnostic: '',
       transferCase: '4h', frontLocked: false, rearLocked: false,
       fixedRwd: false,
       bodyCondition: 1, engineCondition: 1, steeringCondition: 1,
       drivetrainNotice: '',
       winchStatus: '',
       pressure: undefined,
-      version: options.version,
     };
 
-    root.setAttribute('aria-label', 'Rally driving instruments');
+    root.setAttribute('aria-label', 'Off-road driving instruments');
     root.innerHTML = `
       <section class="hud-session instrument-panel" aria-label="Session status" hidden>
         <div class="hud-panel-kicker">SESSION</div>
@@ -180,36 +169,30 @@ export class PlayerUI {
         connecting…
       </div>
 
-      <!-- One bottom-centre stack. These four panels used to be four
+      <div id="hud-fps" class="hud-fps"${options.development ? '' : ' hidden'}>0 FPS</div>
+
+      <!-- One bottom-centre stack. These panels used to be separate
            absolutely positioned elements with hand-tuned offsets repeated in
            every media query, so any size change re-collided them; the dock
            makes "these never overlap each other" a layout property. -->
       <div class="hud-dock">
-      <section id="hud-diagnostics" class="hud-diagnostics instrument-panel" aria-label="Development diagnostics"${options.development ? '' : ' hidden'}>
-        <span id="hud-tick">tick=0</span>
-        <span id="hud-fps">0 FPS</span>
-        <span id="version">build ${options.version}</span>
-        <span id="hud-preview-diagnostic"></span>
-      </section>
-
       <div id="hud-engine-status" class="hud-engine-status instrument-panel" role="status" aria-live="assertive"></div>
 
       <section id="hud-shifter" class="hud-shifter instrument-panel" aria-label="Transmission selector" data-mode="auto">
         <header class="hud-shifter-header">
-          <span class="hud-field-label">TRANSMISSION</span>
           <button id="shifter-collapse" class="shifter-collapse" type="button" aria-expanded="false" aria-controls="shifter-body">
-            <span class="hud-field-label">TRANS</span>
             <strong id="shifter-summary">N · 4H</strong>
             <span class="shifter-chevron" aria-hidden="true">▾</span>
           </button>
-          <button id="transmission-mode" type="button" aria-pressed="false">AUTO</button>
         </header>
         <div id="shifter-body" class="hud-shifter-body">
           <div id="gear-gate" class="gear-gate" aria-label="H-pattern gear selector" role="group">
             <span class="gear-gate-line gear-gate-line-horizontal" aria-hidden="true"></span>
+            <span class="gear-gate-line gear-gate-line-auto" aria-hidden="true"></span>
             <span class="gear-gate-line gear-gate-line-left" aria-hidden="true"></span>
             <span class="gear-gate-line gear-gate-line-centre" aria-hidden="true"></span>
             <span class="gear-gate-line gear-gate-line-right" aria-hidden="true"></span>
+            <button class="gear-slot gear-slot-a" type="button" data-gear="auto" aria-label="Automatic transmission">A</button>
             <button class="gear-slot gear-slot-1" type="button" data-gear="1" aria-label="First gear">1</button>
             <button class="gear-slot gear-slot-2" type="button" data-gear="2" aria-label="Second gear">2</button>
             <button class="gear-slot gear-slot-3" type="button" data-gear="3" aria-label="Third gear">3</button>
@@ -220,15 +203,14 @@ export class PlayerUI {
             <span id="gear-knob" class="gear-knob" aria-hidden="true"></span>
           </div>
           <div id="transfer-gate" class="transfer-gate" aria-label="Transfer-case selector" role="group">
-            <span class="transfer-label">TRANSFER</span>
             <span class="transfer-gate-line" aria-hidden="true"></span>
             <button class="transfer-slot transfer-slot-2h" type="button" data-transfer="2h" aria-label="Two wheel drive high">2H</button>
             <button class="transfer-slot transfer-slot-4h" type="button" data-transfer="4h" aria-label="Four wheel drive high">4H</button>
             <button class="transfer-slot transfer-slot-4l" type="button" data-transfer="4l" aria-label="Four wheel drive low">4L</button>
             <span id="transfer-knob" class="transfer-knob" aria-hidden="true">4H</span>
           </div>
-          <div id="gear-mode-hint" class="gear-mode-hint">AUTO SHIFT</div>
-          <div id="transfer-mode-hint" class="transfer-mode-hint">4WD HIGH</div>
+          <div id="gear-mode-hint" class="gear-mode-hint"></div>
+          <div id="transfer-mode-hint" class="transfer-mode-hint"></div>
         </div>
       </section>
 
@@ -270,9 +252,7 @@ export class PlayerUI {
     this.gearText = root.querySelector('#hud-gear-value')!;
     this.handbrakeText = root.querySelector('#hud-handbrake')!;
     this.engineStatusText = root.querySelector('#hud-engine-status')!;
-    this.tickText = root.querySelector('#hud-tick')!;
     this.fpsText = root.querySelector('#hud-fps')!;
-    this.previewDiagnosticText = root.querySelector('#hud-preview-diagnostic')!;
     this.drivetrainText = root.querySelector('#hud-drivetrain')!;
     this.conditionText = root.querySelector('#hud-condition')!;
     this.winchText = root.querySelector('#hud-winch')!;
@@ -280,7 +260,6 @@ export class PlayerUI {
     this.shifter = root.querySelector('#hud-shifter')!;
     this.gearGate = root.querySelector('#gear-gate')!;
     this.gearKnob = root.querySelector('#gear-knob')!;
-    this.transmissionModeButton = root.querySelector('#transmission-mode')!;
     this.shifterCollapseButton = root.querySelector('#shifter-collapse')!;
     this.shifterSummary = root.querySelector('#shifter-summary')!;
     this.transferGate = root.querySelector('#transfer-gate')!;
@@ -290,6 +269,7 @@ export class PlayerUI {
     this.transferSlots = [...this.transferGate.querySelectorAll<HTMLButtonElement>('[data-transfer]')];
 
     this.bindShifter();
+    this.updateSelectedSlots();
     this.bindShifterCollapse();
     this.bindTransferCase();
     this.renderConnection();
@@ -346,8 +326,7 @@ export class PlayerUI {
     setAttr(this.rpmMeter, 'aria-valuenow', rpm.toFixed(0));
     setStyleVar(this.rpmMeter, '--rpm-ratio', String(rpmRatio));
     setText(this.gearText, formatGear(this.state.gear));
-    this.displayedGear = normaliseGear(this.state.gear);
-    if (this.manualGear === null) this.positionGearKnob(this.displayedGear);
+    if (this.manualGear === null) this.positionGearKnob('auto');
     setText(this.surfaceText, this.state.surface || '—');
 
     const engineStatus = this.state.engineStatus || '';
@@ -391,21 +370,15 @@ export class PlayerUI {
     setText(this.pressureText, pressureText);
     this.pressureText.classList.toggle('active', Boolean(pressure?.reason || pressure?.adjusting));
 
-    setText(this.tickText, `tick=${this.state.tick ?? 0}`);
     setText(this.fpsText, `${this.state.fps ?? 0} FPS`);
-    setText(this.previewDiagnosticText, this.state.previewDiagnostic ?? '');
   }
 
   private bindShifter(): void {
-    this.transmissionModeButton.addEventListener('click', () => {
-      if (this.manualGear === null) this.selectManualGear(this.displayedGear);
-      else this.selectAutomatic();
-    });
-
     for (const slot of this.gearGate.querySelectorAll<HTMLElement>('[data-gear]')) {
       slot.addEventListener('click', (event) => {
         event.stopPropagation();
-        this.selectManualGear(Number(slot.dataset.gear) as ManualGear);
+        if (slot.dataset.gear === 'auto') this.selectAutomatic();
+        else this.selectManualGear(Number(slot.dataset.gear) as ManualGear);
       });
     }
 
@@ -426,7 +399,7 @@ export class PlayerUI {
       if (e.pointerId !== this.activePointer) return;
       this.activePointer = null;
       this.shifter.classList.remove('dragging');
-      this.positionGearKnob(this.manualGear ?? this.displayedGear);
+      this.positionGearKnob(this.manualGear ?? 'auto');
     };
     this.gearGate.addEventListener('pointerup', finish);
     this.gearGate.addEventListener('pointercancel', finish);
@@ -515,7 +488,7 @@ export class PlayerUI {
     if (rect.width <= 0 || rect.height <= 0) return;
     const x = clamp01((clientX - rect.left) / rect.width);
     const y = clamp01((clientY - rect.top) / rect.height);
-    const columns = [0.2, 0.5, 0.8] as const;
+    const columns = [0.31, 0.555, 0.8] as const;
     const column = columns.reduce((best, value) =>
       Math.abs(value - x) < Math.abs(best - x) ? value : best, columns[0]);
 
@@ -523,8 +496,11 @@ export class PlayerUI {
     // three vertical legs, so the lever feels mechanically constrained.
     let knobX: number;
     let knobY: number;
-    if (Math.abs(y - 0.5) <= Math.abs(x - column)) {
-      knobX = Math.max(0.2, Math.min(0.8, x));
+    if (x < 0.2 && y < 0.5) {
+      knobX = 0.09;
+      knobY = Math.max(0.18, Math.min(0.5, y));
+    } else if (Math.abs(y - 0.5) <= Math.abs(x - column)) {
+      knobX = Math.max(0.09, Math.min(0.8, x));
       knobY = 0.5;
     } else {
       knobX = column;
@@ -533,29 +509,31 @@ export class PlayerUI {
     this.shifter.classList.add('dragging');
     this.positionGearKnobAt(knobX, knobY);
 
+    if (knobY < 0.36 && knobX < 0.2) {
+      this.selectAutomatic(false);
+      return;
+    }
     let gear: ManualGear = 0;
-    if (knobY < 0.36) gear = knobX < 0.35 ? 1 : knobX < 0.65 ? 3 : 5;
-    else if (knobY > 0.64) gear = knobX < 0.35 ? 2 : knobX < 0.65 ? 4 : -1;
+    if (knobY < 0.36) gear = knobX < 0.43 ? 1 : knobX < 0.68 ? 3 : 5;
+    else if (knobY > 0.64) gear = knobX < 0.43 ? 2 : knobX < 0.68 ? 4 : -1;
     this.selectManualGear(gear, false);
   }
 
-  private selectAutomatic(): void {
+  private selectAutomatic(snap = true): void {
+    const changed = this.manualGear !== null;
     this.manualGear = null;
     this.shifter.dataset.mode = 'auto';
-    this.transmissionModeButton.textContent = 'AUTO';
-    this.transmissionModeButton.setAttribute('aria-pressed', 'false');
-    this.shifter.querySelector('#gear-mode-hint')!.textContent = 'AUTO SHIFT';
+    this.shifter.querySelector('#gear-mode-hint')!.textContent = '';
+    this.gearKnob.textContent = 'A';
     this.updateSelectedSlots();
-    this.positionGearKnob(this.displayedGear);
-    this.onGearSelection(null);
+    if (snap) this.positionGearKnob('auto');
+    if (changed) this.onGearSelection(null);
   }
 
   private selectManualGear(gear: ManualGear, snap = true): void {
     const changed = this.manualGear !== gear;
     this.manualGear = gear;
     this.shifter.dataset.mode = 'manual';
-    this.transmissionModeButton.textContent = 'MANUAL';
-    this.transmissionModeButton.setAttribute('aria-pressed', 'true');
     this.shifter.querySelector('#gear-mode-hint')!.textContent = `${formatGear(gear)} SELECTED`;
     this.gearKnob.textContent = formatGear(gear);
     this.updateSelectedSlots();
@@ -565,18 +543,21 @@ export class PlayerUI {
 
   private updateSelectedSlots(): void {
     for (const slot of this.gearGate.querySelectorAll<HTMLElement>('[data-gear]')) {
-      const selected = this.manualGear !== null && Number(slot.dataset.gear) === this.manualGear;
+      const selected = this.manualGear === null
+        ? slot.dataset.gear === 'auto'
+        : Number(slot.dataset.gear) === this.manualGear;
       slot.classList.toggle('selected', selected);
       slot.setAttribute('aria-pressed', String(selected));
     }
   }
 
-  private positionGearKnob(gear: ManualGear): void {
-    const positions: Record<ManualGear, readonly [number, number]> = {
-      [-1]: [0.8, 0.82], 0: [0.5, 0.5], 1: [0.2, 0.18], 2: [0.2, 0.82],
-      3: [0.5, 0.18], 4: [0.5, 0.82], 5: [0.8, 0.18],
+  private positionGearKnob(gear: ManualGear | 'auto'): void {
+    const positions: Record<ManualGear | 'auto', readonly [number, number]> = {
+      auto: [0.09, 0.18], [-1]: [0.8, 0.82], 0: [0.555, 0.5],
+      1: [0.31, 0.18], 2: [0.31, 0.82], 3: [0.555, 0.18],
+      4: [0.555, 0.82], 5: [0.8, 0.18],
     };
-    this.gearKnob.textContent = formatGear(gear);
+    this.gearKnob.textContent = gear === 'auto' ? 'A' : formatGear(gear);
     this.positionGearKnobAt(...positions[gear]);
   }
 
@@ -586,12 +567,6 @@ export class PlayerUI {
   }
 }
 
-function normaliseGear(gear: number): ManualGear {
-  if (gear === -1) return -1;
-  if (gear >= 1 && gear <= 5) return Math.round(gear) as ManualGear;
-  return 0;
-}
-
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -599,5 +574,5 @@ function clamp01(value: number): number {
 function transferCaseLabel(mode: TransferCaseMode): string {
   if (mode === '2h') return '2WD HIGH';
   if (mode === '4l') return '4WD LOW';
-  return '4WD HIGH';
+  return '';
 }

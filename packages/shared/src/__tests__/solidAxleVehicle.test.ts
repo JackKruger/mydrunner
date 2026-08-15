@@ -611,6 +611,16 @@ describe('solid-axle vehicle: drivetrain', () => {
 });
 
 describe('solid-axle vehicle: tyre pressure controls', () => {
+  it('supports an immediate debug pressure override within the fitted range', () => {
+    const { world, vehicle } = makeWorld();
+    const pressure = vehicle.pressureStatus();
+    vehicle.setPressurePsi(pressure.minPsi - 10);
+    expect(vehicle.pressureStatus().currentPsi).toBe(pressure.minPsi);
+    vehicle.setPressurePsi(pressure.nominalPsi);
+    expect(vehicle.pressureStatus().currentPsi).toBe(pressure.nominalPsi);
+    world.dispose();
+  });
+
   it('adds sealed-road drag and softens steering response when aired down', () => {
     const high = makeWorld();
     const low = makeWorld();

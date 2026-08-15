@@ -7,16 +7,36 @@
 // "Copy settings" serialises TUNING as a TypeScript snippet so the
 // values can be pasted into constants.ts as new defaults.
 
+import * as THREE from 'three';
 import {
   ANTI_ROLL,
   AXLE,
   ENGINE,
   Physics,
+  TICK_RATE,
   TIRE_LONG_FRICTION,
   TUNING,
   WATER,
   WHEEL,
 } from '@mydrunner/shared';
+import type { RenderTuningKey, RenderTuningTarget } from './renderEnvironment.js';
+
+type ToneMappingTarget = Pick<THREE.WebGLRenderer, 'toneMapping'>;
+
+export interface VehicleTuningTarget {
+  pressureStatus(): Physics.PressureStatus;
+  setPressurePsi(pressurePsi: number): void;
+}
+
+const TONE_MAPPING_OPTIONS: ReadonlyArray<{ label: string; value: THREE.ToneMapping }> = [
+  { label: 'Neutral', value: THREE.NeutralToneMapping },
+  { label: 'AgX', value: THREE.AgXToneMapping },
+  { label: 'ACES Filmic', value: THREE.ACESFilmicToneMapping },
+  { label: 'Reinhard', value: THREE.ReinhardToneMapping },
+  { label: 'Cineon', value: THREE.CineonToneMapping },
+  { label: 'Linear', value: THREE.LinearToneMapping },
+  { label: 'None', value: THREE.NoToneMapping },
+];
 
 interface Slider {
   label: string;
@@ -32,16 +52,19 @@ interface Slider {
 }
 
 const TUNING_GROUP_HELP = {
-  'TIRE + GRIP': 'Tyre carcass compliance and visuals, sidewall response, combined-force capacity, and lateral breakaway.',
-  'TERRAIN + ROLLING': 'Surface friction and the separate energy loss caused by rolling through soft ground.',
+  'TIRE + GRIP': 'Tyre pressure, carcass compliance and visuals, sidewall response, combined-force capacity, and lateral breakaway.',
+  'TERRAIN + ROLLING': 'Surface friction, rolling loss, soil bearing, sinkage, shear grip, and bulldozing resistance.',
   'SUSPENSION + ANTI-ROLL': 'Spring, damping, articulation, and cornering load-transfer controls.',
-  'POWERTRAIN + STEERING': 'Brakes, engine output, off-throttle drag, steering rate, and high-speed steering authority.',
-  WATER: 'Buoyancy, hull drag, and authored current strength while crossing water.',
+  'POWERTRAIN + STEERING': 'Brakes, engine and shift behavior, differential overrides, low range, centre transfer, and steering authority.',
+  WATER: 'Buoyancy, directional hull drag, submerged tyre grip, current strength, and swamping time.',
+  CAMERA: 'Chase-camera yaw response, damping, and lateral cornering swing.',
 } as const;
+
+const RENDER_GROUP_HELP = 'Live image controls. Tune fill and albedo before exposure so highlights retain headroom.';
 
 const SLIDERS: Slider[] = [
   // Tyre-grip headline numbers.
-  { label: 'frontGripMult', description: 'Global multiplier on the front axle friction budget after tire and surface grip are resolved.', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.frontGripMult, set: (v) => (TUNING.frontGripMult = v) },
+  { group: 'TIRE + GRIP', label: 'frontGripMult', description: 'Global multiplier on the front axle friction budget after tire and surface grip are resolved.', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.frontGripMult, set: (v) => (TUNING.frontGripMult = v) },
   { label: 'rearGripMult', description: 'Global multiplier on the rear axle friction budget. Lower values make power oversteer easier.', min: 0.4, max: 1.4, step: 0.02, get: () => TUNING.rearGripMult, set: (v) => (TUNING.rearGripMult = v) },
   { label: 'longGrip×', description: 'Multiplier on the base acceleration and braking grip available at every tire. Surface and axle grip still apply afterward.', min: 0.5, max: 1.5, step: 0.02, get: () => TUNING.tireLongGripMult, set: (v) => (TUNING.tireLongGripMult = v) },
   { label: 'edgeWrap×', description: 'Multiplier on pressure-dependent tread reach and corner hooking at validated ledges only.', min: 0.5, max: 1.5, step: 0.02, get: () => TUNING.tireEdgeWrapMult, set: (v) => (TUNING.tireEdgeWrapMult = v) },
@@ -69,6 +92,10 @@ const SLIDERS: Slider[] = [
   { label: 'rollingRes×', description: 'Global viscous rolling-resistance multiplier. Higher values shorten coasting distance on every surface.', min: 0.25, max: 3, step: 0.05, get: () => TUNING.rollingResistanceMult, set: (v) => (TUNING.rollingResistanceMult = v) },
   { label: 'mudRolling×', description: 'Mud rolling-resistance factor relative to the base road value. This controls bogging drag, not tire grip.', min: 1, max: 10, step: 0.25, get: () => TUNING.rollingResistanceMudMult, set: (v) => (TUNING.rollingResistanceMudMult = v) },
   { label: 'deepMudRoll×', description: 'Deep-mud rolling-resistance factor relative to the base road value. Raise it to make deep bogs consume momentum quickly.', min: 2, max: 24, step: 0.5, get: () => TUNING.rollingResistanceDeepMudMult, set: (v) => (TUNING.rollingResistanceDeepMudMult = v) },
+  { label: 'soilMaxSink×', description: 'Multiplier on the maximum physical sink depth in mud and deep mud.', min: 0, max: 2, step: 0.05, get: () => TUNING.soilSinkDepthMult, set: (v) => (TUNING.soilSinkDepthMult = v) },
+  { label: 'soilBearing×', description: 'Multiplier on soil bearing strength. Higher values support the tyre with less sinkage.', min: 0.25, max: 3, step: 0.05, get: () => TUNING.soilBearingStrengthMult, set: (v) => (TUNING.soilBearingStrengthMult = v) },
+  { label: 'soilShear×', description: 'Multiplier on tread shear grip after slip, compaction, and footprint are resolved.', min: 0.25, max: 2, step: 0.05, get: () => TUNING.soilShearGripMult, set: (v) => (TUNING.soilShearGripMult = v) },
+  { label: 'soilBulldoze×', description: 'Multiplier on the resistance from pushing a sunk tyre through soft ground.', min: 0, max: 3, step: 0.05, get: () => TUNING.soilBulldozingDragMult, set: (v) => (TUNING.soilBulldozingDragMult = v) },
   // Suspension feel — per-axle SCALARS on the compile-time rates in
   // AXLE / vehicleGeom. 1.0 = the constants as shipped. They scale rather
   // than replace so per-kind geometry (the Hilux's softer rear) survives.
@@ -88,6 +115,11 @@ const SLIDERS: Slider[] = [
   { label: 'handbrakeForce', description: 'Rear-axle handbrake force. Above the rear tire grip limit it is a mechanical lock; below it the handbrake only threshold-brakes and the tail never steps out.', min: 500, max: 16000, step: 250, get: () => TUNING.handbrakeForce, set: (v) => (TUNING.handbrakeForce = v) },
   { label: 'engineTorque×', description: 'Multiplier on engine torque before the selected gear and final drive. It changes acceleration and wheelspin without changing shift points.', min: 0.5, max: 1.6, step: 0.05, get: () => TUNING.engineTorqueMult, set: (v) => (TUNING.engineTorqueMult = v) },
   { label: 'engineBrake×', description: 'Multiplier on off-throttle compression and speed-based engine braking. 0 allows free coasting while in gear.', min: 0, max: 2, step: 0.05, get: () => TUNING.engineBrakeMult, set: (v) => (TUNING.engineBrakeMult = v) },
+  { label: 'shiftUp (rpm)', description: 'Chassis-speed-derived RPM threshold for an automatic upshift.', min: 2000, max: 5500, step: 50, get: () => TUNING.engineShiftUpRpm, set: (v) => (TUNING.engineShiftUpRpm = v) },
+  { label: 'shiftDown (rpm)', description: 'Chassis-speed-derived RPM threshold for an automatic downshift.', min: 800, max: 3500, step: 50, get: () => TUNING.engineShiftDownRpm, set: (v) => (TUNING.engineShiftDownRpm = v) },
+  { label: 'shiftHold (s)', description: 'Minimum delay in seconds between automatic RPM-triggered shifts.', min: 0, max: 4, step: 0.05, get: () => TUNING.engineShiftHoldTicks / TICK_RATE, set: (v) => (TUNING.engineShiftHoldTicks = Math.round(v * TICK_RATE)) },
+  { label: '4L crawl (m/s)', description: 'Maximum horizontal chassis speed enforced while the transfer case is in low range.', min: 0.3, max: 5, step: 0.05, get: () => TUNING.lowRangeMaxCrawlSpeed, set: (v) => (TUNING.lowRangeMaxCrawlSpeed = v) },
+  { label: 'centreReact Nm', description: 'Maximum centre-transfer reaction torque applied to a loaded axle each tick.', min: 100, max: 6000, step: 50, get: () => TUNING.centerTransferMaxReactionNm, set: (v) => (TUNING.centerTransferMaxReactionNm = v) },
   { label: 'maxSteer (rad)', description: 'Low-speed mechanical steering-angle limit in radians. Speed and fitted parts may reduce the active limit.', min: 0.1, max: 0.8, step: 0.02, get: () => TUNING.maxSteer, set: (v) => (TUNING.maxSteer = v) },
   { label: 'steerSpeed', description: 'Maximum rate at which the steering rack moves toward requested lock, in radians per second.', min: 0.5, max: 6, step: 0.1, get: () => TUNING.steerSpeed, set: (v) => (TUNING.steerSpeed = v) },
   { label: 'steerLimit (g)', description: 'Maximum lateral acceleration requested by full keyboard steering at speed. Lower values reduce high-speed steering angle and rollover risk.', min: 0.25, max: 1.2, step: 0.05, get: () => TUNING.maxSteerLateralAccel / 9.81, set: (v) => (TUNING.maxSteerLateralAccel = v * 9.81) },
@@ -97,6 +129,34 @@ const SLIDERS: Slider[] = [
   { group: 'WATER', label: 'waterBuoyancy×', description: 'Multiplier on sealed-hull displacement. Higher values unload the tires and make the vehicle float sooner.', min: 0, max: 2, step: 0.05, get: () => TUNING.waterBuoyancy, set: (v) => (TUNING.waterBuoyancy = v) },
   { label: 'waterDrag×', description: 'Multiplier on translational and angular hull drag relative to the surrounding water.', min: 0, max: 3, step: 0.05, get: () => TUNING.waterDrag, set: (v) => (TUNING.waterDrag = v) },
   { label: 'waterFlow×', description: 'Multiplier on authored current velocity before relative-water drag is calculated.', min: 0, max: 3, step: 0.05, get: () => TUNING.waterFlowScale, set: (v) => (TUNING.waterFlowScale = v) },
+  { label: 'waterLateral×', description: 'Extra multiplier on flank drag only. Higher values make angling upstream more important.', min: 0, max: 3, step: 0.05, get: () => TUNING.waterLateralDragMult, set: (v) => (TUNING.waterLateralDragMult = v) },
+  { label: 'wetGripFloor', description: 'Tyre grip retained when the wheel is fully submerged.', min: 0, max: 1, step: 0.02, get: () => TUNING.waterWheelGripFloor, set: (v) => (TUNING.waterWheelGripFloor = v) },
+  { label: 'swampTime (s)', description: 'Seconds of full submersion required to fully swamp the hull. Set 0 to disable swamping.', min: 0, max: 60, step: 1, get: () => TUNING.waterSwampSeconds, set: (v) => (TUNING.waterSwampSeconds = v) },
+  { group: 'CAMERA', label: 'yawStiffness', description: 'Chase-camera yaw spring stiffness. Higher values track the chassis direction faster.', min: 0, max: 40, step: 0.5, get: () => TUNING.cameraChaseYawStiffness, set: (v) => (TUNING.cameraChaseYawStiffness = v) },
+  { label: 'yawDamping', description: 'Chase-camera yaw damping. Higher values reduce overshoot and post-corner oscillation.', min: 0, max: 20, step: 0.25, get: () => TUNING.cameraChaseYawDamping, set: (v) => (TUNING.cameraChaseYawDamping = v) },
+  { label: 'cornerSwing', description: 'Lateral camera offset per radian/second of yaw motion.', min: 0, max: 1.5, step: 0.05, get: () => TUNING.cameraChaseSwingLateral, set: (v) => (TUNING.cameraChaseSwingLateral = v) },
+];
+
+interface RenderSlider {
+  key: RenderTuningKey;
+  label: string;
+  description: string;
+  min: number;
+  max: number;
+  step: number;
+}
+
+const RENDER_SLIDERS: readonly RenderSlider[] = [
+  { key: 'exposure', label: 'exposure', description: 'Final camera exposure. This affects the whole image, including paint reflections and highlights.', min: 0.6, max: 1.5, step: 0.01 },
+  { key: 'sunIntensity', label: 'sun intensity', description: 'Direct warm sunlight on terrain and standard materials. Lower this if sun-facing surfaces or paint highlights clip.', min: 0, max: 3, step: 0.05 },
+  { key: 'hemisphereIntensity', label: 'hemisphere fill', description: 'Sky-and-ground fill received by cars, props, foliage, and other standard Three.js materials.', min: 0, max: 2, step: 0.05 },
+  { key: 'shaderAmbientIntensity', label: 'terrain/water fill', description: 'Sky-and-ground fill used by the custom terrain and water shaders. Raise it to open shadows without increasing paint reflections.', min: 0, max: 1.5, step: 0.01 },
+  { key: 'grassBrightness', label: 'grass albedo', description: 'Direct linear-light multiplier for textured grass. Set 1 to inspect the source texture without the tuned 1.12 boost.', min: 0.5, max: 1.5, step: 0.01 },
+  { key: 'terrainMacroTint', label: 'terrain macro tint', description: 'Strength of the broad procedural 0.82–1.18 brightness variation layered over every terrain texture. Set 0 for the plain texture.', min: 0, max: 1, step: 0.01 },
+  { key: 'terrainTriplanarStrength', label: 'terrain triplanar', description: 'Blend from a plain top-down texture projection at 0 to slope-aware triplanar projection at 1.', min: 0, max: 1, step: 0.01 },
+  { key: 'terrainNormalStrength', label: 'terrain normals', description: 'Strength of terrain normal-map lighting. Set 0 to use only the underlying terrain geometry normal.', min: 0, max: 1, step: 0.01 },
+  { key: 'terrainShading', label: 'terrain shading', description: 'Blend from plain linear albedo at 0 to ambient, sun, and specular terrain lighting at 1.', min: 0, max: 1, step: 0.01 },
+  { key: 'fogAmount', label: 'fog amount', description: 'Moves fog onset from the configured near distance toward the far plane. Set 0 for an effectively unfogged authored world.', min: 0, max: 1, step: 0.01 },
 ];
 
 const STYLE = `
@@ -131,7 +191,8 @@ const STYLE = `
 #debug-panel .debug-help,
 #debug-tuning-card .debug-help {
   position: sticky; top: -10px; z-index: 3;
-  min-height: 28px; margin: 0 -4px 8px; padding: 6px 8px;
+  box-sizing: border-box; height: 50px; margin: 0 -4px 8px; padding: 6px 8px;
+  overflow-y: auto; scrollbar-gutter: stable;
   color: #c6eaf4; font-size: 9px; line-height: 1.4;
   background: rgba(13, 23, 31, .97); border: 1px solid #324653; border-left: 3px solid #55e9ff;
   border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,.25);
@@ -147,6 +208,13 @@ const STYLE = `
   margin: 8px 0 6px;
 }
 #debug-tuning-card summary { cursor: pointer; padding: 6px 0; border-top: 1px solid #2a323d; }
+#debug-panel .debug-stat-section > summary {
+  cursor: pointer;
+  margin: 6px 0 4px;
+  padding: 9px 4px;
+  border-top: 1px solid #2a323d;
+  font-size: 11px;
+}
 #debug-panel .attitude {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -193,11 +261,11 @@ const STYLE = `
 #debug-panel .drive-node { background: #111a22; border: 1px solid #2f3b48; border-radius: 4px; padding: 5px 6px; }
 #debug-panel .drive-node strong { color: #e5b85c; font-size: 9px; }
 #debug-panel .drive-node div { color: #aeb8bf; font-size: 8px; line-height: 1.45; white-space: pre-line; }
-#debug-panel .recording { border-top: 1px solid #2a323d; margin-top: 8px; padding-top: 8px; }
 #debug-panel .record-actions { display: grid; grid-template-columns: 1.2fr 1fr .7fr; gap: 5px; }
 #debug-panel .record-actions button { padding: 5px; }
 #debug-panel .record-actions button.active { border-color: #ff4f45; color: #ff8b84; background: rgba(255,79,69,.12); }
 #debug-panel .record-status { color: #7adfff; font-size: 8px; min-height: 12px; margin-top: 4px; }
+#debug-axles .axle-data { padding: 0 4px 4px; color: #7adfff; font-size: 9px; }
 #debug-tuning-card .row {
   display: grid;
   grid-template-columns: 100px 1fr 50px;
@@ -207,12 +275,22 @@ const STYLE = `
 }
 #debug-tuning-card .row label { color: #aab; font-size: 10px; }
 #debug-tuning-card .row input[type=range] { width: 100%; }
+#debug-tuning-card .row input[type=checkbox] { width: 16px; height: 16px; justify-self: start; }
+#debug-tuning-card .row select {
+  width: 100%; min-width: 0; padding: 3px 5px;
+  color: #eee; background: #111820; border: 1px solid #2f3b48; border-radius: 3px;
+  font: inherit;
+}
 #debug-tuning-card .row .val { text-align: right; font-variant-numeric: tabular-nums; color: #eee; }
-#debug-tuning-card .tuning-group {
-  margin: 9px 0 5px; padding-top: 6px; border-top: 1px solid #2a323d;
-  color: #7adfff; font-size: 9px; font-weight: 700; letter-spacing: .08em;
+#debug-tuning-card .tuning-section > summary {
+  margin: 6px 0 4px;
+  padding: 9px 4px;
+  color: #7adfff;
+  font-size: 11px;
 }
 #debug-tuning-card .actions { display: flex; gap: 8px; margin-top: 10px; }
+#debug-tuning-card .pressure-actions { display: flex; justify-content: flex-end; margin: 2px 0 7px; }
+#debug-tuning-card .pressure-actions button { flex: 0 0 auto; padding: 4px 8px; font-size: 9px; }
 #debug-panel button,
 #debug-tuning-card button {
   background: #1a2030;
@@ -238,7 +316,7 @@ export function isDebugUser(name: string): boolean {
   return name.trim().toLowerCase() === 'jack';
 }
 
-let axleEl: HTMLDivElement | null = null;
+let axleEl: HTMLDetailsElement | null = null;
 let telemetryEl: HTMLDivElement | null = null;
 const TRACE_LENGTH = 150;
 const traceHistory = {
@@ -366,16 +444,33 @@ function tuningRecord(): Record<string, RecordedValue> {
     tune_rolling_resistance: TUNING.rollingResistanceMult,
     tune_mud_rolling: TUNING.rollingResistanceMudMult,
     tune_deep_mud_rolling: TUNING.rollingResistanceDeepMudMult,
+    tune_soil_sink_depth: TUNING.soilSinkDepthMult,
+    tune_soil_bearing_strength: TUNING.soilBearingStrengthMult,
+    tune_soil_shear_grip: TUNING.soilShearGripMult,
+    tune_soil_bulldozing_drag: TUNING.soilBulldozingDragMult,
     tune_brake_force: TUNING.brakeForce,
     tune_handbrake_force: TUNING.handbrakeForce,
     tune_engine_torque: TUNING.engineTorqueMult,
     tune_engine_brake: TUNING.engineBrakeMult,
+    tune_shift_up_rpm: TUNING.engineShiftUpRpm,
+    tune_shift_down_rpm: TUNING.engineShiftDownRpm,
+    tune_shift_hold_ticks: TUNING.engineShiftHoldTicks,
+    tune_low_range_crawl_speed: TUNING.lowRangeMaxCrawlSpeed,
+    tune_center_transfer_reaction: TUNING.centerTransferMaxReactionNm,
+    tune_force_front_diff_lock: TUNING.diffLockFront,
+    tune_force_rear_diff_lock: TUNING.diffLockRear,
     tune_max_steer: TUNING.maxSteer,
     tune_steer_speed: TUNING.steerSpeed,
     tune_steer_limit_g: TUNING.maxSteerLateralAccel / 9.81,
     tune_water_buoyancy: TUNING.waterBuoyancy,
     tune_water_drag: TUNING.waterDrag,
     tune_water_flow: TUNING.waterFlowScale,
+    tune_water_lateral_drag: TUNING.waterLateralDragMult,
+    tune_water_wheel_grip_floor: TUNING.waterWheelGripFloor,
+    tune_water_swamp_seconds: TUNING.waterSwampSeconds,
+    tune_camera_yaw_stiffness: TUNING.cameraChaseYawStiffness,
+    tune_camera_yaw_damping: TUNING.cameraChaseYawDamping,
+    tune_camera_corner_swing: TUNING.cameraChaseSwingLateral,
   };
 }
 
@@ -398,6 +493,7 @@ function recordTelemetry(telemetry: Physics.VehicleDebugTelemetry, now: number):
     y: telemetry.position.y,
     z: telemetry.position.z,
     speed_mps: speed,
+    tyre_pressure_psi: telemetry.pressurePsi,
     roll_deg: telemetry.rollAngle * 180 / Math.PI,
     pitch_deg: telemetry.pitchAngle * 180 / Math.PI,
     lateral_g: telemetry.lateralG,
@@ -580,7 +676,7 @@ function applyDebugHelp(panel: HTMLElement): void {
   set('#debug-axles', 'The two solid-axle visual degrees of freedom: average vertical ride position and beam roll angle.');
   set('#debug-axle-front', 'Front axle average ride displacement and articulation angle from its left/right support depths.');
   set('#debug-axle-rear', 'Rear axle average ride displacement and articulation angle from its left/right support depths.');
-  set('summary', 'Expand or collapse the sliders that mutate the local TUNING object immediately.');
+  set('#debug-tuning-controls', 'Expand or collapse the live tuning categories.');
   set('.actions button', 'Copy the current live values as a TypeScript constants snippet for baking the tune into the project defaults.');
   set('.copied', 'Reports whether the current tuning constants were copied to the clipboard successfully.');
   set('.legend', 'Colour key for the world-space physics overlay drawn around the local vehicle.');
@@ -611,6 +707,7 @@ function applyDebugHelp(panel: HTMLElement): void {
     'G-FORCE + YAW HISTORY': 'Short rolling traces for transient handling response while you drive and change settings.',
     'DRIVELINE TORQUE FLOW': 'Torque and wheel-speed observability from engine and transfer case through each contact patch.',
     'TUNING RUN RECORDER': 'Capture repeatable passes with their exact tuning values, then compare them in a spreadsheet.',
+    'AXLE STATE': 'The two solid-axle visual degrees of freedom: average vertical ride position and beam roll angle.',
   };
   for (const heading of panel.querySelectorAll<HTMLElement>('.section-title')) {
     const description = sectionHelp[heading.textContent?.trim() ?? ''];
@@ -631,7 +728,11 @@ function applyDebugHelp(panel: HTMLElement): void {
   panel.addEventListener('focusout', resetHelp);
 }
 
-export function initDebugPanel(): void {
+export function initDebugPanel(
+  renderer?: ToneMappingTarget,
+  renderTuning?: RenderTuningTarget,
+  vehicleTuning?: VehicleTuningTarget,
+): void {
   if (document.getElementById('debug-panel')) return;
   const style = document.createElement('style');
   style.textContent = STYLE;
@@ -644,61 +745,71 @@ export function initDebugPanel(): void {
     <div class="debug-subtitle">owner physics · live values · ?dev</div>
     <div class="debug-help" id="debug-help" role="status">Hover or focus anything in the lab for an explanation.</div>
     <div id="debug-telemetry">
-      <div class="section-title">ATTITUDE + TIP RESERVE</div>
-      <div class="attitude">
-        <div class="metric"><small>ROLL</small><strong data-debug="roll">--</strong>${miniTrace('roll', '#55e9ff', 'roll angle history', true)}</div>
-        <div class="metric"><small>PITCH</small><strong data-debug="pitch">--</strong>${miniTrace('pitch', '#ffb84d', 'pitch angle history', true)}</div>
-        <div class="metric"><small>STATIC LIMIT</small><strong data-debug="limit">--</strong>${miniTrace('stability', '#45e68a', 'static stability limit history')}</div>
-      </div>
-      <div class="tip-state" data-debug="tip-state">waiting for support contacts…</div>
-      <div class="section-title">VEHICLE VITALS</div>
-      <div class="attitude">
-        <div class="metric"><small>SPEED</small><strong data-debug="speed">--</strong>${miniTrace('speed', '#55e9ff', 'vehicle speed history')}</div>
-        <div class="metric"><small>ENGINE</small><strong data-debug="rpm">--</strong>${miniTrace('rpm', '#e5b85c', 'engine rpm history')}</div>
-        <div class="metric"><small>MAX GRIP</small><strong data-debug="max-grip">--</strong>${miniTrace('grip', '#ffd34e', 'maximum tire grip use history')}</div>
-      </div>
-      <div class="section-title">TIRE FRICTION CIRCLES</div>
-      <div class="tires">
-        ${['FL', 'FR', 'RL', 'RR'].map((name, index) => `
-          <div class="tire" data-wheel="${index}">
-            <div class="tire-head"><strong>${name}</strong><span data-field="surface">air</span></div>
-            <div class="traction-bar"><i data-field="bar"></i></div>
-            <div class="tire-data" data-field="data">no contact</div>
-            ${miniTrace(`wheel${index}`, '#45e68a', `${name} grip utilization history`)}
-          </div>`).join('')}
-      </div>
-      <div class="section-title">G-FORCE + YAW HISTORY</div>
-      <svg class="trace" viewBox="0 0 300 80" preserveAspectRatio="none" aria-label="G-force and yaw history">
-        <line class="trace-grid" x1="0" y1="20" x2="300" y2="20"/><line class="trace-zero" x1="0" y1="40" x2="300" y2="40"/><line class="trace-grid" x1="0" y1="60" x2="300" y2="60"/>
-        <polyline data-trace="lat" stroke="#55e9ff" points=""/><polyline data-trace="long" stroke="#ffb84d" points=""/><polyline data-trace="yaw" stroke="#d26cff" points=""/>
-      </svg>
-      <div class="trace-legend"><b style="color:#55e9ff">LAT <span data-debug="lat-g">0.00g</span></b><b style="color:#ffb84d">LONG <span data-debug="long-g">0.00g</span></b><b style="color:#d26cff">YAW <span data-debug="yaw">0°/s</span></b></div>
-      <div class="section-title">DRIVELINE TORQUE FLOW</div>
-      <div class="driveline">
-        <div class="drive-node"><strong>ENGINE → CASE</strong><div data-debug="drive-head">--</div>${miniTrace('torque', '#e5b85c', 'driveline output torque history', true)}</div>
-        <div class="drive-node"><strong>WATER LOAD</strong><div data-debug="water-load">dry</div>${miniTrace('water', '#4d9dff', 'hull submersion history')}</div>
-        ${['FL', 'FR', 'RL', 'RR'].map((name, index) => `<div class="drive-node"><strong>${name}</strong><div data-drive-wheel="${index}">--</div></div>`).join('')}
-      </div>
-      <div class="legend">WORLD: yellow CoG · green/red gravity projection · cyan support polygon · purple/red suspension casts · tire arrows green→red · blue buoyancy · magenta water drag</div>
-      <div class="recording">
-        <div class="section-title">TUNING RUN RECORDER</div>
+      <details class="debug-stat-section" data-stat-section="ATTITUDE + TIP RESERVE">
+        <summary class="section-title">ATTITUDE + TIP RESERVE</summary>
+        <div class="attitude">
+          <div class="metric"><small>ROLL</small><strong data-debug="roll">--</strong>${miniTrace('roll', '#55e9ff', 'roll angle history', true)}</div>
+          <div class="metric"><small>PITCH</small><strong data-debug="pitch">--</strong>${miniTrace('pitch', '#ffb84d', 'pitch angle history', true)}</div>
+          <div class="metric"><small>STATIC LIMIT</small><strong data-debug="limit">--</strong>${miniTrace('stability', '#45e68a', 'static stability limit history')}</div>
+        </div>
+        <div class="tip-state" data-debug="tip-state">waiting for support contacts…</div>
+      </details>
+      <details class="debug-stat-section" data-stat-section="VEHICLE VITALS">
+        <summary class="section-title">VEHICLE VITALS</summary>
+        <div class="attitude">
+          <div class="metric"><small>SPEED</small><strong data-debug="speed">--</strong>${miniTrace('speed', '#55e9ff', 'vehicle speed history')}</div>
+          <div class="metric"><small>ENGINE</small><strong data-debug="rpm">--</strong>${miniTrace('rpm', '#e5b85c', 'engine rpm history')}</div>
+          <div class="metric"><small>MAX GRIP</small><strong data-debug="max-grip">--</strong>${miniTrace('grip', '#ffd34e', 'maximum tire grip use history')}</div>
+        </div>
+      </details>
+      <details class="debug-stat-section" data-stat-section="TIRE FRICTION CIRCLES">
+        <summary class="section-title">TIRE FRICTION CIRCLES</summary>
+        <div class="tires">
+          ${['FL', 'FR', 'RL', 'RR'].map((name, index) => `
+            <div class="tire" data-wheel="${index}">
+              <div class="tire-head"><strong>${name}</strong><span data-field="surface">air</span></div>
+              <div class="traction-bar"><i data-field="bar"></i></div>
+              <div class="tire-data" data-field="data">no contact</div>
+              ${miniTrace(`wheel${index}`, '#45e68a', `${name} grip utilization history`)}
+            </div>`).join('')}
+        </div>
+      </details>
+      <details class="debug-stat-section" data-stat-section="G-FORCE + YAW HISTORY">
+        <summary class="section-title">G-FORCE + YAW HISTORY</summary>
+        <svg class="trace" viewBox="0 0 300 80" preserveAspectRatio="none" aria-label="G-force and yaw history">
+          <line class="trace-grid" x1="0" y1="20" x2="300" y2="20"/><line class="trace-zero" x1="0" y1="40" x2="300" y2="40"/><line class="trace-grid" x1="0" y1="60" x2="300" y2="60"/>
+          <polyline data-trace="lat" stroke="#55e9ff" points=""/><polyline data-trace="long" stroke="#ffb84d" points=""/><polyline data-trace="yaw" stroke="#d26cff" points=""/>
+        </svg>
+        <div class="trace-legend"><b style="color:#55e9ff">LAT <span data-debug="lat-g">0.00g</span></b><b style="color:#ffb84d">LONG <span data-debug="long-g">0.00g</span></b><b style="color:#d26cff">YAW <span data-debug="yaw">0°/s</span></b></div>
+      </details>
+      <details class="debug-stat-section" data-stat-section="DRIVELINE TORQUE FLOW">
+        <summary class="section-title">DRIVELINE TORQUE FLOW</summary>
+        <div class="driveline">
+          <div class="drive-node"><strong>ENGINE → CASE</strong><div data-debug="drive-head">--</div>${miniTrace('torque', '#e5b85c', 'driveline output torque history', true)}</div>
+          <div class="drive-node"><strong>WATER LOAD</strong><div data-debug="water-load">dry</div>${miniTrace('water', '#4d9dff', 'hull submersion history')}</div>
+          ${['FL', 'FR', 'RL', 'RR'].map((name, index) => `<div class="drive-node"><strong>${name}</strong><div data-drive-wheel="${index}">--</div></div>`).join('')}
+        </div>
+        <div class="legend">WORLD: yellow CoG · green/red gravity projection · cyan support polygon · purple/red suspension casts · tire arrows green→red · blue buoyancy · magenta water drag</div>
+      </details>
+      <details class="debug-stat-section" data-stat-section="TUNING RUN RECORDER">
+        <summary class="section-title">TUNING RUN RECORDER</summary>
         <div class="record-actions"><button id="debug-record" type="button">Start run</button><button id="debug-export" type="button">Export CSV</button><button id="debug-clear" type="button">Clear</button></div>
         <div class="record-status" id="debug-record-status">0 runs · 0 samples</div>
-      </div>
+      </details>
     </div>`;
   document.body.appendChild(panel);
   telemetryEl = panel.querySelector<HTMLDivElement>('#debug-telemetry');
   wireRecorder(panel);
 
   // Live axle readout section.
-  const axleSection = document.createElement('div');
+  const axleSection = document.createElement('details');
   axleSection.id = 'debug-axles';
-  axleSection.style.cssText =
-    'margin-top:8px;padding-top:7px;border-top:1px solid #2a323d;font-size:9px;color:#7adfff;';
+  axleSection.className = 'debug-stat-section';
+  axleSection.dataset.statSection = 'AXLE STATE';
   axleSection.innerHTML =
-    '<div style="color:#d9531e;margin-bottom:4px">AXLE STATE</div>' +
-    '<div id="debug-axle-front">front: --</div>' +
-    '<div id="debug-axle-rear">rear: --</div>';
+    '<summary class="section-title">AXLE STATE</summary>' +
+    '<div class="axle-data"><div id="debug-axle-front">front: --</div>' +
+    '<div id="debug-axle-rear">rear: --</div></div>';
   panel.appendChild(axleSection);
   axleEl = axleSection;
 
@@ -713,20 +824,92 @@ export function initDebugPanel(): void {
   const tuning = document.createElement('details');
   tuning.open = true;
   const tuningSummary = document.createElement('summary');
+  tuningSummary.id = 'debug-tuning-controls';
   tuningSummary.textContent = 'CONTROLS';
   tuning.appendChild(tuningSummary);
   tuningCard.appendChild(tuning);
 
+  const tuningSections = new Map<string, HTMLDetailsElement>();
+  const createTuningSection = (title: string, description: string): HTMLDetailsElement => {
+    const section = document.createElement('details');
+    section.className = 'tuning-section';
+    section.dataset.tuningSection = title;
+    const summary = document.createElement('summary');
+    summary.textContent = title;
+    summary.dataset.help = description;
+    summary.title = description;
+    section.appendChild(summary);
+    tuning.appendChild(section);
+    tuningSections.set(title, section);
+    return section;
+  };
+
+  const renderSection = renderer || renderTuning
+    ? createTuningSection('RENDER + LIGHTING', RENDER_GROUP_HELP)
+    : undefined;
+
+  if (renderer) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.dataset.help = 'Switch the live renderer tone-mapping curve. Neutral is the shipped default; the change applies immediately and is not saved.';
+    row.title = row.dataset.help;
+    const label = document.createElement('label');
+    label.htmlFor = 'debug-tone-mapping';
+    label.textContent = 'tone mapping';
+    const select = document.createElement('select');
+    select.id = 'debug-tone-mapping';
+    select.setAttribute('aria-label', 'Tone mapping');
+    for (const option of TONE_MAPPING_OPTIONS) {
+      const element = document.createElement('option');
+      element.value = String(option.value);
+      element.textContent = option.label;
+      select.appendChild(element);
+    }
+    select.value = String(renderer.toneMapping);
+    select.addEventListener('change', () => {
+      const selected = TONE_MAPPING_OPTIONS.find((option) => option.value === Number(select.value));
+      if (selected) renderer.toneMapping = selected.value;
+    });
+    const value = document.createElement('span');
+    value.className = 'val';
+    value.textContent = 'live';
+    row.append(label, select, value);
+    renderSection?.appendChild(row);
+  }
+
   const valueEls = new Map<string, HTMLSpanElement>();
 
+  if (renderTuning) {
+    for (const s of RENDER_SLIDERS) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.dataset.help = s.description;
+      row.title = s.description;
+      const label = document.createElement('label');
+      label.textContent = s.label;
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = String(s.min);
+      input.max = String(s.max);
+      input.step = String(s.step);
+      input.value = String(renderTuning.getRenderTuning(s.key));
+      const val = document.createElement('span');
+      val.className = 'val';
+      val.textContent = formatValue(renderTuning.getRenderTuning(s.key), s.step);
+      input.addEventListener('input', () => {
+        const value = parseFloat(input.value);
+        renderTuning.setRenderTuning(s.key, value);
+        val.textContent = formatValue(value, s.step);
+      });
+      row.append(label, input, val);
+      renderSection?.appendChild(row);
+    }
+  }
+
+  let tuningSection: HTMLDetailsElement | undefined;
   for (const s of SLIDERS) {
     if (s.group) {
-      const group = document.createElement('div');
-      group.className = 'tuning-group';
-      group.textContent = s.group;
-      group.dataset.help = TUNING_GROUP_HELP[s.group];
-      group.title = TUNING_GROUP_HELP[s.group];
-      tuning.appendChild(group);
+      tuningSection = createTuningSection(s.group, TUNING_GROUP_HELP[s.group]);
     }
     const row = document.createElement('div');
     row.className = 'row';
@@ -752,7 +935,99 @@ export function initDebugPanel(): void {
     row.appendChild(label);
     row.appendChild(input);
     row.appendChild(val);
-    tuning.appendChild(row);
+    tuningSection?.appendChild(row);
+  }
+
+  const appendToggle = (
+    section: HTMLDetailsElement | undefined,
+    labelText: string,
+    description: string,
+    get: () => boolean,
+    set: (value: boolean) => void,
+  ): void => {
+    if (!section) return;
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.dataset.help = description;
+    row.title = description;
+    const label = document.createElement('label');
+    label.textContent = labelText;
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = get();
+    input.setAttribute('aria-label', labelText);
+    const value = document.createElement('span');
+    value.className = 'val';
+    const updateValue = (): void => { value.textContent = input.checked ? 'locked' : 'open'; };
+    updateValue();
+    input.addEventListener('change', () => {
+      set(input.checked);
+      updateValue();
+    });
+    row.append(label, input, value);
+    section.appendChild(row);
+  };
+
+  const powertrainSection = tuningSections.get('POWERTRAIN + STEERING');
+  appendToggle(
+    powertrainSection,
+    'front diff lock',
+    'Force the front axle differential locked regardless of the fitted selectable-locker state.',
+    () => TUNING.diffLockFront,
+    (value) => (TUNING.diffLockFront = value),
+  );
+  appendToggle(
+    powertrainSection,
+    'rear diff lock',
+    'Force the rear axle differential locked regardless of the fitted selectable-locker state.',
+    () => TUNING.diffLockRear,
+    (value) => (TUNING.diffLockRear = value),
+  );
+
+  const tireSection = tuningSections.get('TIRE + GRIP');
+  if (vehicleTuning && tireSection) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.dataset.help = 'Set the locally owned vehicle tyre pressure immediately. This is vehicle state, not a global physics constant.';
+    row.title = row.dataset.help;
+    const label = document.createElement('label');
+    label.textContent = 'tyre pressure';
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.id = 'debug-tyre-pressure';
+    input.step = '0.5';
+    const value = document.createElement('span');
+    value.className = 'val';
+    const syncPressure = (): void => {
+      const pressure = vehicleTuning.pressureStatus();
+      input.min = String(pressure.minPsi);
+      input.max = String(pressure.maxPsi);
+      input.value = String(pressure.currentPsi);
+      value.textContent = `${pressure.currentPsi.toFixed(1)} psi`;
+    };
+    syncPressure();
+    input.addEventListener('focus', syncPressure);
+    input.addEventListener('pointerdown', syncPressure);
+    input.addEventListener('input', () => {
+      vehicleTuning.setPressurePsi(parseFloat(input.value));
+      syncPressure();
+    });
+    row.append(label, input, value);
+    tireSection.appendChild(row);
+
+    const pressureActions = document.createElement('div');
+    pressureActions.className = 'pressure-actions';
+    const resetPressure = document.createElement('button');
+    resetPressure.type = 'button';
+    resetPressure.textContent = 'Reset nominal PSI';
+    resetPressure.dataset.help = 'Restore the locally owned vehicle to its fitted tyre carcass nominal pressure.';
+    resetPressure.title = resetPressure.dataset.help;
+    resetPressure.addEventListener('click', () => {
+      vehicleTuning.setPressurePsi(vehicleTuning.pressureStatus().nominalPsi);
+      syncPressure();
+    });
+    pressureActions.appendChild(resetPressure);
+    tireSection.appendChild(pressureActions);
   }
 
   const actions = document.createElement('div');
@@ -851,10 +1126,19 @@ export const TIRE_LONG_FRICTION = ${f(TIRE_LONG_FRICTION * t.tireLongGripMult)};
 //   rollingResistance: ${f(WHEEL.rollingResistance * t.rollingResistanceMult)}, // x${f(t.rollingResistanceMult, 2)}
 //   rollingMultMud: ${f(t.rollingResistanceMudMult)},
 //   rollingMultDeepMud: ${f(t.rollingResistanceDeepMudMult)},
+// SOIL live multipliers:
+//   max sink x${f(t.soilSinkDepthMult, 2)}, bearing strength x${f(t.soilBearingStrengthMult, 2)}
+//   shear grip x${f(t.soilShearGripMult, 2)}, bulldozing drag x${f(t.soilBulldozingDragMult, 2)}
 // ENGINE.*:
 //   peakTorqueNm: ${f(ENGINE.peakTorqueNm * t.engineTorqueMult, 0)}, // x${f(t.engineTorqueMult, 2)}
 //   engineBrakeCoef: ${f(ENGINE.engineBrakeCoef * t.engineBrakeMult)}, // x${f(t.engineBrakeMult, 2)}
 //   engineBrakeSpeedCoef: ${f(ENGINE.engineBrakeSpeedCoef * t.engineBrakeMult)},
+//   shiftUpRpm: ${f(t.engineShiftUpRpm, 0)},
+//   shiftDownRpm: ${f(t.engineShiftDownRpm, 0)},
+//   shiftHoldTicks: ${f(t.engineShiftHoldTicks, 0)},
+// LOW_RANGE.maxCrawlSpeed: ${f(t.lowRangeMaxCrawlSpeed, 2)}
+// DRIVELINE.centerTransferMaxReactionNm: ${f(t.centerTransferMaxReactionNm, 0)}
+// AXLE differential defaults: front locked ${t.diffLockFront}, rear locked ${t.diffLockRear}
 // VEHICLE.* (drive feel):
 //   brakeForce: ${f(t.brakeForce, 0)},
 //   handbrakeForce: ${f(t.handbrakeForce, 0)},
@@ -865,8 +1149,12 @@ export const TIRE_LONG_FRICTION = ${f(TIRE_LONG_FRICTION * t.tireLongGripMult)};
 //   rearGripMult: ${f(t.rearGripMult, 2)},
 // WATER.* multipliers - resolve against the WATER block before pasting:
 //   buoyancy x${f(t.waterBuoyancy, 2)}  (hullVolume ${f(WATER.hullVolume * t.waterBuoyancy, 2)})
-//   drag     x${f(t.waterDrag, 2)}  (long ${f(WATER.dragLong * t.waterDrag, 0)}, lat ${f(WATER.dragLat * t.waterDrag, 0)}, vert ${f(WATER.dragVert * t.waterDrag, 0)})
+//   drag     x${f(t.waterDrag, 2)}  (long ${f(WATER.dragLong * t.waterDrag, 0)}, lat ${f(WATER.dragLat * t.waterDrag * t.waterLateralDragMult, 0)}, vert ${f(WATER.dragVert * t.waterDrag, 0)})
+//   lateral drag x${f(t.waterLateralDragMult, 2)}, wheelGripFloor ${f(t.waterWheelGripFloor)}, swampSeconds ${f(t.waterSwampSeconds, 0)}
 //   flow     x${f(t.waterFlowScale, 2)}
+// CAMERA.*:
+//   chaseYawStiffness: ${f(t.cameraChaseYawStiffness, 2)}, chaseYawDamping: ${f(t.cameraChaseYawDamping, 2)},
+//   chaseSwingLateral: ${f(t.cameraChaseSwingLateral, 2)}
 `;
 }
 

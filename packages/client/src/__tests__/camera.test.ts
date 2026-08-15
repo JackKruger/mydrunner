@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { TUNING } from '@mydrunner/shared';
 import { ChaseCamera } from '../camera.js';
 
 describe('ChaseCamera modes', () => {
@@ -78,5 +79,19 @@ describe('ChaseCamera modes', () => {
     expect(camera.camera.position.y).toBeGreaterThanOrEqual(groundY + 0.35);
 
     nowMock.mockRestore();
+  });
+
+  it('reads chase response from live tuning', () => {
+    const saved = TUNING.cameraChaseYawStiffness;
+    const nowMock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    try {
+      TUNING.cameraChaseYawStiffness = 0;
+      const camera = new ChaseCamera(16 / 9);
+      camera.follow({ x: 0, y: 0, z: 0 }, { x: 0, y: Math.SQRT1_2, z: 0, w: Math.SQRT1_2 });
+      expect(camera.yaw).toBe(0);
+    } finally {
+      TUNING.cameraChaseYawStiffness = saved;
+      nowMock.mockRestore();
+    }
   });
 });

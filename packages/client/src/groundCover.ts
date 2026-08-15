@@ -93,6 +93,50 @@ function cutoutMaterial(color: number, distance: number, atlas: THREE.Texture): 
   return material;
 }
 
+function grassTuftGeometry(): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  const blade = (
+    x: number, z: number, yaw: number, width: number, height: number,
+    leanX: number, leanZ: number,
+  ): void => {
+    const rightX = Math.cos(yaw);
+    const rightZ = -Math.sin(yaw);
+    const base = positions.length / 3;
+    const midX = x + leanX * 0.34;
+    const midZ = z + leanZ * 0.34;
+    const midHalf = width * 0.25;
+    positions.push(
+      x - rightX * width * 0.5, 0, z - rightZ * width * 0.5,
+      x + rightX * width * 0.5, 0, z + rightZ * width * 0.5,
+      midX - rightX * midHalf, height * 0.57, midZ - rightZ * midHalf,
+      midX + rightX * midHalf, height * 0.57, midZ + rightZ * midHalf,
+      x + leanX, height, z + leanZ,
+    );
+    // Keep every blade in the atlas's opaque half. Its outline now comes from
+    // tapered geometry, so the tuft cannot resolve into a rectangular card.
+    uvs.push(0.05, 0, 0.45, 0, 0.15, 0.57, 0.35, 0.57, 0.25, 1);
+    indices.push(base, base + 1, base + 3, base, base + 3, base + 2, base + 2, base + 3, base + 4);
+  };
+
+  blade(-0.20, 0.00, -0.18, 0.13, 0.46, -0.09, 0.01);
+  blade(-0.11, 0.01, 0.12, 0.12, 0.63, -0.05, 0.02);
+  blade(0.00, 0.00, -0.08, 0.13, 0.72, 0.02, 0.02);
+  blade(0.11, 0.00, 0.18, 0.12, 0.59, 0.07, -0.02);
+  blade(0.20, 0.01, -0.22, 0.12, 0.44, 0.10, 0.01);
+  blade(-0.08, 0.01, Math.PI * 0.48, 0.11, 0.52, 0.01, 0.08);
+  blade(0.08, -0.01, Math.PI * 0.54, 0.11, 0.55, -0.01, -0.08);
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
 export class GroundCover {
   readonly group = new THREE.Group();
   private readonly owned: Array<{ geometry: THREE.BufferGeometry; material: THREE.Material }> = [];
@@ -101,7 +145,7 @@ export class GroundCover {
   constructor(terrain: Physics.TerrainData, obstacles: readonly Physics.Obstacle[], quality: QualitySettings) {
     this.group.name = 'ground-cover';
     const placements = generateGroundCover(terrain, obstacles, quality.groundCoverDensity);
-    const plane = new THREE.PlaneGeometry(0.55, 0.72); plane.translate(0, 0.36, 0);
+    const grass = grassTuftGeometry();
     const lowPlane = new THREE.PlaneGeometry(0.8, 0.12); lowPlane.translate(0, 0.06, 0);
     const stone = new THREE.DodecahedronGeometry(0.16, 0); stone.translate(0, 0.10, 0);
     const branch = new THREE.CylinderGeometry(0.045, 0.065, 0.9, 5); branch.rotateZ(Math.PI / 2); branch.translate(0, 0.07, 0);
@@ -112,7 +156,10 @@ export class GroundCover {
     this.atlas.colorSpace = THREE.SRGBColorSpace;
     this.atlas.needsUpdate = true;
     const specs: Record<GroundCoverKind, [THREE.BufferGeometry, number]> = {
-      grass: [plane, 0x5d7f35], scrub: [plane, 0x6c7040], stone: [stone, 0x77736b],
+      // The pointed blades expose more upward-facing normals than the old
+      // billboard cards, so use deeper vegetation albedos that stay grounded
+      // under direct sun instead of turning lime green.
+      grass: [grass, 0x405828], scrub: [grass, 0x515431], stone: [stone, 0x77736b],
       branch: [branch, 0x59412a], litter: [lowPlane, 0x76502d],
     };
     const dummy = new THREE.Object3D();
@@ -132,7 +179,7 @@ export class GroundCover {
     }
     // A biome need not use every shape, but construction still made the
     // shared geometry set; retain those too so teardown always releases it.
-    for (const geometry of [plane, lowPlane, stone, branch]) {
+    for (const geometry of [grass, lowPlane, stone, branch]) {
       if (!this.owned.some((entry) => entry.geometry === geometry)) this.owned.push({ geometry, material: new THREE.Material() });
     }
   }

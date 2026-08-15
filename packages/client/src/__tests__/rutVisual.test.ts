@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
+import { QUALITY } from '../quality.js';
 import { RutVisual } from '../rutVisual.js';
+import { TerrainMesh } from '../terrain.js';
 
 function terrain(): Physics.TerrainData {
   const resolution = 8;
@@ -19,6 +22,12 @@ function terrain(): Physics.TerrainData {
 }
 
 describe('session rut visual', () => {
+  it('draws terrain depth before the rut stencil and floor passes', () => {
+    const ground = new TerrainMesh(terrain(), QUALITY.low);
+    expect(ground.mesh.renderOrder).toBe(-3);
+    ground.dispose();
+  });
+
   it('builds reusable indexed 17x17 geometry from an authoritative tile', () => {
     const visual = new RutVisual();
     visual.setTerrain(terrain());
@@ -39,8 +48,33 @@ describe('session rut visual', () => {
     // CPU vertices retain terrain height; the shader subtracts rutDepth so
     // the stencil-cut floor is genuinely below the immutable firm layer.
     expect(positions.getY(0)).toBe(2);
+    // Terrain renders first, then the depth-tested mask. The recessed floor
+    // bypasses the terrain depth only inside that visibility-tested stencil,
+    // so a rut behind a hill cannot cut through the nearer slope.
+    const mask = visual.group.children.find((child) => child.name.startsWith('session-rut-stencil:')) as
+      THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+    expect(mask.material.depthTest).toBe(true);
+    expect(mask.renderOrder).toBe(-2);
+    expect(visual.mesh.material.depthTest).toBe(false);
+    expect(visual.mesh.material.depthWrite).toBe(false);
+    expect(visual.mesh.renderOrder).toBe(-1);
+    visual.dispose();
+  });
+
+  it('keeps the no-stencil fallback depth-tested against hills', () => {
+    const visual = new RutVisual();
+    visual.setStencilSupported(false);
+    visual.setTerrain(terrain());
+    const depths = new Uint8Array(Physics.RUT_TILE_DEPTH_BYTES);
+    depths[0] = 80;
+    visual.applyTile({ tileX: 2, tileZ: 2, depths });
+
+    const mask = visual.group.children.find((child) => child.name.startsWith('session-rut-stencil:')) as
+      THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+    expect(mask.visible).toBe(false);
     expect(visual.mesh.material.depthTest).toBe(true);
     expect(visual.mesh.material.depthWrite).toBe(true);
+    expect(visual.mesh.material.uniforms.displace!.value).toBe(0);
     visual.dispose();
   });
 

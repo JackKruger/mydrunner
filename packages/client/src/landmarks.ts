@@ -133,16 +133,17 @@ export class LandmarkMeshes {
     rearWall.position.set(workshop.cx, workshop.backWallH / 2, workshop.cz - workshop.d / 2);
     rearWall.castShadow = true;
     root.add(rearWall);
+    // Keep the supports against the rear wall and leave all three drive-in
+    // approaches open. The old matching row on the front edge put a pole on
+    // every bay boundary and made the workshop needlessly awkward to enter.
     for (const x of [workshop.cx - workshop.w / 2, workshop.cx - workshop.w / 6, workshop.cx + workshop.w / 6, workshop.cx + workshop.w / 2]) {
-      for (const z of [workshop.cz - workshop.d / 2, workshop.cz + workshop.d / 2]) {
-        const post = new THREE.Mesh(
-          new THREE.CylinderGeometry(workshop.postRadius, workshop.postRadius, workshop.postHeight, 10),
-          columnMat,
-        );
-        post.position.set(x, workshop.postHeight / 2, z);
-        post.castShadow = true;
-        root.add(post);
-      }
+      const post = new THREE.Mesh(
+        new THREE.CylinderGeometry(workshop.postRadius, workshop.postRadius, workshop.postHeight, 10),
+        columnMat,
+      );
+      post.position.set(x, workshop.postHeight / 2, workshop.cz - workshop.d / 2);
+      post.castShadow = true;
+      root.add(post);
     }
     const workshopSign = new THREE.Mesh(
       new THREE.BoxGeometry(4.8, 0.65, 0.12),

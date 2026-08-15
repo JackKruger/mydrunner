@@ -24,7 +24,13 @@ import { Sky } from './sky.js';
 import { disposeObject3D } from './three/dispose.js';
 import { activeQuality, type QualitySettings } from './quality.js';
 import { GroundCover } from './groundCover.js';
-import { createOutdoorEnvironment, RENDER_ENVIRONMENT } from './renderEnvironment.js';
+import {
+  createOutdoorEnvironment,
+  effectiveFogNear,
+  RENDER_ENVIRONMENT,
+  type RenderTuningKey,
+  type RenderTuningTarget,
+} from './renderEnvironment.js';
 
 /** What the world is made of. The game composes this from the terrain
  *  handshake; the editor composes it from the map being edited. */
@@ -43,7 +49,7 @@ export interface WorldViewOptions {
   markerPreview?: boolean;
 }
 
-export class WorldView {
+export class WorldView implements RenderTuningTarget {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
 
@@ -60,6 +66,9 @@ export class WorldView {
   readonly stencilSupported: boolean;
   private readonly markerOptions: MarkerViewOptions;
   private readonly disposeEnvironment: () => void;
+  private readonly sun: THREE.DirectionalLight;
+  private readonly hemisphere: THREE.HemisphereLight;
+  private readonly fog: THREE.Fog;
 
   /** `quality` defaults to the resolved tier so the game gets it for free.
    *  The editor passes QUALITY.high explicitly — it exists to show the world
@@ -106,11 +115,13 @@ export class WorldView {
 
     // Procedural sky dome replaces the flat background colour. Fog still
     // matches the horizon tint so distant terrain melts into the sky.
-    this.scene.fog = new THREE.Fog(RENDER_ENVIRONMENT.fog.color, RENDER_ENVIRONMENT.fog.near, RENDER_ENVIRONMENT.fog.far);
+    this.fog = new THREE.Fog(RENDER_ENVIRONMENT.fog.color, effectiveFogNear(), RENDER_ENVIRONMENT.fog.far);
+    this.scene.fog = this.fog;
     this.sky = new Sky(quality);
     this.scene.add(this.sky.mesh);
 
     const sun = new THREE.DirectionalLight(RENDER_ENVIRONMENT.sun.color, RENDER_ENVIRONMENT.sun.intensity);
+    this.sun = sun;
     sun.position.set(RENDER_ENVIRONMENT.sun.position.x, RENDER_ENVIRONMENT.sun.position.y, RENDER_ENVIRONMENT.sun.position.z);
     // Both flags matter: leaving the light configured to cast while the
     // shadow map is disabled still costs the shadow-camera bookkeeping.
@@ -127,7 +138,12 @@ export class WorldView {
     // edges with the larger texel pitch.
     sun.shadow.bias = -0.0008;
     this.scene.add(sun);
-    this.scene.add(new THREE.HemisphereLight(RENDER_ENVIRONMENT.hemisphere.skyColor, RENDER_ENVIRONMENT.hemisphere.groundColor, RENDER_ENVIRONMENT.hemisphere.intensity));
+    this.hemisphere = new THREE.HemisphereLight(
+      RENDER_ENVIRONMENT.hemisphere.skyColor,
+      RENDER_ENVIRONMENT.hemisphere.groundColor,
+      RENDER_ENVIRONMENT.hemisphere.intensity,
+    );
+    this.scene.add(this.hemisphere);
 
     // Placeholder ground until the world arrives. Replaced by setWorld().
     const placeholder = new THREE.Mesh(
@@ -152,6 +168,42 @@ export class WorldView {
    *  its first cell of water. */
   get waterMesh(): WaterMesh | null {
     return this.waterMeshRef;
+  }
+
+  getRenderTuning(key: RenderTuningKey): number {
+    switch (key) {
+      case 'exposure': return RENDER_ENVIRONMENT.exposure;
+      case 'sunIntensity': return RENDER_ENVIRONMENT.sun.intensity;
+      case 'hemisphereIntensity': return RENDER_ENVIRONMENT.hemisphere.intensity;
+      case 'shaderAmbientIntensity': return RENDER_ENVIRONMENT.shaderAmbientIntensity;
+      case 'grassBrightness': return RENDER_ENVIRONMENT.grassBrightness;
+      case 'terrainMacroTint': return RENDER_ENVIRONMENT.terrainMacroTint;
+      case 'terrainTriplanarStrength': return RENDER_ENVIRONMENT.terrainTriplanarStrength;
+      case 'terrainNormalStrength': return RENDER_ENVIRONMENT.terrainNormalStrength;
+      case 'terrainShading': return RENDER_ENVIRONMENT.terrainShading;
+      case 'fogAmount': return RENDER_ENVIRONMENT.fog.amount;
+    }
+  }
+
+  setRenderTuning(key: RenderTuningKey, value: number): void {
+    switch (key) {
+      case 'exposure': RENDER_ENVIRONMENT.exposure = value; break;
+      case 'sunIntensity': RENDER_ENVIRONMENT.sun.intensity = value; break;
+      case 'hemisphereIntensity': RENDER_ENVIRONMENT.hemisphere.intensity = value; break;
+      case 'shaderAmbientIntensity': RENDER_ENVIRONMENT.shaderAmbientIntensity = value; break;
+      case 'grassBrightness': RENDER_ENVIRONMENT.grassBrightness = value; break;
+      case 'terrainMacroTint': RENDER_ENVIRONMENT.terrainMacroTint = value; break;
+      case 'terrainTriplanarStrength': RENDER_ENVIRONMENT.terrainTriplanarStrength = value; break;
+      case 'terrainNormalStrength': RENDER_ENVIRONMENT.terrainNormalStrength = value; break;
+      case 'terrainShading': RENDER_ENVIRONMENT.terrainShading = value; break;
+      case 'fogAmount': RENDER_ENVIRONMENT.fog.amount = value; break;
+    }
+    this.renderer.toneMappingExposure = RENDER_ENVIRONMENT.exposure;
+    this.sun.intensity = RENDER_ENVIRONMENT.sun.intensity;
+    this.hemisphere.intensity = RENDER_ENVIRONMENT.hemisphere.intensity;
+    this.fog.near = effectiveFogNear();
+    this.terrainMeshRef?.refreshRenderEnvironment();
+    this.waterMeshRef?.refreshRenderEnvironment();
   }
 
   /** Full teardown and rebuild of terrain, obstacles and landmarks. Safe

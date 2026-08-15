@@ -2,7 +2,9 @@
 // touching Rapier - so they're fast and deterministic.
 
 import { describe, it, expect } from 'vitest';
-import { createEngineState, stepEngine, torqueAtRpm } from '../physics/engine.js';
+import {
+  createEngineState, gearedWheelAngularSpeedLimit, stepEngine, torqueAtRpm,
+} from '../physics/engine.js';
 import { ENGINE } from '../constants.js';
 import { TUNING } from '../tuning.js';
 
@@ -44,9 +46,39 @@ describe('live engine tuning', () => {
       TUNING.engineBrakeMult = savedBrake;
     }
   });
+
+  it('applies live automatic shift thresholds and hold time', () => {
+    const savedUp = TUNING.engineShiftUpRpm;
+    const savedDown = TUNING.engineShiftDownRpm;
+    const savedHold = TUNING.engineShiftHoldTicks;
+    try {
+      TUNING.engineShiftUpRpm = 3000;
+      TUNING.engineShiftDownRpm = 1200;
+      TUNING.engineShiftHoldTicks = 7;
+      const state = createEngineState();
+      state.gearIndex = ENGINE.firstGear;
+      const out = stepEngine(state, 30, 30, 1, dt);
+      expect(out.gear).toBe(2);
+      expect(state.shiftCooldown).toBe(7);
+    } finally {
+      TUNING.engineShiftUpRpm = savedUp;
+      TUNING.engineShiftDownRpm = savedDown;
+      TUNING.engineShiftHoldTicks = savedHold;
+    }
+  });
 });
 
 describe('gearbox', () => {
+  it('maps engine redline through the selected gear and final drive', () => {
+    const state = createEngineState();
+    state.gearIndex = ENGINE.firstGear;
+    const high = gearedWheelAngularSpeedLimit(state, ENGINE.finalDrive);
+    const low = gearedWheelAngularSpeedLimit(state, ENGINE.finalDrive * 2.65);
+    expect(low).toBeCloseTo(high / 2.65);
+    state.gearIndex = ENGINE.neutralGear;
+    expect(gearedWheelAngularSpeedLimit(state, ENGINE.finalDrive)).toBe(Infinity);
+  });
+
   it('starts in neutral', () => {
     const s = createEngineState();
     expect(s.gearIndex).toBe(ENGINE.neutralGear);

@@ -7,7 +7,7 @@ function makeUI(development = true): { root: HTMLElement; ui: PlayerUI } {
   document.body.appendChild(root);
   return {
     root,
-    ui: new PlayerUI(root, { development, version: 'test.123' }),
+    ui: new PlayerUI(root, { development }),
   };
 }
 
@@ -38,7 +38,6 @@ describe('PlayerUI telemetry', () => {
       gear: 3,
       surface: 'Deep mud',
       handbrake: false,
-      tick: 84,
       fps: 59,
     });
 
@@ -50,8 +49,10 @@ describe('PlayerUI telemetry', () => {
     expect(root.querySelector('#hud-rpm-value')?.textContent).toBe('3210');
     expect(root.querySelector('#hud-gear-value')?.textContent).toBe('3');
     expect(root.querySelector('#hud-surface')?.textContent).toBe('Deep mud');
-    expect(root.querySelector('#hud-tick')?.textContent).toBe('tick=84');
     expect(root.querySelector('#hud-fps')?.textContent).toBe('59 FPS');
+    expect(root.querySelector('#hud-tick')).toBeNull();
+    expect(root.querySelector('#version')).toBeNull();
+    expect(root.querySelector('#hud-diagnostics')).toBeNull();
     expect(root.textContent).toContain('km/h');
   });
 
@@ -63,14 +64,12 @@ describe('PlayerUI telemetry', () => {
       rpm: 1800,
       gear: -1,
       surface: 'Gravel',
-      previewDiagnostic: 'offline physics',
     });
 
     expect(root.querySelector('#hud-connection-text')?.textContent).toBe('PREVIEW');
     expect(root.querySelector('#hud-identity')?.textContent).toBe('OFFLINE RUN');
     expect(root.querySelector('#hud-speed-value')?.textContent).toBe('18');
     expect(root.querySelector('#hud-gear-value')?.textContent).toBe('R');
-    expect(root.querySelector('#hud-preview-diagnostic')?.textContent).toBe('offline physics');
   });
 
   it('announces and clears the handbrake indication', () => {
@@ -109,16 +108,21 @@ describe('PlayerUI telemetry', () => {
 });
 
 describe('H-pattern transmission selector', () => {
-  it('selects a manual gear and can return to automatic', () => {
+  it('selects manual gears and parks the stick in A for automatic', () => {
     const selections: Array<number | null> = [];
     const root = document.createElement('div');
     document.body.appendChild(root);
     const ui = new PlayerUI(root, {
       development: false,
-      version: 'test',
       onGearSelection: (gear) => selections.push(gear),
     });
     ui.updateTelemetry({ gear: 2 });
+    expect(root.querySelector('#transmission-mode')).toBeNull();
+    expect(root.querySelector('.hud-shifter-header > .hud-field-label')).toBeNull();
+    expect(root.querySelector('.transfer-label')).toBeNull();
+    expect(root.querySelector('[data-gear="auto"]')?.textContent).toBe('A');
+    expect(root.querySelector('#gear-knob')?.textContent).toBe('A');
+    expect(root.querySelector('#gear-mode-hint')?.textContent).toBe('');
 
     (root.querySelector('[data-gear="3"]') as HTMLButtonElement).click();
     expect(selections).toEqual([3]);
@@ -126,10 +130,13 @@ describe('H-pattern transmission selector', () => {
     expect(root.querySelector('#gear-mode-hint')?.textContent).toBe('3 SELECTED');
     expect(root.querySelector('#gear-knob')?.textContent).toBe('3');
 
-    (root.querySelector('#transmission-mode') as HTMLButtonElement).click();
+    (root.querySelector('[data-gear="auto"]') as HTMLButtonElement).click();
     expect(selections).toEqual([3, null]);
-    expect(root.querySelector('#transmission-mode')?.textContent).toBe('AUTO');
-    expect(root.querySelector('#gear-knob')?.textContent).toBe('2');
+    expect(root.querySelector('#gear-knob')?.textContent).toBe('A');
+
+    ui.updateTelemetry({ gear: 4 });
+    expect(root.querySelector('#gear-knob')?.textContent).toBe('A');
+    expect(root.querySelector('[data-gear="auto"]')?.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('operates a separate 2H, 4H, and 4L transfer-case stick', () => {
@@ -138,9 +145,9 @@ describe('H-pattern transmission selector', () => {
     document.body.appendChild(root);
     const ui = new PlayerUI(root, {
       development: false,
-      version: 'test',
       onTransferCaseSelection: (mode) => selections.push(mode),
     });
+    expect(root.querySelector('#transfer-mode-hint')?.textContent).toBe('');
 
     (root.querySelector('[data-transfer="2h"]') as HTMLButtonElement).click();
     expect(selections).toEqual(['2h']);
@@ -158,7 +165,6 @@ describe('H-pattern transmission selector', () => {
     document.body.appendChild(root);
     const ui = new PlayerUI(root, {
       development: false,
-      version: 'test',
       onTransferCaseSelection: (mode) => selections.push(mode),
     });
     ui.updateTelemetry({ fixedRwd: true, transferCase: '2h' });
@@ -201,8 +207,8 @@ describe('PlayerUI connection states', () => {
     expect(root.textContent).not.toContain('protocol mismatch');
   });
 
-  it('keeps diagnostics out of production presentation', () => {
+  it('keeps the FPS readout out of production presentation', () => {
     const { root } = makeUI(false);
-    expect((root.querySelector('#hud-diagnostics') as HTMLElement).hidden).toBe(true);
+    expect((root.querySelector('#hud-fps') as HTMLElement).hidden).toBe(true);
   });
 });

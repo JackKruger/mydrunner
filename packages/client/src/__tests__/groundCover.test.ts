@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
-import { generateGroundCover } from '../groundCover.js';
+import { GroundCover, generateGroundCover } from '../groundCover.js';
+import { QUALITY } from '../quality.js';
 
 function terrain(seed = 41): Physics.TerrainData {
   const n = 9;
@@ -37,5 +39,15 @@ describe('deterministic ground cover placement', () => {
     for (let r = 0; r < t.resolution; r++) for (let c = 0; c < t.resolution; c++) t.heights[r * t.resolution + c] = c * 4;
     expect(generateGroundCover(t, [])).toEqual([]);
     expect(generateGroundCover(terrain(), [], 0)).toEqual([]);
+  });
+
+  it('builds upright vegetation from pointed blades instead of rectangular cards', () => {
+    const cover = new GroundCover(terrain(), [], QUALITY.high);
+    const grass = cover.group.getObjectByName('ground-cover-grass');
+    const positions = (grass as THREE.Mesh).geometry.getAttribute('position');
+    expect(positions.count).toBeGreaterThan(4);
+    expect(Array.from({ length: positions.count }, (_, i) => positions.getY(i)).filter((y) => y > 0.7)).toHaveLength(1);
+    expect(((grass as THREE.Mesh).material as THREE.MeshStandardMaterial).color.getHex()).toBe(0x405828);
+    cover.dispose();
   });
 });

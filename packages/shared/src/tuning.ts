@@ -11,9 +11,14 @@
 import {
   ANTI_ROLL,
   AXLE,
+  CAMERA,
+  DRIVELINE,
+  ENGINE,
+  LOW_RANGE,
   SURFACE_FRICTION,
   TIRE_LATERAL,
   VEHICLE,
+  WATER,
   WHEEL,
 } from './constants.js';
 
@@ -103,6 +108,15 @@ export interface Tuning {
   rollingResistanceDeepMudMult: number;
   engineTorqueMult: number;
   engineBrakeMult: number;
+  engineShiftUpRpm: number;
+  engineShiftDownRpm: number;
+  engineShiftHoldTicks: number;
+  lowRangeMaxCrawlSpeed: number;
+  centerTransferMaxReactionNm: number;
+  soilSinkDepthMult: number;
+  soilBearingStrengthMult: number;
+  soilShearGripMult: number;
+  soilBulldozingDragMult: number;
   // Water, as multipliers on the WATER block. All three interact
   // strongly - more buoyancy means less tyre load means the current
   // moves you further - so they are the three knobs a crossing gets
@@ -110,6 +124,12 @@ export interface Tuning {
   waterBuoyancy: number;
   waterDrag: number;
   waterFlowScale: number;
+  waterLateralDragMult: number;
+  waterWheelGripFloor: number;
+  waterSwampSeconds: number;
+  cameraChaseYawStiffness: number;
+  cameraChaseYawDamping: number;
+  cameraChaseSwingLateral: number;
 }
 
 export const TUNING: Tuning = {
@@ -158,7 +178,22 @@ export const TUNING: Tuning = {
   rollingResistanceDeepMudMult: WHEEL.rollingMultDeepMud,
   engineTorqueMult: 1,
   engineBrakeMult: 1,
+  engineShiftUpRpm: ENGINE.shiftUpRpm,
+  engineShiftDownRpm: ENGINE.shiftDownRpm,
+  engineShiftHoldTicks: ENGINE.shiftHoldTicks,
+  lowRangeMaxCrawlSpeed: LOW_RANGE.maxCrawlSpeed,
+  centerTransferMaxReactionNm: DRIVELINE.centerTransferMaxReactionNm,
+  soilSinkDepthMult: 1,
+  soilBearingStrengthMult: 1,
+  soilShearGripMult: 1,
+  soilBulldozingDragMult: 1,
   waterBuoyancy: 1,
   waterDrag: 1,
   waterFlowScale: 1,
+  waterLateralDragMult: 1,
+  waterWheelGripFloor: WATER.wheelGripFloor,
+  waterSwampSeconds: WATER.swampSeconds,
+  cameraChaseYawStiffness: CAMERA.chaseYawStiffness,
+  cameraChaseYawDamping: CAMERA.chaseYawDamping,
+  cameraChaseSwingLateral: CAMERA.chaseSwingLateral,
 };

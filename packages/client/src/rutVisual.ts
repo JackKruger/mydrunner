@@ -30,6 +30,8 @@ const RUT_FRAGMENT_SHADER = /* glsl */`
     if (coverage < 0.015) discard;
     float depthTone = smoothstep(0.0, 0.12, vRutDepth);
     gl_FragColor = vec4(mix(vec3(0.20, 0.12, 0.075), vec3(0.055, 0.025, 0.012), depthTone), 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
   }
 `;
 
@@ -66,8 +68,12 @@ export class RutVisual {
       fragmentShader: RUT_FRAGMENT_SHADER,
       uniforms: { displace: { value: 1 } },
       transparent: false,
-      depthWrite: true,
-      depthTest: true,
+      // The terrain has already established which surface is nearest. The
+      // stencil mask below depth-tests against it, then confines this
+      // recessed floor to only those visible pixels. Testing the displaced
+      // floor against the unchanged terrain depth would hide the depression.
+      depthWrite: false,
+      depthTest: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
@@ -119,6 +125,10 @@ export class RutVisual {
     this.maskMaterial.stencilWrite = supported;
     this.floorMaterial.stencilWrite = supported;
     this.floorMaterial.stencilFunc = supported ? THREE.EqualStencilFunc : THREE.AlwaysStencilFunc;
+    // Without stencil support the floor becomes a small surface-offset decal,
+    // so it must use the regular depth buffer to stay behind hills.
+    this.floorMaterial.depthTest = !supported;
+    this.floorMaterial.depthWrite = !supported;
     this.floorMaterial.uniforms.displace!.value = supported ? 1 : 0;
     for (const tile of this.tileVisuals.values()) tile.mask.visible = supported;
   }
@@ -261,7 +271,7 @@ export class RutVisual {
 
     const floor = new THREE.Mesh(geometry, this.floorMaterial);
     floor.name = `session-rut-floor:${tileX},${tileZ}`;
-    floor.renderOrder = 0;
+    floor.renderOrder = -1;
     floor.frustumCulled = false;
     const mask = new THREE.Mesh(geometry, this.maskMaterial);
     mask.name = `session-rut-stencil:${tileX},${tileZ}`;

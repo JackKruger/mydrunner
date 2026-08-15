@@ -45,6 +45,18 @@ describe('petrol station pad override', () => {
     const t = generateTerrain({ pad: { ...moved, yaw: 0.7 } });
     expect(landmarksFor(t).petrolStation.yaw).toBeCloseTo(0.7, 6);
   });
+
+  it('seats the station on the final composed ground height', () => {
+    const raised = generateTerrain({
+      pad: moved,
+      // Authored/baked height data is composed after the generator in the
+      // real map path. Model that ordering here so a return to y=0 fails.
+      extraHeightLayers: [(_ctx, _x, _z, height) => height + 2.25],
+    });
+    const groundY = sampleHeightBilinear(raised, moved.cx, moved.cz);
+    expect(landmarksFor(raised).petrolStation.y).toBeCloseTo(groundY, 6);
+    expect(groundY).toBeCloseTo(2.25, 6);
+  });
 });
 
 describe('bog override', () => {

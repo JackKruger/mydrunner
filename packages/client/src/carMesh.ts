@@ -61,6 +61,7 @@ interface Materials {
   chrome: THREE.MeshStandardMaterial;
   black: THREE.MeshStandardMaterial;
   dirt: { value: number };
+  vehicleWorldToLocal: { value: THREE.Matrix4 };
   rubberDetail: THREE.Texture;
 }
 
@@ -111,6 +112,11 @@ function makeMaterials(bodyColor: number, finish: PaintFinish = 'gloss'): Materi
   const paintDetail = detailTexture('painted-metal-detail.svg', 5);
   const glassVariation = detailTexture('glass-imperfections.svg', 3);
   const rubberDetail = detailTexture('rubber-detail.svg', 7);
+  const mudMask = detailTexture('mud-mask.svg', 1);
+  mudMask.magFilter = THREE.LinearFilter;
+  mudMask.minFilter = THREE.LinearMipmapLinearFilter;
+  mudMask.anisotropy = 4;
+  const vehicleWorldToLocal = { value: new THREE.Matrix4() };
   const body = new THREE.MeshPhysicalMaterial({
     color: bodyColor, roughness, metalness, name: 'paint.primary',
     normalMap: paintDetail, normalScale: new THREE.Vector2(0.07, 0.07),
@@ -119,19 +125,41 @@ function makeMaterials(bodyColor: number, finish: PaintFinish = 'gloss'): Materi
   });
   body.onBeforeCompile = (shader) => {
     shader.uniforms.vehicleDirt = dirt;
+    shader.uniforms.vehicleMudMask = { value: mudMask };
+    shader.uniforms.vehicleWorldToLocal = vehicleWorldToLocal;
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vehicleLocalPosition;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvehicleLocalPosition = position;');
+      .replace('#include <common>', `#include <common>
+uniform mat4 vehicleWorldToLocal;
+varying vec3 vehicleLocalPosition;
+varying vec3 vehicleLocalNormal;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+vehicleLocalPosition = (vehicleWorldToLocal * modelMatrix * vec4(transformed, 1.0)).xyz;
+vehicleLocalNormal = normalize(mat3(vehicleWorldToLocal * modelMatrix) * objectNormal);`);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float vehicleDirt;\nvarying vec3 vehicleLocalPosition;')
+      .replace('#include <common>', `#include <common>
+uniform float vehicleDirt;
+uniform sampler2D vehicleMudMask;
+varying vec3 vehicleLocalPosition;
+varying vec3 vehicleLocalNormal;`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float dirtLower = 1.0 - smoothstep(0.05, 1.15, vehicleLocalPosition.y);
         float dirtRear = smoothstep(0.15, 1.4, -vehicleLocalPosition.z);
-        float dirtNoise = 0.72 + 0.28 * sin(vehicleLocalPosition.x * 19.0 + vehicleLocalPosition.z * 13.0);
+        vec3 dirtProjectionNormal = abs(normalize(vehicleLocalNormal));
+        vec2 dirtProjectionUv;
+        if (dirtProjectionNormal.x >= dirtProjectionNormal.y && dirtProjectionNormal.x >= dirtProjectionNormal.z) {
+          dirtProjectionUv = vehicleLocalPosition.zy;
+        } else if (dirtProjectionNormal.y >= dirtProjectionNormal.z) {
+          dirtProjectionUv = vehicleLocalPosition.xz;
+        } else {
+          dirtProjectionUv = vehicleLocalPosition.xy;
+        }
+        float dirtVariation = smoothstep(0.16, 0.84, texture2D(vehicleMudMask, dirtProjectionUv * 0.38).r);
+        float dirtNoise = mix(0.58, 1.0, dirtVariation);
         float dirtMask = clamp(max(dirtLower, dirtRear * 0.58) * dirtNoise * vehicleDirt, 0.0, 0.88);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.19, 0.105, 0.045), dirtMask);`);
   };
-  body.customProgramCacheKey = () => 'vehicle-paint-detail-dirt-v2';
+  body.customProgramCacheKey = () => 'vehicle-paint-detail-dirt-v3';
+  body.userData.ownedTextures = [mudMask];
   return {
     body,
     trim: new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.85, metalness: 0 }),
@@ -146,6 +174,7 @@ function makeMaterials(bodyColor: number, finish: PaintFinish = 'gloss'): Materi
     chrome: new THREE.MeshStandardMaterial({ color: 0xb8b8b8, roughness: 0.35, metalness: 0.7 }),
     black: new THREE.MeshStandardMaterial({ color: 0x202020, roughness: 0.6 }),
     dirt,
+    vehicleWorldToLocal,
     rubberDetail,
   };
 }
@@ -974,6 +1003,11 @@ export function buildCarMesh(value: CarKind | VehicleBuild, _isLocal: boolean, _
   return {
     group, wheels, tires, axles, suspension, recovery,
     updateDirt(dtSeconds, mudContact, waterContact) {
+      // The body material is shared by all panels. Converting each panel's
+      // model transform back through this root inverse keeps one continuous
+      // dirt field attached to the vehicle as it moves through the world.
+      group.updateWorldMatrix(true, false);
+      mats.vehicleWorldToLocal.value.copy(group.matrixWorld).invert();
       // Deep mud coats quickly; ordinary mud builds over several wheel turns.
       dirtAmount += mudContact * dtSeconds * 0.22;
       // Only sustained water contact cleans the truck, rather than a single splash.

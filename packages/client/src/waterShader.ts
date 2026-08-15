@@ -21,7 +21,7 @@
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 import { activeQuality, buildWaterFragment, type QualitySettings } from './quality.js';
-import { RENDER_ENVIRONMENT } from './renderEnvironment.js';
+import { effectiveFogNear, RENDER_ENVIRONMENT } from './renderEnvironment.js';
 
 const VERT = /* glsl */ `
 attribute float aWet;
@@ -47,7 +47,9 @@ varying float vDepth;
 
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
-uniform vec3 uAmbient;
+uniform vec3 uSkyAmbient;
+uniform vec3 uGroundAmbient;
+uniform float uAmbientIntensity;
 uniform vec3 uFogColor;
 uniform float uFogNear;
 uniform float uFogFar;
@@ -194,7 +196,9 @@ void main() {
 #endif
 
   float diff = max(dot(n, normalize(uSunDir)), 0.0);
-  vec3 lit = base * (uAmbient + uSunColor * (0.35 + 0.65 * diff));
+  float hemiMix = n.y * 0.5 + 0.5;
+  vec3 ambient = mix(uGroundAmbient, uSkyAmbient, hemiMix) * uAmbientIntensity;
+  vec3 lit = base * (ambient + uSunColor * (0.35 + 0.65 * diff));
   // A cool sky reflection is the cue that was missing from the almost
   // black deep water. It grows at grazing angles like real water.
   vec3 skyReflection = mix(vec3(0.34, 0.48, 0.58), uFogColor, 0.45);
@@ -210,6 +214,8 @@ void main() {
   vec3 final = mix(lit, uFogColor, fogFactor);
 
   gl_FragColor = vec4(final, alpha);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
 }
 `;
 
@@ -241,9 +247,11 @@ export function makeWaterMaterial(
     uniforms: {
       uSunDir: { value: new THREE.Vector3(env.sun.position.x, env.sun.position.y, env.sun.position.z).normalize() },
       uSunColor: { value: new THREE.Color(env.sun.color).multiplyScalar(env.sun.intensity) },
-      uAmbient: { value: new THREE.Color(env.hemisphere.skyColor).multiplyScalar(env.shaderAmbientIntensity) },
+      uSkyAmbient: { value: new THREE.Color(env.hemisphere.skyColor) },
+      uGroundAmbient: { value: new THREE.Color(env.hemisphere.groundColor) },
+      uAmbientIntensity: { value: env.shaderAmbientIntensity },
       uFogColor: { value: new THREE.Color(env.fog.color) },
-      uFogNear: { value: env.fog.near },
+      uFogNear: { value: effectiveFogNear() },
       uFogFar: { value: env.fog.far },
       uTime: { value: 0 },
       uFlowMap: { value: flowMap },
@@ -262,6 +270,16 @@ export function makeWaterMaterial(
     depthWrite: false,
     side: THREE.DoubleSide,
   });
+}
+
+export function refreshWaterEnvironment(material: THREE.ShaderMaterial): void {
+  const env = RENDER_ENVIRONMENT;
+  (material.uniforms.uSunColor!.value as THREE.Color)
+    .set(env.sun.color).multiplyScalar(env.sun.intensity);
+  (material.uniforms.uSkyAmbient!.value as THREE.Color).set(env.hemisphere.skyColor);
+  (material.uniforms.uGroundAmbient!.value as THREE.Color).set(env.hemisphere.groundColor);
+  material.uniforms.uAmbientIntensity!.value = env.shaderAmbientIntensity;
+  material.uniforms.uFogNear!.value = effectiveFogNear();
 }
 
 /** Pack the flow field into RG, signed range mapped to [0, 255].

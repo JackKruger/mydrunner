@@ -1,5 +1,7 @@
 /** Physical soft-ground helpers for mud and deep mud. */
 
+import { TUNING } from '../tuning.js';
+
 export type SoilKind = 'none' | 'mud' | 'deep-mud';
 
 export interface SoftGroundState {
@@ -64,8 +66,9 @@ export function stepSoftGround(
     return out;
   }
 
-  const maxSink = kind === 'deep-mud' ? 0.38 : 0.18;
-  const bearingStrength = kind === 'deep-mud' ? 28_000 : 55_000;
+  const maxSink = (kind === 'deep-mud' ? 0.38 : 0.18) * TUNING.soilSinkDepthMult;
+  const bearingStrength = (kind === 'deep-mud' ? 28_000 : 55_000)
+    * TUNING.soilBearingStrengthMult;
   const area = estimateContactArea(normalLoad, pressurePsi, tyreWidth, tyreRadius);
   const groundPressure = normalLoad / Math.max(1e-4, area);
   // Disturbance is work over real relative patch travel. Using a slip-ratio
@@ -96,8 +99,8 @@ export function stepSoftGround(
   );
   const shearMultiplier = clamp(
     (0.32 + shearBuild * 0.58 + state.soilCompaction * 0.10)
-      * excessSlipPenalty * footprintGain,
-    0.25,
+      * excessSlipPenalty * footprintGain * TUNING.soilShearGripMult,
+    0.1,
     1,
   );
   const coefficient = kind === 'deep-mud' ? 150_000 : 95_000;
@@ -106,7 +109,7 @@ export function stepSoftGround(
       1
       + Math.abs(longitudinalSpeed) * 0.55
       + Math.min(3, slipSpeed * 0.35)
-    );
+    ) * TUNING.soilBulldozingDragMult;
   state.bulldozingResistance = bulldozingForce;
 
   out.contactArea = area;

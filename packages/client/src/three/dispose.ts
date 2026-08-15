@@ -33,12 +33,13 @@ export function disposeMaterial(mat: THREE.Material): void {
     metalnessMap?: THREE.Texture | null;
     alphaMap?: THREE.Texture | null;
     emissiveMap?: THREE.Texture | null;
+    userData: THREE.Material['userData'] & { ownedTextures?: THREE.Texture[] };
   };
-  m.map?.dispose();
-  m.normalMap?.dispose();
-  m.roughnessMap?.dispose();
-  m.metalnessMap?.dispose();
-  m.alphaMap?.dispose();
-  m.emissiveMap?.dispose();
+  const textures = new Set<THREE.Texture>([
+    ...m.userData.ownedTextures ?? [],
+    ...[m.map, m.normalMap, m.roughnessMap, m.metalnessMap, m.alphaMap, m.emissiveMap]
+      .filter((texture): texture is THREE.Texture => texture instanceof THREE.Texture),
+  ]);
+  for (const texture of textures) texture.dispose();
   mat.dispose();
 }

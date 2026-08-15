@@ -329,7 +329,7 @@ export function computeWaterLoad(
 
     const k = submerged * TUNING.waterDrag;
     const fLong = -WATER.dragLong * k * Math.abs(vLong) * vLong;
-    const fLat = -WATER.dragLat * k * Math.abs(vLat) * vLat;
+    const fLat = -WATER.dragLat * TUNING.waterLateralDragMult * k * Math.abs(vLat) * vLat;
     const fVert = -WATER.dragVert * k * Math.abs(relY) * relY;
 
     out.drag.x = fLong * fx + fLat * rx;
@@ -384,8 +384,8 @@ export function computeWaterLoad(
   // a few per cent of displacement, while one floating fully takes on
   // water in WATER.swampSeconds and settles onto the bed.
   if (submerged > 0) {
-    if (WATER.swampSeconds > 0) {
-      state.floodFrac = Math.min(1, state.floodFrac + (submerged * dt) / WATER.swampSeconds);
+    if (TUNING.waterSwampSeconds > 0) {
+      state.floodFrac = Math.min(1, state.floodFrac + (submerged * dt) / TUNING.waterSwampSeconds);
     }
   } else if (WATER.drainSeconds > 0) {
     state.floodFrac = Math.max(0, state.floodFrac - dt / WATER.drainSeconds);
@@ -401,7 +401,7 @@ export function wetGripMult(depth: number, wheelRadius: number): number {
   if (depth <= 0) return 1;
   const full = wheelRadius * WATER.wheelGripDepthRatio;
   const t = clamp01(depth / full);
-  return 1 + (WATER.wheelGripFloor - 1) * t;
+  return 1 + (TUNING.waterWheelGripFloor - 1) * t;
 }
 
 /** How submerged a wheel is, 0..1, for scaling rolling resistance. */

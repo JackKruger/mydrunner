@@ -3,15 +3,59 @@
 
 import * as THREE from 'three';
 
-export const RENDER_ENVIRONMENT = {
+export type RenderTuningKey =
+  | 'exposure'
+  | 'sunIntensity'
+  | 'hemisphereIntensity'
+  | 'shaderAmbientIntensity'
+  | 'grassBrightness'
+  | 'terrainMacroTint'
+  | 'terrainTriplanarStrength'
+  | 'terrainNormalStrength'
+  | 'terrainShading'
+  | 'fogAmount';
+
+export interface RenderTuningTarget {
+  getRenderTuning(key: RenderTuningKey): number;
+  setRenderTuning(key: RenderTuningKey, value: number): void;
+}
+
+interface RenderEnvironment {
+  outputColorSpace: THREE.ColorSpace;
+  toneMapping: THREE.ToneMapping;
+  exposure: number;
+  fog: { color: number; near: number; far: number; amount: number };
+  sun: { color: number; intensity: number; position: { x: number; y: number; z: number } };
+  hemisphere: { skyColor: number; groundColor: number; intensity: number };
+  shaderAmbientIntensity: number;
+  grassBrightness: number;
+  terrainMacroTint: number;
+  terrainTriplanarStrength: number;
+  terrainNormalStrength: number;
+  terrainShading: number;
+}
+
+/** Mutable only through WorldView's RenderTuningTarget implementation. */
+export const RENDER_ENVIRONMENT: RenderEnvironment = {
   outputColorSpace: THREE.SRGBColorSpace,
-  toneMapping: THREE.ACESFilmicToneMapping,
-  exposure: 0.95,
-  fog: { color: 0xd6e2ec, near: 180, far: 480 },
-  sun: { color: 0xfff1d2, intensity: 1.65, position: { x: 50, y: 80, z: 30 } },
-  hemisphere: { skyColor: 0xb8d0e2, groundColor: 0x66553c, intensity: 0.72 },
-  shaderAmbientIntensity: 0.5,
-} as const;
+  toneMapping: THREE.NeutralToneMapping,
+  exposure: 1.25,
+  fog: { color: 0xd6e2ec, near: 180, far: 480, amount: 1 },
+  sun: { color: 0xfff1d2, intensity: 2.05, position: { x: 50, y: 80, z: 30 } },
+  hemisphere: { skyColor: 0xb8d0e2, groundColor: 0x66553c, intensity: 0.75 },
+  shaderAmbientIntensity: 0.95,
+  grassBrightness: 0.63,
+  terrainMacroTint: 0.53,
+  terrainTriplanarStrength: 0.47,
+  terrainNormalStrength: 0.21,
+  terrainShading: 0.83,
+};
+
+/** Move fog onset toward its far plane as the dev amount approaches zero. */
+export function effectiveFogNear(): number {
+  const fog = RENDER_ENVIRONMENT.fog;
+  return THREE.MathUtils.lerp(fog.far - 0.01, fog.near, fog.amount);
+}
 
 /**
  * Build a tiny deterministic outdoor panorama and prefilter it for PBR.

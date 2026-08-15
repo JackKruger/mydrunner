@@ -199,7 +199,7 @@ const BASE_TUNING: Record<VehicleBaseId, BaseTune> = {
   },
   'dustback-rs': {
     name: 'Dustback RS',
-    character: 'Lightweight rear-drive gravel rally hatch',
+    character: 'Lightweight rear-drive gravel trail hatch',
     half: { x: 0.78, y: 0.28, z: 1.75 },
     wheelbase: 2.42,
     track: 1.52,
@@ -260,35 +260,35 @@ function makeCatalog(baseId: VehicleBaseId): VehiclePartCatalog {
       baseId,
       suspension: [
         part(baseId, 'suspensionId', 'factory', 'Factory road suspension', 'Compliant road setup with the standard low ride height.'),
-        part(baseId, 'suspensionId', 'gravel-rally', 'Gravel rally suspension', 'More travel and compliance for broken gravel stages.', 12),
+        part(baseId, 'suspensionId', 'gravel-rally', 'Gravel trail suspension', 'More travel and compliance for broken gravel trails.', 12),
         part(baseId, 'suspensionId', 'tarmac-sprint', 'Tarmac sprint suspension', 'Lower, firmer springs for sharp sealed-road response.', 8),
       ],
       axles: [
         part(baseId, 'axleId', 'factory', 'Factory track', 'Original narrow track and quick period steering.'),
-        part(baseId, 'axleId', 'widened-rally', 'Widened rally axle', 'A broader stance for high-speed gravel stability.', 22),
-        part(baseId, 'axleId', 'reinforced-wide', 'Reinforced wide axle', 'Maximum rally track with stronger housings.', 46),
+        part(baseId, 'axleId', 'widened-rally', 'Widened trail axle', 'A broader stance for high-speed gravel stability.', 22),
+        part(baseId, 'axleId', 'reinforced-wide', 'Reinforced wide axle', 'Maximum off-road track with stronger housings.', 46),
       ],
       tires: [
         tirePart(baseId, 'factory', 'Period road tyres', 'Progressive road compound with modest loose-surface bite.', ROAD_CARCASS),
-        tirePart(baseId, 'gravel-rally', 'Gravel rally tyres', 'Loose-surface tread with the strongest gravel grip.', GRAVEL_CARCASS, 18),
-        tirePart(baseId, 'tarmac-rally', 'Tarmac rally tyres', 'Firm sealed-stage compound with reduced mud and gravel grip.', ROAD_CARCASS, 14),
+        tirePart(baseId, 'gravel-rally', 'Gravel trail tyres', 'Loose-surface tread with the strongest gravel grip.', GRAVEL_CARCASS, 18),
+        tirePart(baseId, 'tarmac-rally', 'Tarmac tyres', 'Firm sealed-road compound with reduced mud and gravel grip.', ROAD_CARCASS, 14),
       ],
       wheels: [
         part(baseId, 'wheelId', 'factory', 'Factory steel wheels', 'Narrow original steel wheel package.'),
-        part(baseId, 'wheelId', 'reinforced-rally-steel', 'Reinforced rally steel', 'Strong period steel wheels for rough stages.', 16),
+        part(baseId, 'wheelId', 'reinforced-rally-steel', 'Reinforced trail steel', 'Strong period steel wheels for rough trails.', 16),
         part(baseId, 'wheelId', 'period-alloy', 'Period alloy wheels', 'Lightweight eighties-style competition alloys.', -6),
       ],
       frontBars: [
         part(baseId, 'frontBarId', 'factory', 'Factory bumper', 'Close-fitting black factory bumper.'),
         part(baseId, 'frontBarId', 'sump-guard', 'Sump guard', 'Underbody protection without a heavy bullbar.', 14),
-        part(baseId, 'frontBarId', 'lamp-pod', 'Auxiliary lamp pod', 'Four forward rally lamps for night stages.', 9),
+        part(baseId, 'frontBarId', 'lamp-pod', 'Auxiliary lamp pod', 'Four forward lamps for night trails.', 9),
       ],
       winches: [part(baseId, 'winchId', 'none', 'No winch', 'Recovery winches are not supported by this car.')],
       snorkels: [part(baseId, 'snorkelId', 'none', 'Factory intake', 'No raised intake is available for this car.')],
       roofs: [
         part(baseId, 'roofId', 'none', 'Bare roof', 'Clean factory roofline.'),
         part(baseId, 'roofId', 'rally-vent', 'Roof vent', 'Period competition cabin vent.', 3),
-        part(baseId, 'roofId', 'rally-antenna', 'Rally antenna', 'Long flexible rally communications antenna.', 2),
+        part(baseId, 'roofId', 'rally-antenna', 'Trail antenna', 'Long flexible communications antenna.', 2),
       ],
       rearBodies: [
         part(baseId, 'rearBodyId', 'factory', 'Factory hatch', 'Unmodified three-door rear hatch.'),

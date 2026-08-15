@@ -17,7 +17,7 @@
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 import { activeQuality, buildTerrainFragment, type QualitySettings } from './quality.js';
-import { RENDER_ENVIRONMENT } from './renderEnvironment.js';
+import { effectiveFogNear, RENDER_ENVIRONMENT } from './renderEnvironment.js';
 
 const VERT = /* glsl */ `
 varying vec3 vWorldPos;
@@ -26,7 +26,12 @@ varying vec3 vNormal;
 void main() {
   vec4 wp = modelMatrix * vec4(position, 1.0);
   vWorldPos = wp.xyz;
-  vNormal = normalize(normalMatrix * normal);
+  // Triplanar projection and lighting both operate in world space. The
+  // built-in normalMatrix includes the view transform, so using it here made
+  // the projection weights rotate with the camera. Near an overhead view a
+  // flat patch then selected a side projection whose Y coordinate barely
+  // changes, collapsing the grass map into long streaks.
+  vNormal = normalize(mat3(modelMatrix) * normal);
   gl_Position = projectionMatrix * viewMatrix * wp;
 }
 `;
@@ -38,7 +43,14 @@ varying vec3 vNormal;
 
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
-uniform vec3 uAmbient;
+uniform vec3 uSkyAmbient;
+uniform vec3 uGroundAmbient;
+uniform float uAmbientIntensity;
+uniform float uGrassBrightness;
+uniform float uMacroTintStrength;
+uniform float uTerrainTriplanarStrength;
+uniform float uTerrainNormalStrength;
+uniform float uTerrainShading;
 uniform vec3 uFogColor;
 uniform float uFogNear;
 uniform float uFogFar;
@@ -89,6 +101,19 @@ float fbm(vec2 p) {
   return v;
 }
 
+// The procedural palette below is authored as ordinary sRGB colour values,
+// just like the albedo image files used by the high quality tier. Texture
+// sampling decodes those files to linear light automatically; the fallback
+// needs the same decode explicitly before it enters the lighting equation.
+// Without it, mid-range grass values such as 0.50 are treated as linear 0.50
+// instead of sRGB 0.50 (linear ~0.21), producing fluorescent ground even when
+// renderer tone mapping is disabled.
+vec3 proceduralSRGBToLinear(vec3 value) {
+  vec3 low = value / 12.92;
+  vec3 high = pow((value + 0.055) / 1.055, vec3(2.4));
+  return mix(high, low, vec3(lessThanEqual(value, vec3(0.04045))));
+}
+
 // DETAIL(p, d) is the high-frequency grain tap, faded out with distance.
 //
 // Most screen pixels in a driving game are distant ground, where pebble and
@@ -135,16 +160,16 @@ vec3 proceduralColor(int s, vec2 p, float detail) {
     return base * (0.85 + g * 0.30);
   }
   if (s == ${Physics.Surface.Mud}) {
-    // Mud: dark wet brown with broad streaks.
+    // Mud: readable wet brown with broad darker streaks.
     float n = vnoise(p * 0.45);
     float wet = DETAIL(p * 1.7 + 13.0, detail);
-    vec3 base = mix(vec3(0.18, 0.12, 0.07), vec3(0.36, 0.24, 0.14), n);
-    return base * (0.85 + wet * 0.40);
+    vec3 base = mix(vec3(0.24, 0.16, 0.09), vec3(0.44, 0.30, 0.18), n);
+    return base * (0.90 + wet * 0.34);
   }
   if (s == ${Physics.Surface.DeepMud}) {
-    // Deep mud: nearly black with slick variation.
+    // Deep mud stays distinct without collapsing to black in shade.
     float n = vnoise(p * 0.5 + 7.0);
-    return mix(vec3(0.05, 0.03, 0.02), vec3(0.18, 0.11, 0.06), n);
+    return mix(vec3(0.16, 0.095, 0.05), vec3(0.33, 0.215, 0.12), n);
   }
   if (s == ${Physics.Surface.Grass}) {
     // Grass: green with darker patches and the occasional yellow blade.
@@ -182,13 +207,15 @@ struct TerrainMaterial { vec3 albedo; vec3 normal; float roughness; };
 
 #ifdef TERRAIN_TEXTURES
 vec4 projectMap(sampler2D map, vec3 p, vec3 weights) {
+  vec4 planar = texture2D(map, p.xz);
 #ifdef TERRAIN_TRIPLANAR
   vec4 x = texture2D(map, p.zy);
   vec4 y = texture2D(map, p.xz);
   vec4 z = texture2D(map, p.xy);
-  return x * weights.x + y * weights.y + z * weights.z;
+  vec4 triplanar = x * weights.x + y * weights.y + z * weights.z;
+  return mix(planar, triplanar, uTerrainTriplanarStrength);
 #else
-  return texture2D(map, p.xz);
+  return planar;
 #endif
 }
 TerrainMaterial texturedMaterial(sampler2D albedoMap, sampler2D normalRoughnessMap,
@@ -200,7 +227,8 @@ TerrainMaterial texturedMaterial(sampler2D albedoMap, sampler2D normalRoughnessM
   TerrainMaterial m;
   // Transparent 1x1 placeholders remain bound until an image succeeds, so a
   // missing/slow asset falls back independently without a shader rebuild.
-  float tint = 0.82 + 0.36 * vnoise(worldP.xz * 0.035);
+  float macroTint = 0.82 + 0.36 * vnoise(worldP.xz * 0.035);
+  float tint = mix(1.0, macroTint, uMacroTintStrength);
   m.albedo = mix(fallback, a.rgb * tint, a.a);
   m.roughness = mix(0.82, nr.a, a.a);
   m.normal = normalize(vNormal);
@@ -210,7 +238,7 @@ TerrainMaterial texturedMaterial(sampler2D albedoMap, sampler2D normalRoughnessM
   vec3 ny = vec3(n.x, n.z, n.y);
   vec3 nz = vec3(n.x, n.y, n.z);
   vec3 mapped = normalize(nx * weights.x + ny * weights.y + nz * weights.z);
-  m.normal = normalize(mix(m.normal, mapped, a.a * 0.72));
+  m.normal = normalize(mix(m.normal, mapped, a.a * uTerrainNormalStrength));
 #endif
   return m;
 }
@@ -218,7 +246,7 @@ TerrainMaterial texturedMaterial(sampler2D albedoMap, sampler2D normalRoughnessM
 
 TerrainMaterial sampleMaterial(int s, vec3 worldP, float detail) {
   TerrainMaterial m;
-  vec3 fallback = proceduralColor(s, worldP.xz, detail);
+  vec3 fallback = proceduralSRGBToLinear(proceduralColor(s, worldP.xz, detail));
   m.albedo = fallback; m.normal = normalize(vNormal); m.roughness = 0.82;
 #ifdef TERRAIN_TEXTURES
   vec3 weights = pow(abs(normalize(vNormal)), vec3(4.0));
@@ -227,10 +255,18 @@ TerrainMaterial sampleMaterial(int s, vec3 worldP, float detail) {
   if (s == ${Physics.Surface.Dirt}) return texturedMaterial(uDirtAlbedo,uDirtNormalRoughness,worldP,weights,fallback);
   if (s == ${Physics.Surface.Mud}) return texturedMaterial(uMudAlbedo,uMudNormalRoughness,worldP,weights,fallback);
   if (s == ${Physics.Surface.DeepMud}) return texturedMaterial(uDeepMudAlbedo,uDeepMudNormalRoughness,worldP,weights,fallback);
-  if (s == ${Physics.Surface.Grass}) return texturedMaterial(uGrassAlbedo,uGrassNormalRoughness,worldP,weights,fallback);
+  if (s == ${Physics.Surface.Grass}) {
+    TerrainMaterial grass = texturedMaterial(uGrassAlbedo,uGrassNormalRoughness,worldP,weights,fallback);
+    grass.albedo *= uGrassBrightness;
+    return grass;
+  }
   if (s == ${Physics.Surface.Gravel}) return texturedMaterial(uGravelAlbedo,uGravelNormalRoughness,worldP,weights,fallback);
   if (s == ${Physics.Surface.Concrete}) return texturedMaterial(uConcreteAlbedo,uConcreteNormalRoughness,worldP,weights,fallback);
 #endif
+  // Grass occupies large, mostly sun-facing areas, so expose its albedo as a
+  // separate art-direction control. This stays before lighting and therefore
+  // remains valid under every tone-mapping option in the debug panel.
+  if (s == ${Physics.Surface.Grass}) m.albedo *= 0.75 * (uGrassBrightness / 1.12);
   return m;
 }
 
@@ -303,12 +339,17 @@ void main() {
   float diff = max(dot(N, L), 0.0);
   float shininess = mix(72.0, 5.0, material.roughness);
   float specular = pow(max(dot(N, H), 0.0), shininess) * (1.0 - material.roughness) * 0.35;
-  vec3 lit = albedo * (uAmbient + uSunColor * diff) + uSunColor * specular;
+  float hemiMix = N.y * 0.5 + 0.5;
+  vec3 ambient = mix(uGroundAmbient, uSkyAmbient, hemiMix) * uAmbientIntensity;
+  vec3 shaded = albedo * (ambient + uSunColor * diff) + uSunColor * specular;
+  vec3 lit = mix(albedo, shaded, uTerrainShading);
 
   // Linear fog matching THREE.Fog.
   vec3 final = mix(lit, uFogColor, fogFactor);
 
   gl_FragColor = vec4(final, 1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
 }
 `;
 
@@ -339,9 +380,16 @@ export function makeTerrainMaterial(
     uniforms: {
       uSunDir: { value: sunDir },
       uSunColor: { value: new THREE.Color(env.sun.color).multiplyScalar(env.sun.intensity) },
-      uAmbient: { value: new THREE.Color(env.hemisphere.skyColor).multiplyScalar(env.shaderAmbientIntensity) },
+      uSkyAmbient: { value: new THREE.Color(env.hemisphere.skyColor) },
+      uGroundAmbient: { value: new THREE.Color(env.hemisphere.groundColor) },
+      uAmbientIntensity: { value: env.shaderAmbientIntensity },
+      uGrassBrightness: { value: env.grassBrightness },
+      uMacroTintStrength: { value: env.terrainMacroTint },
+      uTerrainTriplanarStrength: { value: env.terrainTriplanarStrength },
+      uTerrainNormalStrength: { value: env.terrainNormalStrength },
+      uTerrainShading: { value: env.terrainShading },
       uFogColor: { value: new THREE.Color(env.fog.color) },
-      uFogNear: { value: env.fog.near },
+      uFogNear: { value: effectiveFogNear() },
       uFogFar: { value: env.fog.far },
       uSurfaceMap: { value: surfaceMap },
       uTerrainSize: { value: terrain.size },
@@ -357,8 +405,28 @@ export function makeTerrainMaterial(
   return material;
 }
 
+export function refreshTerrainEnvironment(material: THREE.ShaderMaterial): void {
+  const env = RENDER_ENVIRONMENT;
+  (material.uniforms.uSunColor!.value as THREE.Color)
+    .set(env.sun.color).multiplyScalar(env.sun.intensity);
+  (material.uniforms.uSkyAmbient!.value as THREE.Color).set(env.hemisphere.skyColor);
+  (material.uniforms.uGroundAmbient!.value as THREE.Color).set(env.hemisphere.groundColor);
+  material.uniforms.uAmbientIntensity!.value = env.shaderAmbientIntensity;
+  material.uniforms.uGrassBrightness!.value = env.grassBrightness;
+  material.uniforms.uMacroTintStrength!.value = env.terrainMacroTint;
+  material.uniforms.uTerrainTriplanarStrength!.value = env.terrainTriplanarStrength;
+  material.uniforms.uTerrainNormalStrength!.value = env.terrainNormalStrength;
+  material.uniforms.uTerrainShading!.value = env.terrainShading;
+  material.uniforms.uFogNear!.value = effectiveFogNear();
+}
+
 const TERRAIN_SURFACES = ['road', 'dirt', 'mud', 'deep-mud', 'grass', 'gravel', 'concrete'] as const;
 const TERRAIN_CHANNELS = ['albedo', 'normal-roughness'] as const;
+
+function terrainTextureUrl(surface: (typeof TERRAIN_SURFACES)[number], channel: (typeof TERRAIN_CHANNELS)[number]): string {
+  const extension = channel === 'albedo' ? 'png' : 'svg';
+  return `/assets/terrain/${surface}-${channel}.${extension}`;
+}
 
 function loadTerrainTextures(): Record<string, { value: THREE.Texture }> {
   const loader = new THREE.TextureLoader();
@@ -373,7 +441,7 @@ function loadTerrainTextures(): Record<string, { value: THREE.Texture }> {
       const uniformName = `u${surface.split('-').map((part) => part[0]!.toUpperCase() + part.slice(1)).join('')}${channel[0]!.toUpperCase()}${channel.slice(1)}`;
       const uniform = { value: texture as THREE.Texture };
       uniforms[uniformName] = uniform;
-      loader.load(`/assets/terrain/${surface}-${channel}.svg`, (image) => {
+      loader.load(terrainTextureUrl(surface, channel), (image) => {
         image.wrapS = image.wrapT = THREE.RepeatWrapping;
         image.magFilter = THREE.LinearFilter;
         image.minFilter = THREE.LinearMipmapLinearFilter;

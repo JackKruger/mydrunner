@@ -166,6 +166,8 @@ export interface VehicleLike {
   applyAxleSnaps?(snaps: [AxleSnap, AxleSnap]): void;
   waterStatus?(): WaterStatus;
   pressureStatus?(): PressureStatus;
+  /** Debug-lab override. Normal gameplay changes pressure through PlayerInput. */
+  setPressurePsi?(pressurePsi: number): void;
   debugTelemetry?(): VehicleDebugTelemetry;
   repair?(): void;
   damageStatus?(): VehicleDamageState;

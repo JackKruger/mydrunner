@@ -9,7 +9,7 @@
 // the client renderer and the Rapier colliders match by construction.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { type TerrainData } from './terrain.js';
+import { sampleHeightBilinear, type TerrainData } from './terrain.js';
 
 export interface PetrolStation {
   /** World-space centre of the concrete pad. */
@@ -30,12 +30,17 @@ export function landmarksFor(terrain: TerrainData): Landmarks {
   // override, so a relocated station would have kept its old colliders
   // while the flattened concrete moved out from under it.
   const pad = terrain.petrolStation;
-  // The pad has been flattened to road-level (y = 0) by the terrain
-  // generator. Sample the height at the centre as a sanity check;
-  // smoothFalloff guarantees the centre is exactly 0 once the pad
-  // sits inside the half-extent.
+  // Resolve Y from the composed terrain rather than assuming the generated
+  // pad is still at zero. Authored/baked height data is applied after terrain
+  // generation and can move the pad, so a hard-coded zero leaves the whole
+  // station (including its colliders) floating above the finished ground.
   return {
-    petrolStation: { x: pad.cx, y: 0, z: pad.cz, yaw: pad.yaw },
+    petrolStation: {
+      x: pad.cx,
+      y: sampleHeightBilinear(terrain, pad.cx, pad.cz),
+      z: pad.cz,
+      yaw: pad.yaw,
+    },
   };
 }
 
@@ -165,8 +170,9 @@ export function spawnLandmarkColliders(
   cylinder(place(sign.x, poleH / 2, sign.z), poleH / 2, 0.12);
 
   const workshop = STATION.workshop;
-  // Roof slab, rear wall and eight individual posts. These colliders
-  // match the visible structure and leave all three front openings clear.
+  // Roof slab, rear wall and four rear posts. The front posts used to stand
+  // directly in the three drive-in approaches, so the open edge is now
+  // unobstructed in both the visible structure and collision geometry.
   cuboid(
     place(workshop.cx, workshop.postHeight + workshop.roofH / 2, workshop.cz),
     workshop.w / 2, workshop.roofH / 2, workshop.d / 2,
@@ -176,9 +182,11 @@ export function spawnLandmarkColliders(
     workshop.w / 2, workshop.backWallH / 2, workshop.backWallD / 2,
   );
   for (const x of [workshop.cx - workshop.w / 2, workshop.cx - workshop.w / 6, workshop.cx + workshop.w / 6, workshop.cx + workshop.w / 2]) {
-    for (const z of [workshop.cz - workshop.d / 2, workshop.cz + workshop.d / 2]) {
-      cylinder(place(x, workshop.postHeight / 2, z), workshop.postHeight / 2, workshop.postRadius);
-    }
+    cylinder(
+      place(x, workshop.postHeight / 2, workshop.cz - workshop.d / 2),
+      workshop.postHeight / 2,
+      workshop.postRadius,
+    );
   }
 
   return bodies;

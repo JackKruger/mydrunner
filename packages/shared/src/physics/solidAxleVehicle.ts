@@ -27,6 +27,7 @@ import {
   FIXED_DT,
   GRAVITY_Y,
   LEDGE_CONTACT,
+  LOW_RANGE,
   SUSPENSION,
   TIRE_LATERAL,
   TIRE_LONG_FRICTION,
@@ -61,7 +62,7 @@ import {
   type WaterLoad, type WaterState,
 } from './water.js';
 import {
-  createEngineState, stepEngine, stepEngineFlooding,
+  createEngineState, gearedWheelAngularSpeedLimit, stepEngine, stepEngineFlooding,
   type EngineOutput, type EngineState,
 } from './engine.js';
 // slipRatio / gripFromSlip kept in tire.ts for tests; not used here since
@@ -449,8 +450,11 @@ export class SolidAxleVehicle implements VehicleLike {
    *  within one tick and make the front axle's share depend on solve order. */
   private ledgeConstraintWheels = 0;
   private ledgeConstraintWheelsPending = 0;
-  /** Remaining vehicle-wide ledge normal impulse for this tick (N.s). */
-  private ledgeNormalImpulseBudget = 0;
+  /** Preserve low-range obstacle damping across the brief face-to-tread
+   *  contact handoff, when neither axle can report both contacts at once. */
+  private lowRangeLedgeGrace = 0;
+  private symmetricClimbGrace = 0;
+  private discreteLedgeSupportActive = false;
   private readonly debugPreviousLinVel: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly debugAcceleration: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly axleDebug: [{
@@ -697,7 +701,9 @@ export class SolidAxleVehicle implements VehicleLike {
     this.debugVelocityInitialized = false;
     this.ledgeConstraintWheels = 0;
     this.ledgeConstraintWheelsPending = 0;
-    this.ledgeNormalImpulseBudget = 0;
+    this.lowRangeLedgeGrace = 0;
+    this.symmetricClimbGrace = 0;
+    this.discreteLedgeSupportActive = false;
     this.debugAcceleration.x = 0;
     this.debugAcceleration.y = 0;
     this.debugAcceleration.z = 0;
@@ -797,8 +803,7 @@ export class SolidAxleVehicle implements VehicleLike {
     const ledgeLoads = this._ledgeLoads;
     this.ledgeConstraintWheels = this.ledgeConstraintWheelsPending;
     this.ledgeConstraintWheelsPending = 0;
-    this.ledgeNormalImpulseBudget = VEHICLE.mass * this.geom.massMult
-      * LEDGE_CONTACT.maxNormalDeltaVPerTick;
+    this.discreteLedgeSupportActive = false;
     for (let wheelIndex = 0; wheelIndex < 4; wheelIndex++) {
       wheelBases[wheelIndex] = null;
       ledgeContacts[wheelIndex] = null;
@@ -848,9 +853,9 @@ export class SolidAxleVehicle implements VehicleLike {
     const r = ctx.r;
     const lv = ctx.lv;
     const av = ctx.av;
+    const up = ctx.up;
     const fwd = ctx.fwd;
     const right = ctx.right;
-    const up = ctx.up;
     const wheelBases = this._wheelBases;
     const ledgeContacts = this._ledgeContacts;
     const ledgeSemantics = this._ledgeSemantics;
@@ -1097,6 +1102,7 @@ export class SolidAxleVehicle implements VehicleLike {
       // the six-log course, the left and right wheel sat in different branches
       // of this gate for 1333 of ~2400 ticks.
       let ownsNormalConstraint = true;
+      let discreteVolumeContact = false;
       if (w.volumeSupport && w.contactNormal.y < LEDGE_CONTACT.maxSupportNormalY) {
         ownsNormalConstraint = false;
         const terrainLedge = findHeightfieldLedgeContactInto(
@@ -1140,6 +1146,7 @@ export class SolidAxleVehicle implements VehicleLike {
           contactSet,
           basis.axle,
         );
+        discreteVolumeContact = contactSet.count > 0;
       }
       if (contactSet.count === 0 && !w.contact) {
         const sidewall = findTerrainSidewallContactInto(
@@ -1192,15 +1199,38 @@ export class SolidAxleVehicle implements VehicleLike {
         ),
         scratch.carcass,
       );
-      const series = solveSeriesComplianceInto(
+      const ledgeHubRise = ledge?.climbTopY !== null && ledge?.climbTopY !== undefined
+        ? ledge.climbTopY + this.geom.wheelRadius - center.y
+        : 0;
+      const drivenLedgeSupport = ledge !== null
+        && discreteVolumeContact
+        && ownsNormalConstraint
+        && (semantics?.treadFraction ?? 0) > 0
+        // This bridge supplies the missing tyre support at an ordinary
+        // rollable edge. It must not turn a wall taller than the tyre into
+        // an elevator merely because the top probe can see its cap.
+        && ledgeHubRise <= this.geom.wheelRadius * 1.25;
+      if (drivenLedgeSupport) this.discreteLedgeSupportActive = true;
+      const ledgeSupportDepth = drivenLedgeSupport && ledge.climbTopY !== null
+        ? clamp(
+          ledgeHubRise,
+          0,
+          ag.bumpMax / Math.max(1, contactSet.count),
+        )
+        : 0;
+      const totalSupportDepth = Math.max(
         w.contact ? Math.max(0, w.contactDepth) : 0,
+        ledgeSupportDepth,
+      );
+      const series = solveSeriesComplianceInto(
+        totalSupportDepth,
         0.5 * ag.rideStiffness * at.rideStiffnessMult,
         carcass.stiffness,
         carcass.maxDeflection,
         scratch.series,
       );
       let bridgeActive = false;
-      if (ledge && ownsNormalConstraint && (semantics?.treadFraction ?? 0) > 0) {
+      if (drivenLedgeSupport) {
         w.ledgeHandoff = true;
         w.ledgeHandoffGrace = LEDGE_CONTACT.handoffGraceTicks;
         bridgeActive = true;
@@ -1219,19 +1249,25 @@ export class SolidAxleVehicle implements VehicleLike {
         !bridgeActive
         || (w.contact && Math.abs(w.resolvedDepth - series.suspensionDeflection) < 1e-6)
       )) w.ledgeHandoff = false;
-      w.tireDeflection = w.contact
+      const hasSeriesSupport = w.contact || drivenLedgeSupport;
+      w.tireDeflection = hasSeriesSupport
         ? series.carcassDeflection
         : Math.max(0, w.previousTireDeflection - 1.5 * dt);
       w.tireDeflectionRate = (w.tireDeflection - w.previousTireDeflection) / dt;
-      w.carcassForce = w.contact
+      const carcassDampingRate = drivenLedgeSupport
+        ? Math.min(0, w.tireDeflectionRate)
+        : w.tireDeflectionRate;
+      w.carcassForce = hasSeriesSupport
         ? Math.max(0, Math.min(
           LEDGE_CONTACT.maxForce,
           carcass.stiffness * w.tireDeflection
-            + carcass.radialDamping * w.tireDeflectionRate,
+            + carcass.radialDamping * carcassDampingRate,
         ))
         : 0;
-      w.contactZone = w.contact ? (w.contactZone === 'air' ? 'tread' : w.contactZone) : 'air';
-      w.treadFraction = w.contact ? w.treadFraction : 0;
+      w.contactZone = hasSeriesSupport ? (w.contactZone === 'air' ? 'tread' : w.contactZone) : 'air';
+      w.treadFraction = hasSeriesSupport
+        ? Math.max(w.treadFraction, semantics?.treadFraction ?? 0)
+        : 0;
       if (w.contact) {
         w.tireContactNormal.x = w.contactNormal.x;
         w.tireContactNormal.y = w.contactNormal.y;
@@ -1271,17 +1307,19 @@ export class SolidAxleVehicle implements VehicleLike {
             carcass.maxDeflection,
             LEDGE_CONTACT.normalCorrectionRate * TUNING.tireSidewallCorrectionMult,
             LEDGE_CONTACT.maxNormalCorrectionSpeed * TUNING.tireSidewallCorrectionMult,
-            // Per-contact cap, and then whatever is left of the vehicle-wide
-            // one. Without the second term four saturated contacts pump the
-            // chassis at 10 g with nothing to stop them.
+            // A deterministic per-wheel cap prevents fixed [FL, FR, RL, RR]
+            // solve order from giving the first tyre the vehicle's whole
+            // impulse allowance and starving its axle mate.
             Math.min(
               LEDGE_CONTACT.maxForce * dt * contactBudgetShare,
-              Math.max(0, this.ledgeNormalImpulseBudget),
+              VEHICLE.mass * this.geom.massMult
+                * LEDGE_CONTACT.maxNormalDeltaVPerTick
+                / this.wheels.length
+                * contactBudgetShare,
             ),
             SIDEWALL_RELEASE_RATE,
             scratch.sidewall,
           );
-          this.ledgeNormalImpulseBudget -= constraint.impulse;
           const normalForce = constraint.impulse / dt;
           totalNormalForce += normalForce;
           if (!w.contact || constraint.deflection > w.tireDeflection) {
@@ -1341,6 +1379,24 @@ export class SolidAxleVehicle implements VehicleLike {
       }
       w.previousTireDeflection = w.tireDeflection;
     }
+    const leftLedge = ledgeContacts[wIdxL]!;
+    const rightLedge = ledgeContacts[wIdxR]!;
+    if (sameAxleWideClimb(leftLedge, rightLedge)) {
+      const sharedDepth = Math.max(wL.resolvedDepth, wR.resolvedDepth);
+      const sharedDeflection = Math.max(wL.tireDeflection, wR.tireDeflection);
+      const sharedCarcassForce = Math.max(wL.carcassForce, wR.carcassForce);
+      const sharedLedgeLoad = Math.max(ledgeLoads[wIdxL]!, ledgeLoads[wIdxR]!);
+      wL.resolvedDepth = sharedDepth;
+      wR.resolvedDepth = sharedDepth;
+      wL.tireDeflection = sharedDeflection;
+      wR.tireDeflection = sharedDeflection;
+      wL.previousTireDeflection = sharedDeflection;
+      wR.previousTireDeflection = sharedDeflection;
+      wL.carcassForce = sharedCarcassForce;
+      wR.carcassForce = sharedCarcassForce;
+      ledgeLoads[wIdxL] = sharedLedgeLoad;
+      ledgeLoads[wIdxR] = sharedLedgeLoad;
+    }
   }
 
   /** 3a. One axle's suspension: beam integration, per-wheel-end ride forces,
@@ -1358,6 +1414,14 @@ export class SolidAxleVehicle implements VehicleLike {
     const wR = this.wheels[aIdx * 2 + 1]!;
     const leftMountWorld = scratch.leftMountWorld;
     const rightMountWorld = scratch.rightMountWorld;
+    const sharedAxleLedge = sameAxleWideClimb(
+      this._ledgeContacts[aIdx * 2]!,
+      this._ledgeContacts[aIdx * 2 + 1]!,
+    );
+    const sharedLedgePoint = scratch.tubeCenter;
+    sharedLedgePoint.x = 0.5 * (leftMountWorld.x + rightMountWorld.x);
+    sharedLedgePoint.y = 0.5 * (leftMountWorld.y + rightMountWorld.y);
+    sharedLedgePoint.z = 0.5 * (leftMountWorld.z + rightMountWorld.z);
 
     // Update axle state (rideY tracks avgComp, rollAngle tracks slope).
     // We still use stepAxle for the kinematic axle bookkeeping that
@@ -1435,7 +1499,7 @@ export class SolidAxleVehicle implements VehicleLike {
       const stop = axle.travelStops[suspensionSideIndex]!;
       w.lastForce = 0;
       w.suspensionForce = 0;
-      if (!w.contact) {
+      if (!hasSuspensionSupport(w)) {
         w.prevContactDepth = -1;
         continue;
       }
@@ -1489,9 +1553,12 @@ export class SolidAxleVehicle implements VehicleLike {
       // Carcass and suspension are a series path: apply their shared
       // spring load once, plus the suspension damper. The carcass damper
       // is already included in w.carcassForce above.
+      const dampingRate = !w.contact && w.ledgeHandoff
+        ? Math.min(0, compRate)
+        : compRate;
       const F = comp > 0
         ? w.carcassForce
-          + 0.5 * ag.rideDamping * at.rideDampingMult * engagement * compRate
+          + 0.5 * ag.rideDamping * at.rideDampingMult * engagement * dampingRate
         : 0;
       side.force = clamp(F, 0, LEDGE_CONTACT.maxForce - stop.bumpForce);
       w.suspensionForce = side.force;
@@ -1561,10 +1628,14 @@ export class SolidAxleVehicle implements VehicleLike {
       //     a slope-normal force that has a backward component
       //     opposing gravity's downhill pull. Net force is
       //     slope-perpendicular - same as a real wheel.
-      const n = w.contactNormal;
+      // The discrete face already owns its normal reaction above. This path
+      // is the suspension's newly recognised vertical support, so ledge-only
+      // force follows the suspension axis instead of applying the obstacle
+      // normal a second time (which injected forward/backward launch energy).
+      const n = w.contact ? w.contactNormal : up;
       const sf = this._scratchForce;
       sf.x = n.x * F; sf.y = n.y * F; sf.z = n.z * F;
-      this.body.addForceAtPoint(sf, side.world, true);
+      this.body.addForceAtPoint(sf, sharedAxleLedge ? sharedLedgePoint : side.world, true);
       w.prevContactDepth = side.comp;
     }
 
@@ -1683,9 +1754,10 @@ export class SolidAxleVehicle implements VehicleLike {
     // In manual mode W / the gas pedal supplies power and the selected gear
     // supplies direction. The input layer turns S into a brake in manual
     // mode, so negative throttle cannot accidentally power the chosen gear.
-    const engineThrottle = this.input.manualGear === null
+    const pedalThrottle = this.input.manualGear === null
       ? this.input.throttle
       : Math.max(0, this.input.throttle);
+    const engineThrottle = pedalThrottle;
     // Which way the driveline is being asked to push. In automatic that is the
     // throttle's sign; once a lever is fitted the *gear* supplies direction and
     // the pedal is only ever power, so its sign says nothing. Reading the pedal
@@ -1823,7 +1895,7 @@ export class SolidAxleVehicle implements VehicleLike {
     leftIndex: number,
     rightIndex: number,
   ): number {
-    const maxStep = (DRIVELINE.centerTransferMaxReactionNm * dt)
+    const maxStep = (TUNING.centerTransferMaxReactionNm * dt)
       / Math.max(1e-4, this.geom.spec.wheelInertiaKgM2);
     let limited = clamp(delta, -maxStep, maxStep);
     for (let side = 0; side < 2; side++) {
@@ -1849,6 +1921,7 @@ export class SolidAxleVehicle implements VehicleLike {
     const t = ctx.t;
     const lv = ctx.lv;
     const av = ctx.av;
+    const up = ctx.up;
     const groundSpeed = ctx.groundSpeed;
     const totalDrivelineTorque = ctx.totalDrivelineTorque;
     const frontShare = ctx.frontShare;
@@ -1857,6 +1930,17 @@ export class SolidAxleVehicle implements VehicleLike {
     const ledgeContacts = this._ledgeContacts;
     const ledgeSemantics = this._ledgeSemantics;
     const ledgeLoads = this._ledgeLoads;
+    const symmetricLowRangeClimb = this.drivetrain.transferCase === '4l' && (
+      sameAxleWideClimb(ledgeContacts[0], ledgeContacts[1])
+      || sameAxleWideClimb(ledgeContacts[2], ledgeContacts[3])
+    );
+    const drivenWheelSpeedLimit = this.drivetrain.transferCase === '4l'
+      ? gearedWheelAngularSpeedLimit(
+        this.engine,
+        ENGINE.finalDrive * this.geom.spec.finalDriveMult * this.geom.spec.lowRangeRatio,
+        ENGINE.peakTorqueRpm,
+      )
+      : Infinity;
 
     let supportedNormalLoadTotal = 0;
     let brakedNormalLoadTotal = 0;
@@ -1886,6 +1970,7 @@ export class SolidAxleVehicle implements VehicleLike {
     staticLateralHold.x = 0;
     staticLateralHold.y = 0;
     staticLateralHold.z = 0;
+    let staticLateralYawMoment = 0;
 
     for (let wIdx = 0; wIdx < 4; wIdx++) {
       const w = this.wheels[wIdx]!;
@@ -2023,6 +2108,9 @@ export class SolidAxleVehicle implements VehicleLike {
         debug.soilDrag = w.bulldozingResistance;
         debug.slipWork = w.slipWork;
         integrateWheelSpin(w, appliedDriveTq, brakeTq, 0, dt, WHEEL.rollingResistance, this.geom.spec.wheelInertiaKgM2);
+        if (driveShare > 0 && Number.isFinite(drivenWheelSpeedLimit)) {
+          w.angVel = clamp(w.angVel, -drivenWheelSpeedLimit, drivenWheelSpeedLimit);
+        }
         debug.angularVelocity = w.angVel;
         continue;
       }
@@ -2223,9 +2311,21 @@ export class SolidAxleVehicle implements VehicleLike {
         ? vehicleMass * normalLoad / supportedNormalLoadTotal
         : 0;
       const chassisLatV = lv.x * tireLat.x + lv.y * tireLat.y + lv.z * tireLat.z;
+      // Preserve the rigid body's yaw velocity in the static constraint while
+      // excluding roll/pitch wheel-end velocity. The latter belongs to the
+      // suspension and was why this holding share was centralised; discarding
+      // yaw as well left a crawling truck with no self-aligning moment once
+      // longitudinal wheelspin consumed the dynamic friction budget.
+      const yawRate = av.x * up.x + av.y * up.y + av.z * up.z;
+      const yawVelX = yawRate * (up.y * armZ - up.z * armY);
+      const yawVelY = yawRate * (up.z * armX - up.x * armZ);
+      const yawVelZ = yawRate * (up.x * armY - up.y * armX);
+      const rigidLatV = chassisLatV + (symmetricLowRangeClimb
+        ? yawVelX * tireLat.x + yawVelY * tireLat.y + yawVelZ * tireLat.z
+        : 0);
       const gravityLatAccel = GRAVITY_Y * tireLat.y;
       const staticTargetLatForce = -supportedMass
-        * (chassisLatV / dt + gravityLatAccel);
+        * (rigidLatV / dt + gravityLatAccel);
       const rawStaticLatForce = (staticTargetLatForce - dynamicLatForce)
         * staticBlend;
       const rawLatForce = dynamicLatForce + rawStaticLatForce;
@@ -2272,6 +2372,18 @@ export class SolidAxleVehicle implements VehicleLike {
       staticLateralHold.x += tireLat.x * staticLatForce;
       staticLateralHold.y += tireLat.y * staticLatForce;
       staticLateralHold.z += tireLat.z * staticLatForce;
+      const staticForceX = tireLat.x * staticLatForce;
+      const staticForceY = tireLat.y * staticLatForce;
+      const staticForceZ = tireLat.z * staticLatForce;
+      if (symmetricLowRangeClimb) {
+        staticLateralYawMoment += (
+          armY * staticForceZ - armZ * staticForceY
+        ) * up.x + (
+          armZ * staticForceX - armX * staticForceZ
+        ) * up.y + (
+          armX * staticForceY - armY * staticForceX
+        ) * up.z;
+      }
 
       const utilization = combinedForce.utilization;
       debug.contact = true;
@@ -2315,6 +2427,9 @@ export class SolidAxleVehicle implements VehicleLike {
       const finalGroundTq = -finalLongForce * this.geom.wheelRadius;
       debug.groundTorque = finalGroundTq;
       integrateWheelSpin(w, appliedDriveTq, brakeTq, finalGroundTq, dt, rollingResistance, this.geom.spec.wheelInertiaKgM2);
+      if (driveShare > 0 && Number.isFinite(drivenWheelSpeedLimit)) {
+        w.angVel = clamp(w.angVel, -drivenWheelSpeedLimit, drivenWheelSpeedLimit);
+      }
       debug.angularVelocity = w.angVel;
       if (ledge && ledgeFrame) {
         w.ledgeLongForce = finalLongForce;
@@ -2334,11 +2449,56 @@ export class SolidAxleVehicle implements VehicleLike {
     ) {
       this.body.addForce(staticLateralHold, true);
     }
+    if (Math.abs(staticLateralYawMoment) > 1e-8) {
+      const yawTorque = this._scratchForce;
+      yawTorque.x = up.x * staticLateralYawMoment;
+      yawTorque.y = up.y * staticLateralYawMoment;
+      yawTorque.z = up.z * staticLateralYawMoment;
+      this.body.addTorque(yawTorque, true);
+    }
   }
 
   postStep(): void {
     const lv = this.body.linvel();
     const groundSpeed = Math.hypot(lv.x, lv.z);
+    if (this.drivetrain.transferCase === '4l') {
+      this.lowRangeLedgeGrace = this.discreteLedgeSupportActive
+        ? LOW_RANGE.ledgeVelocityGraceTicks
+        : Math.max(0, this.lowRangeLedgeGrace - 1);
+      const limited = this._scratchProbeVelocity;
+      limited.x = lv.x;
+      limited.y = this.lowRangeLedgeGrace > 0
+        ? clamp(lv.y, -LOW_RANGE.maxLedgeVerticalSpeed, LOW_RANGE.maxLedgeVerticalSpeed)
+        : lv.y;
+      limited.z = lv.z;
+      if (groundSpeed > TUNING.lowRangeMaxCrawlSpeed) {
+        const scale = TUNING.lowRangeMaxCrawlSpeed / groundSpeed;
+        limited.x *= scale;
+        limited.z *= scale;
+      }
+      if (limited.x !== lv.x || limited.y !== lv.y || limited.z !== lv.z) {
+        this.body.setLinvel(limited, true);
+      }
+      const symmetricClimb = Math.abs(this.input.steer) < 0.05 && (
+        sameAxleWideClimb(this._ledgeContacts[0], this._ledgeContacts[1])
+        || sameAxleWideClimb(this._ledgeContacts[2], this._ledgeContacts[3])
+      );
+      this.symmetricClimbGrace = symmetricClimb
+        ? LEDGE_CONTACT.handoffGraceTicks
+        : Math.max(0, this.symmetricClimbGrace - 1);
+      if (this.symmetricClimbGrace > 0) {
+        const av = this.body.angvel();
+        const up = this._stepContext.up;
+        const fwd = this._stepContext.fwd;
+        const yawRate = av.x * up.x + av.y * up.y + av.z * up.z;
+        const rollRate = av.x * fwd.x + av.y * fwd.y + av.z * fwd.z;
+        const limitedAngular = this._scratchForce;
+        limitedAngular.x = av.x - up.x * yawRate - fwd.x * rollRate;
+        limitedAngular.y = av.y - up.y * yawRate - fwd.y * rollRate;
+        limitedAngular.z = av.z - up.z * yawRate - fwd.z * rollRate;
+        this.body.setAngvel(limitedAngular, true);
+      }
+    }
     const STATIONARY = 0.3;
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i]!;
@@ -2455,6 +2615,19 @@ export class SolidAxleVehicle implements VehicleLike {
       adjusting,
       reason: this.pressureReason,
     };
+  }
+
+  setPressurePsi(pressurePsi: number): void {
+    this.tirePressurePsi = clamp(
+      pressurePsi,
+      this.minimumPressurePsi(),
+      this.geom.spec.tireCarcass.maxPressurePsi,
+    );
+    this.tireEdgeWrapPressureScale = pressureEdgeWrapScale(
+      this.tirePressurePsi,
+      this.geom.spec.tireCarcass.nominalPressurePsi,
+    );
+    this.pressureReason = null;
   }
 
   debugTelemetry(): VehicleDebugTelemetry {
@@ -3033,10 +3206,22 @@ function moveToward(current: number, target: number, maxDelta: number): number {
   return current + Math.sign(delta) * maxDelta;
 }
 
+function sameAxleWideClimb(
+  left: SteepWheelContact | null,
+  right: SteepWheelContact | null,
+): boolean {
+  return left !== null && right !== null
+    && left.climbTopY !== null && right.climbTopY !== null
+    && Math.abs(left.climbTopY - right.climbTopY) < 0.025
+    && left.normal.x * right.normal.x
+      + left.normal.y * right.normal.y
+      + left.normal.z * right.normal.z > 0.98;
+}
+
 function hasSuspensionSupport(
   wheel: WheelKinematic,
 ): boolean {
-  return wheel.contact;
+  return wheel.contact || wheel.ledgeHandoff;
 }
 
 function worldNormalToLocal(

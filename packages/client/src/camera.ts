@@ -12,7 +12,7 @@
 //   free   - high "sky cam" trailing the local player.
 
 import * as THREE from 'three';
-import { CAMERA } from '@mydrunner/shared';
+import { CAMERA, TUNING } from '@mydrunner/shared';
 
 export type CameraMode = 'chase' | 'far' | 'suspension' | 'hood' | 'free';
 
@@ -139,7 +139,8 @@ export class ChaseCamera {
     let dy = targetYaw - this.yaw;
     if (dy > Math.PI) dy -= 2 * Math.PI;
     if (dy < -Math.PI) dy += 2 * Math.PI;
-    const accel = CAMERA.chaseYawStiffness * dy - CAMERA.chaseYawDamping * this.yawVel;
+    const accel = TUNING.cameraChaseYawStiffness * dy
+      - TUNING.cameraChaseYawDamping * this.yawVel;
     this.yawVel += accel * dt;
     this.yaw += this.yawVel * dt;
     if (this.yaw > Math.PI) this.yaw -= 2 * Math.PI;
@@ -192,7 +193,7 @@ export class ChaseCamera {
     // we want to push to the world-left of the new heading.
     const swingMag = Math.max(
       -CAMERA.chaseSwingMax,
-      Math.min(CAMERA.chaseSwingMax, -this.yawVel * CAMERA.chaseSwingLateral),
+      Math.min(CAMERA.chaseSwingMax, -this.yawVel * TUNING.cameraChaseSwingLateral),
     );
     _desired.x += cosY * swingMag;
     _desired.z += -sinY * swingMag;

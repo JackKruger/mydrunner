@@ -82,6 +82,7 @@ describe('start screen', () => {
 
     expect(document.querySelector<HTMLButtonElement>('#start-continue')?.disabled).toBe(true);
     expect(document.querySelector('#start-dev')).toBeNull();
+    expect(document.querySelector('#start-overlay')?.textContent).not.toMatch(/live view|procedural valley|build dev|local saves stay on this device/i);
     expect(document.body.classList.contains('start-screen-open')).toBe(true);
     document.querySelector<HTMLButtonElement>('#start-new')!.click();
     await expect(result).resolves.toEqual({ type: 'new' });

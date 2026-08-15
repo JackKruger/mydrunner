@@ -33,6 +33,7 @@ describe('join briefing', () => {
     const ids = [...document.querySelectorAll<HTMLElement>('[data-car-kind]')].map((element) => element.dataset.carKind);
     expect(ids).toEqual(['ridgeback', 'overlander', 'stockman-single', 'stockman-dual', 'longreach', 'outclaw', 'dustback-rs']);
     expect(document.body.textContent).toContain('Seven rigs available');
+    expect(document.body.textContent).not.toMatch(/rally/i);
     expect(document.body.textContent).not.toMatch(/Falcon|motorbike/i);
   });
 

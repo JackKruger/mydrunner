@@ -13,6 +13,25 @@ import { geomFor } from '../physics/vehicleGeom.js';
 import type { VehicleBuild } from '../types.js';
 
 describe('vehicle builds', () => {
+  it('keeps player-facing vehicle copy focused on trails and crawling', () => {
+    for (const catalog of Object.values(VEHICLE_PART_CATALOGS)) {
+      const options = [
+        ...catalog.suspension,
+        ...catalog.axles,
+        ...catalog.tires,
+        ...catalog.wheels,
+        ...catalog.frontBars,
+        ...catalog.winches,
+        ...catalog.snorkels,
+        ...catalog.roofs,
+        ...catalog.rearBodies,
+      ];
+      for (const option of options) {
+        expect(`${option.name} ${option.description}`).not.toMatch(/rally/i);
+      }
+    }
+  });
+
   it('creates a valid stock build for all production bases', () => {
     for (const base of VEHICLE_BASE_IDS) {
       const build = createStockBuild(base);

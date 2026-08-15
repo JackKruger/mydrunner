@@ -18,6 +18,7 @@ import {
   type VehiclePartSlot,
 } from '@mydrunner/shared';
 import { buildCarMesh } from './carMesh.js';
+import { RENDER_ENVIRONMENT } from './renderEnvironment.js';
 import { disposeObject3D } from './three/dispose.js';
 
 const GARAGE_KEY = 'mydrunner.garage.v1';
@@ -350,6 +351,9 @@ export class WorkshopUI {
     // uncapped it was rendering at a higher pixel ratio than the game.
     const quality = activeQuality();
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality.antialias, alpha: true });
+    this.renderer.outputColorSpace = RENDER_ENVIRONMENT.outputColorSpace;
+    this.renderer.toneMapping = RENDER_ENVIRONMENT.toneMapping;
+    this.renderer.toneMappingExposure = RENDER_ENVIRONMENT.exposure;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatioCap));
     this.previewScene = new THREE.Scene();
     this.previewCamera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);

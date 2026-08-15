@@ -9,7 +9,7 @@
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
-import { makeTerrainMaterial, packSurfaces, surfaceTextureOf, terrainTexturesOf } from './terrainShader.js';
+import { makeTerrainMaterial, packSurfaces, refreshTerrainEnvironment, surfaceTextureOf, terrainTexturesOf } from './terrainShader.js';
 import { activeQuality, type QualitySettings } from './quality.js';
 
 export class TerrainMesh {
@@ -52,7 +52,11 @@ export class TerrainMesh {
 
     this.material = makeTerrainMaterial(this.terrain, quality);
     this.mesh = new THREE.Mesh(geo, this.material);
-    this.mesh.renderOrder = -1;
+    // Ruts use the terrain depth as their visibility mask: drawing the
+    // terrain first prevents a rut on the far side of a ridge from cutting
+    // its stencil through the nearer slope. RutVisual reserves -2 for its
+    // mask and -1 for the recessed floor; ordinary world meshes remain at 0.
+    this.mesh.renderOrder = -3;
     if (stencilRuts) {
       this.material.stencilWrite = true;
       this.material.stencilRef = 1;
@@ -108,6 +112,11 @@ export class TerrainMesh {
     // n*n RGBA buffer re-uploads. At 128^2 that is 64 KB — cheaper than
     // the geometry work above, so it is not worth a custom path.
     tex.needsUpdate = true;
+  }
+
+  /** Apply values changed by the ?dev render sliders without rebuilding. */
+  refreshRenderEnvironment(): void {
+    refreshTerrainEnvironment(this.material);
   }
 
   /** Free geometry, material AND the surface-ID DataTexture.

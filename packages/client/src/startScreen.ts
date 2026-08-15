@@ -210,7 +210,6 @@ export function showStartScreen(config: StartScreenConfig): Promise<StartChoice>
     overlay.setAttribute('aria-labelledby', 'start-title');
     overlay.innerHTML = `
       <div class="start-grain" aria-hidden="true"></div>
-      <div class="start-panorama-label" aria-hidden="true"><i></i> Live view · Procedural Valley</div>
       <main id="start-card">
         <header class="start-brand">
           <div class="start-kicker">Australian backcountry</div>
@@ -218,10 +217,6 @@ export function showStartScreen(config: StartScreenConfig): Promise<StartChoice>
           <p>Pick a line. Keep the wheels turning.</p>
         </header>
         <section id="start-panel" aria-live="polite"></section>
-        <footer class="start-footer">
-          <span>build ${__APP_VERSION__}</span>
-          <span>Local saves stay on this device</span>
-        </footer>
       </main>
     `;
     document.body.classList.add('start-screen-open');

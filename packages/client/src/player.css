@@ -238,8 +238,8 @@ input:focus-visible,
   background: rgba(50, 17, 14, 0.94);
 }
 
-/* The bottom-centre stack: diagnostics, engine status, shifter (touch only)
-   and the instrument cluster, in one column.
+/* The bottom-centre stack: engine status, shifter (touch only), and the
+   instrument cluster, in one column.
    Each of these used to be positioned against the viewport with its own
    hand-tuned offset, repeated in three media queries — so growing any panel
    silently overlapped its neighbour, and a phone found the collision before a
@@ -337,7 +337,7 @@ input:focus-visible,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 22px;
+  min-height: 0;
 }
 
 /* Everything the collapse toggle hides. Positioned, so the gates anchor to
@@ -345,7 +345,7 @@ input:focus-visible,
    header on touch without the transfer gate sliding under it. */
 .hud-shifter-body {
   position: relative;
-  height: 122px;
+  height: 112px;
 }
 
 .shifter-collapse {
@@ -374,27 +374,9 @@ input:focus-visible,
   transform: rotate(180deg);
 }
 
-#transmission-mode {
-  min-width: 57px;
-  padding: 4px 6px;
-  border: 1px solid var(--ui-border);
-  border-radius: 2px;
-  background: #111311;
-  color: var(--ui-muted);
-  cursor: pointer;
-  font: 800 9px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: 0.08em;
-}
-
-.hud-shifter[data-mode="manual"] #transmission-mode {
-  border-color: var(--ui-amber);
-  background: rgba(242, 165, 41, 0.14);
-  color: var(--ui-amber-bright);
-}
-
 .gear-gate {
   position: relative;
-  width: 136px;
+  width: 150px;
   height: 104px;
   margin: 0;
   cursor: grab;
@@ -416,11 +398,12 @@ input:focus-visible,
 
 .gear-gate-line-horizontal {
   top: calc(50% - 3px);
-  left: 20%;
-  width: 60%;
+  left: 9%;
+  width: 71%;
   height: 6px;
 }
 
+.gear-gate-line-auto,
 .gear-gate-line-left,
 .gear-gate-line-centre,
 .gear-gate-line-right {
@@ -430,8 +413,13 @@ input:focus-visible,
   margin-left: -3px;
 }
 
-.gear-gate-line-left { left: 20%; }
-.gear-gate-line-centre { left: 50%; }
+.gear-gate-line-auto {
+  top: 18%;
+  left: 9%;
+  height: 32%;
+}
+.gear-gate-line-left { left: 31%; }
+.gear-gate-line-centre { left: 55.5%; }
 .gear-gate-line-right { left: 80%; }
 
 .gear-slot {
@@ -456,17 +444,18 @@ input:focus-visible,
   color: var(--ui-amber-bright);
 }
 
-.gear-slot-1 { top: 18%; left: 20%; }
-.gear-slot-2 { top: 82%; left: 20%; }
-.gear-slot-3 { top: 18%; left: 50%; }
-.gear-slot-4 { top: 82%; left: 50%; }
+.gear-slot-a { top: 18%; left: 9%; }
+.gear-slot-1 { top: 18%; left: 31%; }
+.gear-slot-2 { top: 82%; left: 31%; }
+.gear-slot-3 { top: 18%; left: 55.5%; }
+.gear-slot-4 { top: 82%; left: 55.5%; }
 .gear-slot-5 { top: 18%; left: 80%; }
 .gear-slot-r { top: 82%; left: 80%; color: #ff9187; }
 
 .gear-neutral-label {
   position: absolute;
   top: 50%;
-  left: 5%;
+  left: 20%;
   color: #85877e;
   font: 800 9px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   transform: translate(-50%, -50%);
@@ -503,7 +492,7 @@ input:focus-visible,
 }
 
 .gear-mode-hint {
-  width: 136px;
+  width: 150px;
   color: var(--ui-muted);
   font: 800 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: 0.12em;
@@ -522,15 +511,6 @@ input:focus-visible,
 
 .hud-shifter.transfer-dragging .transfer-gate {
   cursor: grabbing;
-}
-
-.transfer-label {
-  position: absolute;
-  top: -10px;
-  right: 0;
-  color: var(--ui-muted);
-  font: 800 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: 0.08em;
 }
 
 .transfer-gate-line {
@@ -704,28 +684,19 @@ input:focus-visible,
   display: block;
 }
 
-.hud-diagnostics {
-  display: flex;
-  max-width: 100%;
-  gap: 13px;
-  align-items: center;
-  min-height: 25px;
-  padding: 5px 14px;
+.hud-fps {
+  position: absolute;
+  top: var(--ui-safe-top);
+  left: var(--ui-safe-left);
   color: var(--ui-muted);
-  font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
   text-transform: uppercase;
 }
 
-.hud-diagnostics > * + *::before {
-  margin-right: 13px;
-  color: var(--ui-border);
-  content: "/";
-}
-
-.hud-diagnostics[hidden],
-#hud-preview-diagnostic:empty {
+.hud-fps[hidden] {
   display: none;
 }
 
@@ -938,6 +909,13 @@ body.minimal-hud .hud-shifter { display: none; }
   background: rgba(15, 17, 15, 0.84);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.26);
   color: var(--ui-text);
+  opacity: 1;
+  transition: opacity 300ms ease, transform 300ms ease;
+}
+
+#chat-log .line.leaving {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 #chat-log .name {
@@ -961,8 +939,8 @@ body.minimal-hud .hud-shifter { display: none; }
 }
 
 /* Clears the dock. The cluster used to be a fixed 112px with its status lines
-   spilling out through the bottom border; now that it sizes to them — and the
-   dev diagnostics panel sits above it — the radio has to start higher. */
+   spilling out through the bottom border; now that it sizes to them, the
+   radio has to start higher. */
 #chat-input-wrap {
   position: fixed;
   right: 50%;
@@ -1079,29 +1057,6 @@ body.start-screen-open #debug-panel {
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.35'/%3E%3C/svg%3E");
 }
 
-.start-panorama-label {
-  position: fixed;
-  right: max(22px, env(safe-area-inset-right));
-  bottom: max(20px, env(safe-area-inset-bottom));
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: rgba(242, 240, 231, 0.7);
-  font: 700 8px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: 0.12em;
-  text-shadow: 0 1px 4px #000;
-  text-transform: uppercase;
-}
-
-.start-panorama-label i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ui-amber-bright);
-  box-shadow: 0 0 9px rgba(255, 196, 87, 0.8);
-}
-
 #start-card {
   display: flex;
   width: min(650px, 100%);
@@ -1209,20 +1164,6 @@ body.start-screen-open #debug-panel {
 .start-action:disabled {
   cursor: not-allowed;
   opacity: 0.38;
-}
-
-.start-footer {
-  display: flex;
-  width: min(500px, 100%);
-  justify-content: space-between;
-  gap: 20px;
-  margin-top: clamp(28px, 5vh, 50px);
-  padding-top: 12px;
-  border-top: 1px solid rgba(171, 177, 161, 0.2);
-  color: #777b70;
-  font: 600 8px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .start-subhead {
@@ -1446,7 +1387,7 @@ body.start-screen-open #debug-panel {
   text-transform: uppercase;
 }
 
-/* ── Join / rally briefing ───────────────────────────────────────── */
+/* ── Join / trail briefing ───────────────────────────────────────── */
 
 #join-overlay {
   position: fixed;
@@ -1963,10 +1904,6 @@ body.touch .hud-shifter {
   width: min(250px, 100%);
 }
 
-body.touch .hud-shifter-header > .hud-field-label {
-  display: none;
-}
-
 body.touch .shifter-collapse {
   display: flex;
   min-height: 34px;
@@ -1979,10 +1916,6 @@ body.touch .hud-shifter:not(.expanded) {
 
 body.touch .hud-shifter:not(.expanded) .hud-shifter-body {
   display: none;
-}
-
-body.touch #transmission-mode {
-  min-height: 34px;
 }
 
 /* ── Responsive layouts ──────────────────────────────────────────── */
@@ -2017,18 +1950,13 @@ body.touch #transmission-mode {
       linear-gradient(0deg, rgba(3, 4, 3, 0.74), transparent 45%);
   }
 
-  .start-panorama-label {
-    display: none;
-  }
-
   #start-card {
     width: min(600px, 100%);
     padding-right: 30px;
     padding-left: max(34px, calc(env(safe-area-inset-left) + 24px));
   }
 
-  #start-panel,
-  .start-footer {
+  #start-panel {
     width: 100%;
   }
 
@@ -2196,17 +2124,6 @@ body.touch #transmission-mode {
   .hud-handbrake {
     padding: 3px;
     font-size: 8px;
-  }
-
-  .hud-diagnostics {
-    gap: 7px;
-    padding: 5px 8px;
-    font-size: 8px;
-    white-space: nowrap;
-  }
-
-  .hud-diagnostics > * + *::before {
-    margin-right: 7px;
   }
 
   /* Above the instruments rather than below them. Portrait stacks the dock,
@@ -2499,10 +2416,9 @@ body.touch #transmission-mode {
   }
 }
 
-/* The shortest landscape phones. With the gate open the dock is the whole
-   height budget: dev diagnostics + gate + cluster came to 330px inside 320px
-   of viewport, and the top of it went off screen. Trimming the gate and the
-   speed row is what buys those thirty pixels back. */
+/* The shortest landscape phones. With the gate open the dock consumes the
+   height budget and its top can leave the viewport. Trimming the gate and the
+   speed row buys back the needed space. */
 @media (max-height: 380px) and (orientation: landscape) {
   .hud-shifter-body {
     height: 100px;
@@ -2571,10 +2487,6 @@ body.touch #transmission-mode {
 
   .start-action small {
     max-width: 48%;
-  }
-
-  .start-footer {
-    margin-top: 28px;
   }
 
   .start-tool-grid {

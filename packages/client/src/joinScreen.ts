@@ -93,7 +93,7 @@ const CAR_OPTIONS: CarOption[] = [
   {
     kind: 'dustback-rs',
     name: 'Dustback RS',
-    desc: 'Light rear-drive rally hatch: razor sharp on gravel, fragile in rocks and deep mud.',
+    desc: 'Light rear-drive trail hatch: razor sharp on gravel, fragile in rocks and deep mud.',
     glyph: 'o[==]o',
     swatchBg: '#e6e1d4',
   },
@@ -112,7 +112,7 @@ export function showJoinScreen(initial: Partial<JoinChoice>): Promise<JoinChoice
     const card = document.createElement('form');
     card.id = 'join-card';
     card.innerHTML = `
-      <div class="join-eyebrow">Rugged rally dispatch</div>
+      <div class="join-eyebrow">Rugged trail dispatch</div>
       <h1 id="join-title">mydrunner</h1>
       <p class="sub">Sign on, select a trail rig, and report to the start line. Your briefing is saved for the next run.</p>
       <div class="join-driver-row">

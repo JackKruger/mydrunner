@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as THREE from 'three';
 import { Physics, TUNING } from '@mydrunner/shared';
 import { initDebugPanel, updateVehicleDebug } from '../debugPanel.js';
+import type { RenderTuningKey } from '../renderEnvironment.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -102,18 +104,127 @@ function telemetry(): Physics.VehicleDebugTelemetry {
 
 describe('physics debug panel', () => {
   it('is idempotent and renders live tire telemetry', () => {
-    initDebugPanel();
-    initDebugPanel();
+    const renderer: Pick<THREE.WebGLRenderer, 'toneMapping'> = { toneMapping: THREE.NeutralToneMapping };
+    const renderValues: Record<RenderTuningKey, number> = {
+      exposure: 1.25,
+      sunIntensity: 2.05,
+      hemisphereIntensity: 0.75,
+      shaderAmbientIntensity: 0.95,
+      grassBrightness: 0.63,
+      terrainMacroTint: 0.53,
+      terrainTriplanarStrength: 0.47,
+      terrainNormalStrength: 0.21,
+      terrainShading: 0.83,
+      fogAmount: 1,
+    };
+    const setRenderTuning = vi.fn((key: RenderTuningKey, value: number) => {
+      renderValues[key] = value;
+    });
+    const pressure = {
+      currentPsi: 24,
+      nominalPsi: 34,
+      minPsi: 12,
+      maxPsi: 42,
+      adjusting: 0 as const,
+      reason: null,
+    };
+    const setPressurePsi = vi.fn((value: number) => { pressure.currentPsi = value; });
+    initDebugPanel(renderer, {
+      getRenderTuning: (key) => renderValues[key],
+      setRenderTuning,
+    }, {
+      pressureStatus: () => pressure,
+      setPressurePsi,
+    });
+    initDebugPanel(renderer);
     updateVehicleDebug(telemetry());
 
     expect(document.querySelectorAll('#debug-panel')).toHaveLength(1);
     expect(document.querySelectorAll('#debug-tuning-card')).toHaveLength(1);
     expect(document.querySelector('#debug-panel')?.contains(document.querySelector('#debug-tuning-card'))).toBe(false);
+    const statSections = [...document.querySelectorAll<HTMLDetailsElement>('#debug-panel .debug-stat-section')];
+    expect(statSections.map((section) => section.dataset.statSection)).toEqual([
+      'ATTITUDE + TIP RESERVE',
+      'VEHICLE VITALS',
+      'TIRE FRICTION CIRCLES',
+      'G-FORCE + YAW HISTORY',
+      'DRIVELINE TORQUE FLOW',
+      'TUNING RUN RECORDER',
+      'AXLE STATE',
+    ]);
+    expect(statSections.every((section) => !section.open)).toBe(true);
+    statSections[0]!.open = true;
+    expect(statSections[0]!.open).toBe(true);
+    statSections[0]!.open = false;
     const tuningRows = [...document.querySelectorAll<HTMLElement>('#debug-tuning-card .row')];
     expect(tuningRows.length).toBeGreaterThan(20);
     expect(tuningRows.every((row) => Boolean(row.dataset.help && row.title))).toBe(true);
-    tuningRows[0]!.querySelector('input')!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    for (const label of [
+      'soilMaxSink×', 'soilBearing×', 'soilShear×', 'soilBulldoze×',
+      'shiftUp (rpm)', 'shiftDown (rpm)', 'shiftHold (s)', '4L crawl (m/s)',
+      'centreReact Nm', 'waterLateral×', 'wetGripFloor', 'swampTime (s)',
+      'yawStiffness', 'yawDamping', 'cornerSwing',
+    ]) {
+      expect(tuningRows.some((row) => row.querySelector('label')?.textContent === label)).toBe(true);
+    }
+    const tuningSections = [...document.querySelectorAll<HTMLDetailsElement>('#debug-tuning-card .tuning-section')];
+    expect(tuningSections.map((section) => section.dataset.tuningSection)).toEqual([
+      'RENDER + LIGHTING',
+      'TIRE + GRIP',
+      'TERRAIN + ROLLING',
+      'SUSPENSION + ANTI-ROLL',
+      'POWERTRAIN + STEERING',
+      'WATER',
+      'CAMERA',
+    ]);
+    expect(tuningSections.every((section) => !section.open)).toBe(true);
+    expect(tuningSections.every((section) => section.querySelector<HTMLElement>(':scope > summary')?.dataset.help)).toBe(true);
+    const tireSection = tuningSections.find((section) => section.dataset.tuningSection === 'TIRE + GRIP');
+    expect(tireSection?.querySelector('summary')?.dataset.help).toContain('carcass');
+    const tireLabels = [...tireSection!.querySelectorAll('label')];
+    expect(tireLabels[0]?.textContent).toBe('frontGripMult');
+    expect(tireLabels.some((label) => label.textContent === 'lockedGripFalloff')).toBe(true);
+    expect(tireLabels.at(-1)?.textContent).toBe('tyre pressure');
+    const renderSection = tuningSections.find((section) => section.dataset.tuningSection === 'RENDER + LIGHTING');
+    expect(renderSection?.contains(document.querySelector('#debug-tone-mapping'))).toBe(true);
+    const pressureInput = document.querySelector<HTMLInputElement>('#debug-tyre-pressure')!;
+    expect(pressureInput.value).toBe('24');
+    pressureInput.value = '18';
+    pressureInput.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(setPressurePsi).toHaveBeenCalledWith(18);
+    document.querySelector<HTMLButtonElement>('.pressure-actions button')!.click();
+    expect(setPressurePsi).toHaveBeenLastCalledWith(34);
+    const savedFrontLock = TUNING.diffLockFront;
+    const frontLock = [...document.querySelectorAll<HTMLElement>('#debug-tuning-card .row')]
+      .find((row) => row.querySelector('label')?.textContent === 'front diff lock')
+      ?.querySelector<HTMLInputElement>('input');
+    frontLock!.checked = !savedFrontLock;
+    frontLock!.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(TUNING.diffLockFront).toBe(!savedFrontLock);
+    TUNING.diffLockFront = savedFrontLock;
+    tireSection!.open = true;
+    expect(tireSection!.open).toBe(true);
+    tireSection!.open = false;
+    const frontGripRow = tuningRows.find((row) => row.querySelector('label')?.textContent === 'frontGripMult');
+    frontGripRow!.querySelector('input')!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
     expect(document.querySelector('#debug-tuning-help')?.textContent).toContain('front axle friction budget');
+    const toneMapping = document.querySelector<HTMLSelectElement>('#debug-tone-mapping')!;
+    expect(toneMapping.value).toBe(String(THREE.NeutralToneMapping));
+    toneMapping.value = String(THREE.ACESFilmicToneMapping);
+    toneMapping.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(renderer.toneMapping).toBe(THREE.ACESFilmicToneMapping);
+    for (const label of [
+      'exposure', 'sun intensity', 'hemisphere fill', 'terrain/water fill',
+      'grass albedo', 'terrain macro tint', 'terrain triplanar', 'terrain normals', 'terrain shading', 'fog amount',
+    ]) {
+      expect(tuningRows.some((row) => row.querySelector('label')?.textContent === label)).toBe(true);
+    }
+    const ambientRow = tuningRows.find((row) => row.querySelector('label')?.textContent === 'terrain/water fill');
+    const ambientInput = ambientRow!.querySelector<HTMLInputElement>('input')!;
+    ambientInput.value = '0.84';
+    ambientInput.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(setRenderTuning).toHaveBeenCalledWith('shaderAmbientIntensity', 0.84);
+    expect(ambientRow!.querySelector('.val')?.textContent).toBe('0.840');
     expect(document.querySelector('[data-debug="tip-state"]')?.textContent).toContain('STABLE');
     expect(document.querySelector('[data-wheel="0"] [data-field="surface"]')?.textContent).toContain('mud');
     expect((document.querySelector('[data-wheel="0"] [data-field="bar"]') as HTMLElement).style.width).toBe('72%');

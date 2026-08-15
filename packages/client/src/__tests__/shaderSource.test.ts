@@ -9,8 +9,10 @@
 // Playwright screenshots; this half is the one that fails in CI in 20 ms.
 
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
 import { QUALITY } from '../quality.js';
+import { RENDER_ENVIRONMENT } from '../renderEnvironment.js';
 import { makeTerrainMaterial } from '../terrainShader.js';
 import { makeWaterMaterial } from '../waterShader.js';
 
@@ -27,6 +29,29 @@ function waterSource(tier: 'high' | 'low'): string {
 }
 
 describe('terrain shader', () => {
+  it('keeps triplanar normals in world space as the camera moves', () => {
+    for (const tier of ['high', 'low'] as const) {
+      const source = makeTerrainMaterial(terrain(), QUALITY[tier]).vertexShader;
+      expect(source).toContain('vNormal = normalize(mat3(modelMatrix) * normal)');
+      expect(source).not.toContain('vNormal = normalize(normalMatrix * normal)');
+    }
+  });
+
+  it('ships a neutral output transform without a second canvas filter', () => {
+    expect(RENDER_ENVIRONMENT.toneMapping).toBe(THREE.NeutralToneMapping);
+    expect(RENDER_ENVIRONMENT.exposure).toBe(1.25);
+    expect(RENDER_ENVIRONMENT.sun.intensity).toBe(2.05);
+    expect(RENDER_ENVIRONMENT.hemisphere.intensity).toBe(0.75);
+    expect(RENDER_ENVIRONMENT.shaderAmbientIntensity).toBe(0.95);
+    expect(RENDER_ENVIRONMENT.grassBrightness).toBe(0.63);
+    expect(RENDER_ENVIRONMENT.terrainMacroTint).toBe(0.53);
+    expect(RENDER_ENVIRONMENT.terrainTriplanarStrength).toBe(0.47);
+    expect(RENDER_ENVIRONMENT.terrainNormalStrength).toBe(0.21);
+    expect(RENDER_ENVIRONMENT.terrainShading).toBe(0.83);
+    expect(RENDER_ENVIRONMENT.fog.amount).toBe(1);
+    expect(RENDER_ENVIRONMENT).not.toHaveProperty('contrast');
+  });
+
   it('keeps the whole boundary-blend pass at high tier and drops it at low', () => {
     // The blend pass is a second dependent texture fetch plus a second full
     // surfaceColor() on roughly a third of ground fragments — the single most
@@ -63,6 +88,7 @@ describe('terrain shader', () => {
     expect(high).toContain('#define TERRAIN_TRIPLANAR 1');
     expect(high).toContain('#define TERRAIN_NORMAL_MAPS 1');
     expect(high).toContain('texture2D(map, p.zy)');
+    expect(high).toContain('mix(planar, triplanar, uTerrainTriplanarStrength)');
     expect(high).toContain('weights /= max(dot(weights, vec3(1.0))');
     expect(low).not.toContain('#define TERRAIN_TEXTURES 1');
     expect(low).not.toContain('#define TERRAIN_TRIPLANAR 1');
@@ -74,9 +100,38 @@ describe('terrain shader', () => {
       const source = terrainSource(tier);
       expect(source).toContain('uniform sampler2D uSurfaceMap');
       expect(source).toContain('vec2 lookup = wp + vec2(jx, jz) * 4.5');
-      expect(source).toContain('vec3 fallback = proceduralColor');
+      expect(source).toContain('vec3 fallback = proceduralSRGBToLinear(proceduralColor');
       expect(source).toContain('float shininess = mix(72.0, 5.0, material.roughness)');
       expect(source).toContain('vec3 N = normalize(material.normal)');
+    }
+  });
+
+  it('decodes the procedural sRGB palette before applying linear lighting', () => {
+    for (const tier of ['high', 'low'] as const) {
+      const source = terrainSource(tier);
+      expect(source).toContain('vec3 proceduralSRGBToLinear(vec3 value)');
+      expect(source).toContain('proceduralSRGBToLinear(proceduralColor');
+      expect(source).toContain('uniform float uGrassBrightness');
+      expect(source).toContain(`if (s == ${Physics.Surface.Grass}) m.albedo *= 0.75 * (uGrassBrightness / 1.12)`);
+    }
+  });
+
+  it('exposes recent terrain rendering layers as live uniforms', () => {
+    for (const tier of ['high', 'low'] as const) {
+      const source = terrainSource(tier);
+      expect(source).toContain('float tint = mix(1.0, macroTint, uMacroTintStrength)');
+      expect(source).toContain('uTerrainTriplanarStrength');
+      expect(source).toContain('a.a * uTerrainNormalStrength');
+      expect(source).toContain('vec3 lit = mix(albedo, shaded, uTerrainShading)');
+    }
+  });
+
+  it('uses orientation-aware hemisphere fill for terrain', () => {
+    for (const tier of ['high', 'low'] as const) {
+      const source = terrainSource(tier);
+      expect(source).toContain('uniform vec3 uSkyAmbient');
+      expect(source).toContain('uniform vec3 uGroundAmbient');
+      expect(source).toContain('vec3 ambient = mix(uGroundAmbient, uSkyAmbient, hemiMix) * uAmbientIntensity');
     }
   });
 
@@ -88,6 +143,22 @@ describe('terrain shader', () => {
 });
 
 describe('water shader', () => {
+  it('uses the same renderer output transform as the rest of the world', () => {
+    for (const tier of ['high', 'low'] as const) {
+      expect(waterSource(tier)).toContain('#include <tonemapping_fragment>');
+      expect(waterSource(tier)).toContain('#include <colorspace_fragment>');
+    }
+  });
+
+  it('uses the shared orientation-aware hemisphere fill', () => {
+    for (const tier of ['high', 'low'] as const) {
+      const source = waterSource(tier);
+      expect(source).toContain('uniform vec3 uSkyAmbient');
+      expect(source).toContain('uniform vec3 uGroundAmbient');
+      expect(source).toContain('vec3 ambient = mix(uGroundAmbient, uSkyAmbient, hemiMix) * uAmbientIntensity');
+    }
+  });
+
   it('keeps the depth tint and the flow advection at BOTH tiers', () => {
     // Not decoration. The depth tint is the readout a player picks a crossing
     // line by, and the ripples advecting along the flow field are what make a

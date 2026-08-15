@@ -2,7 +2,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test';
 
 async function waitConnected(page: Page): Promise<void> {
   await expect(page.locator('#hud')).toContainText('connected', { timeout: 20_000 });
-  await expect(page.locator('#hud-tick')).toContainText(/tick=[1-9]\d*/);
+  await expect(page.locator('#hud-surface')).not.toHaveText('—');
 }
 
 async function boxesOverlap(a: Locator, b: Locator): Promise<boolean> {
@@ -35,7 +35,7 @@ test('start screen, join briefing, connected instruments, and radio retain their
   const overlander = page.getByRole('radio', { name: /Overlander Wagon/ });
   await expect(ridgeback).toHaveAttribute('aria-checked', 'true');
 
-  await page.getByLabel('Driver call sign').fill('Rally Ada');
+  await page.getByLabel('Driver call sign').fill('Crawler Ada');
   await ridgeback.focus();
   await page.keyboard.press('ArrowRight');
   await expect(overlander).toHaveAttribute('aria-checked', 'true');
@@ -50,11 +50,11 @@ test('start screen, join briefing, connected instruments, and radio retain their
   await expect.poll(() => page.evaluate(() => ({
     name: localStorage.getItem('mydrunner.name'),
     car: localStorage.getItem('mydrunner.carKind'),
-  }))).toEqual({ name: 'Rally Ada', car: 'overlander' });
+  }))).toEqual({ name: 'Crawler Ada', car: 'overlander' });
   await expect.poll(() => page.evaluate(() => {
     const saves = JSON.parse(localStorage.getItem('mydrunner.saves.v1') ?? '[]') as Array<{ name: string }>;
     return saves.map((save) => save.name);
-  })).toEqual(['Rally Ada']);
+  })).toEqual(['Crawler Ada']);
 
   await page.keyboard.press('KeyT');
   const radioInput = page.getByLabel('Team radio // transmit');
@@ -111,18 +111,18 @@ test('desktop and touch layouts keep instruments and controls separated', async 
   await page.getByRole('button', { name: 'Third gear' }).click();
   await expect(shifter).toHaveAttribute('data-mode', 'manual');
   await expect(page.locator('#hud-gear-value')).toHaveText('3');
-  await page.getByRole('button', { name: 'MANUAL' }).click();
+  await page.getByRole('button', { name: 'Automatic transmission' }).click();
   await expect(shifter).toHaveAttribute('data-mode', 'auto');
 
   const gateBox = await page.locator('#gear-gate').boundingBox();
   if (!gateBox) throw new Error('H-pattern gate is not visible');
   await page.mouse.move(gateBox.x + gateBox.width * 0.5, gateBox.y + gateBox.height * 0.5);
   await page.mouse.down();
-  await page.mouse.move(gateBox.x + gateBox.width * 0.2, gateBox.y + gateBox.height * 0.18, { steps: 5 });
+  await page.mouse.move(gateBox.x + gateBox.width * 0.31, gateBox.y + gateBox.height * 0.18, { steps: 5 });
   await page.mouse.up();
   await expect(page.locator('#gear-mode-hint')).toHaveText('1 SELECTED');
   await expect(page.locator('#hud-gear-value')).toHaveText('1');
-  await page.getByRole('button', { name: 'MANUAL' }).click();
+  await page.getByRole('button', { name: 'Automatic transmission' }).click();
 
   await page.getByRole('button', { name: 'Two wheel drive high' }).click();
   await expect(page.locator('#transfer-mode-hint')).toHaveText('2WD HIGH');

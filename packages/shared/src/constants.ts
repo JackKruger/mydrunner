@@ -52,7 +52,10 @@
 //     on flat ground can now see an obstacle it is pressed against, the ledge
 //     normal constraints share a vehicle-wide per-tick bound, and the locked
 //     centre transfer can no longer spin a gripping wheel backwards.
-export const PROTOCOL_VERSION = 17;
+// 18: station colliders follow the composed terrain height and the four
+//     workshop-front posts are gone. Mixed builds would disagree about the
+//     station floor and whether the garage approaches are obstructed.
+export const PROTOCOL_VERSION = 18;
 
 // Tick rates and timing - all simulation runs at fixed step.
 // The client-owned vehicle simulation advances at this fixed cadence.
@@ -188,6 +191,15 @@ export const ENGINE = {
   // wheelRadius) so faster coasting = more drag regardless of gear.
   // Only applies off-throttle and in-gear (see engine.ts).
   engineBrakeSpeedCoef: 6.0,
+} as const;
+
+/** Transfer-case low-range bounds. Low range is a crawl mode: its geared
+ * wheel-speed limit controls sustained slip, while these chassis limits catch
+ * one-tick obstacle impulses after the rigid-body solve. */
+export const LOW_RANGE = {
+  maxCrawlSpeed: 1.1,
+  maxLedgeVerticalSpeed: 0.75,
+  ledgeVelocityGraceTicks: 45,
 } as const;
 
 // Mud / surface friction. Multipliers in [0, 1] applied on top of

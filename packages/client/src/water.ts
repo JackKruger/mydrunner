@@ -15,7 +15,7 @@
 
 import * as THREE from 'three';
 import { Physics } from '@mydrunner/shared';
-import { flowTextureOf, makeWaterMaterial, packFlow } from './waterShader.js';
+import { flowTextureOf, makeWaterMaterial, packFlow, refreshWaterEnvironment } from './waterShader.js';
 import { activeQuality, type QualitySettings } from './quality.js';
 
 export class WaterMesh {
@@ -65,6 +65,11 @@ export class WaterMesh {
    *  changes. */
   update(): void {
     this.material.uniforms.uTime!.value = (performance.now() - this.startMs) / 1000;
+  }
+
+  /** Apply values changed by the ?dev render sliders without rebuilding. */
+  refreshRenderEnvironment(): void {
+    refreshWaterEnvironment(this.material);
   }
 
   /** Push level / wetness changes for a block of cells to the GPU.

@@ -7,6 +7,7 @@
 
 import {
   BUTTON_RESET,
+  TUNING,
   VEHICLE,
   WINCH,
   Maps,
@@ -430,6 +431,10 @@ export class LocalSimulation {
     };
   }
 
+  setPressurePsi(pressurePsi: number): void {
+    this.vehicle.setPressurePsi?.(pressurePsi);
+  }
+
   createRutStampCandidate(): Physics.PredictedRutStamp | null {
     // Seven fixed ticks (116.7 ms) leaves delivery jitter headroom under the
     // server's strict 10 Hz receipt-time gate; a six-tick cadence can arrive
@@ -451,8 +456,9 @@ export class LocalSimulation {
     const forwardZ = 1 - 2 * (q.x * q.x + q.y * q.y);
     const pressure = this.pressureStatus();
     const footprintScale = Math.sqrt(pressure.nominalPsi / Math.max(4, pressure.currentPsi));
-    const maxSink = Physics.surfaceInfo(selected.surface).traction.soil === 'deep-mud' ? 0.38 : 0.18;
-    const disturbance = Math.min(1, selected.sinkDepth / maxSink);
+    const maxSink = (Physics.surfaceInfo(selected.surface).traction.soil === 'deep-mud' ? 0.38 : 0.18)
+      * TUNING.soilSinkDepthMult;
+    const disturbance = Math.min(1, selected.sinkDepth / Math.max(0.001, maxSink));
     const work = Math.min(1, selected.slipWork / 4_000);
     const pressureDepthScale = (pressure.currentPsi / pressure.nominalPsi) ** 0.35;
     const wheelWidth = Physics.geomFor(this.vehicle.build).wheelWidth;

@@ -98,6 +98,18 @@ export function gearRatio(state: EngineState): number {
   return ENGINE.gears[state.gearIndex] ?? 0;
 }
 
+/** Maximum wheel speed that a rigid driveline can have at engine redline.
+ *  Returning Infinity in neutral keeps free wheels unconstrained. */
+export function gearedWheelAngularSpeedLimit(
+  state: EngineState,
+  finalDrive: number,
+  engineRpm: number = ENGINE.redlineRpm,
+): number {
+  const reduction = Math.abs(gearRatio(state) * finalDrive);
+  if (reduction < 1e-8) return Infinity;
+  return Math.max(ENGINE.idleRpm, engineRpm) * (2 * Math.PI / 60) / reduction;
+}
+
 function rpmTarget(wheelAngVel: number, throttle: number, ratio: number, finalDrive: number): number {
   if (ratio === 0) {
     return ENGINE.idleRpm + Math.max(0, throttle) * (ENGINE.redlineRpm - ENGINE.idleRpm);
@@ -221,12 +233,12 @@ export function stepEngine(
     const vehicleLockedRpm = vehicleRpmAbs * Math.abs(ratio) * finalDrive;
     if (state.shiftCooldown > 0) {
       state.shiftCooldown--;
-    } else if (vehicleLockedRpm > ENGINE.shiftUpRpm && gIdx < ENGINE.gears.length - 1) {
+    } else if (vehicleLockedRpm > TUNING.engineShiftUpRpm && gIdx < ENGINE.gears.length - 1) {
       nextGear = gIdx + 1;
-      state.shiftCooldown = ENGINE.shiftHoldTicks;
-    } else if (vehicleLockedRpm < ENGINE.shiftDownRpm && gIdx > ENGINE.firstGear) {
+      state.shiftCooldown = Math.max(0, Math.round(TUNING.engineShiftHoldTicks));
+    } else if (vehicleLockedRpm < TUNING.engineShiftDownRpm && gIdx > ENGINE.firstGear) {
       nextGear = gIdx - 1;
-      state.shiftCooldown = ENGINE.shiftHoldTicks;
+      state.shiftCooldown = Math.max(0, Math.round(TUNING.engineShiftHoldTicks));
     }
   } else if (Math.abs(throttle) < 0.05 && Math.abs(wheelAngVel) < 0.5) {
     nextGear = ENGINE.neutralGear;

@@ -7,6 +7,8 @@
 
 const MAX_VISIBLE = 5;
 const MAX_LEN = 200;
+const SYSTEM_MESSAGE_LIFETIME_MS = 5000;
+const MESSAGE_FADE_MS = 300;
 
 export interface ChatUI {
   /** Append a remote (or echoed-back) chat line to the log. */
@@ -71,6 +73,12 @@ export function initChat(hooks: Hooks): ChatUI {
 
   const entries: HTMLElement[] = [];
 
+  const remove = (line: HTMLElement): void => {
+    const index = entries.indexOf(line);
+    if (index !== -1) entries.splice(index, 1);
+    line.remove();
+  };
+
   const append = (line: HTMLElement): void => {
     log.appendChild(line);
     entries.push(line);
@@ -91,6 +99,13 @@ export function initChat(hooks: Hooks): ChatUI {
     line.appendChild(nameEl);
     line.appendChild(textEl);
     append(line);
+    if (opts.system) {
+      setTimeout(() => {
+        if (!line.isConnected) return;
+        line.classList.add('leaving');
+        setTimeout(() => remove(line), MESSAGE_FADE_MS);
+      }, SYSTEM_MESSAGE_LIFETIME_MS);
+    }
   };
 
   let open = false;

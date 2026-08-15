@@ -88,6 +88,8 @@ void main() {
   float alpha = vTrackOpacity * fade * (1.0 - fog);
   if (alpha < 0.002) discard;
   gl_FragColor = vec4(vTrackColor, alpha);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
 }
 `;
 

@@ -73,7 +73,6 @@ const hud = document.getElementById('hud')!;
 const app = document.getElementById('app')!;
 const playerUI = new PlayerUI(hud, {
   development: import.meta.env.DEV,
-  version: __APP_VERSION__,
   onGearSelection: setManualGear,
   onTransferCaseSelection: requestTransferCase,
 });
@@ -230,7 +229,6 @@ if (import.meta.env.DEV) {
 let localId: PlayerId | null = null;
 let connected = false;
 let isDebug = false;
-let lastSnapTick = 0;
 let lastSpeed = 0;
 let lastRpm = 0;
 let lastGear = 0;
@@ -250,6 +248,17 @@ let mapWorld: Maps.MapWorld | null = null;
  *  the terrain and hundreds of obstacle placements a second time. */
 let stagedMenuWorld: Maps.MapWorld | null = null;
 let localSimulation: LocalSimulation | null = null;
+const vehicleTuningTarget = {
+  pressureStatus: (): Physics.PressureStatus => localSimulation?.pressureStatus() ?? {
+    currentPsi: 34,
+    nominalPsi: 34,
+    minPsi: 20,
+    maxPsi: 42,
+    adjusting: 0,
+    reason: null,
+  },
+  setPressurePsi: (pressurePsi: number): void => localSimulation?.setPressurePsi(pressurePsi),
+};
 let currentBuild: VehicleBuild = createStockBuild();
 let currentBuildRevision = 1;
 let nearbyBayId: string | null = null;
@@ -447,7 +456,7 @@ async function start(): Promise<void> {
   if (params.get('preview') === '1') {
     isDebug = params.has('dev');
     if (isDebug) {
-      initDebugPanel();
+      initDebugPanel(scene.renderer, scene.view, vehicleTuningTarget);
       scene.setVehicleDebugEnabled(true);
     }
     await Physics.initRapier();
@@ -536,7 +545,7 @@ async function start(): Promise<void> {
   await Physics.initRapier();
   playerUI.setConnectionState({
     mode: 'connecting',
-    message: 'connecting to rally control…',
+    message: 'connecting to trail control…',
     driverName: choice.name,
   });
 
@@ -544,7 +553,7 @@ async function start(): Promise<void> {
   // shortcut so existing local tuning saves still behave as before.
   isDebug = params.has('dev') || isDebugUser(choice.name);
   if (isDebug) {
-    initDebugPanel();
+    initDebugPanel(scene.renderer, scene.view, vehicleTuningTarget);
     scene.setVehicleDebugEnabled(true);
   }
 
@@ -583,7 +592,6 @@ async function start(): Promise<void> {
       });
     },
     onSnapshot(snap, recvAtMs) {
-      lastSnapTick = snap.tick;
       scene.pushSnapshot(snap, recvAtMs);
       winchController.setLinks(snap.winches ?? []);
       netDiagOnSnapshot(recvAtMs);
@@ -912,7 +920,6 @@ function updateHud(): void {
       handbrake,
       engineStatus: engineStatusLabel(),
       fps,
-      previewDiagnostic: 'offline physics',
       transferCase: t?.drivetrain.transferCase ?? '4h',
       frontLocked: t?.drivetrain.frontLocked ?? false,
       rearLocked: t?.drivetrain.rearLocked ?? false,
@@ -933,9 +940,7 @@ function updateHud(): void {
     surface: surfaceLabel(),
     handbrake,
     engineStatus: engineStatusLabel(),
-    tick: lastSnapTick,
     fps,
-    previewDiagnostic: '',
     transferCase: lastTransferCase,
     frontLocked: lastFrontLocked,
     rearLocked: lastRearLocked,
