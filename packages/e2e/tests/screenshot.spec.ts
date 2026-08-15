@@ -7,6 +7,23 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 test.describe('@screenshot', () => {
+  test('ground cover biomes', async ({ page }) => {
+    const outDir = join(process.cwd(), 'screenshots', 'ground-cover');
+    mkdirSync(outDir, { recursive: true });
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/?auto=1&q=high');
+    await expect(page.locator('#hud')).toContainText('connected', { timeout: 10_000 });
+    const views = [
+      ['road-shoulder', { x: -110, y: 6, z: 16 }, { x: -92, y: 0, z: 7 }],
+      ['forest-floor', { x: -102, y: 5, z: 45 }, { x: -90, y: 0, z: 61 }],
+      ['open-grassland', { x: 55, y: 7, z: 32 }, { x: 72, y: 0, z: 48 }],
+    ] as const;
+    for (const [name, position, look] of views) {
+      await page.evaluate(([p, l]) => (window as any).__scene.setReviewView(p, l), [position, look]);
+      await page.waitForTimeout(500);
+      await page.screenshot({ path: join(outDir, `${name}.png`) });
+    }
+  });
   test('drive a lap and capture frames', async ({ page }) => {
     test.setTimeout(180_000);
     const outDir = join(process.cwd(), 'screenshots');

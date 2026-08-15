@@ -104,6 +104,31 @@ describe('gearbox', () => {
     expect(s.gearIndex).toBe(ENGINE.firstGear); // must stay in 1st
   });
 
+  it('does not carry an upshift cooldown through a shuttle into reverse', () => {
+    // shiftCooldown is only decremented inside the forward auto-shift branch,
+    // so a shuttle through reverse froze whatever was left of it. However long
+    // the reverse leg took, the box then spent the remainder refusing the first
+    // upshift and sat in 1st over-revving. A direction change is not an
+    // RPM-triggered shift and must not inherit one's cooldown.
+    const s = createEngineState();
+    s.gearIndex = ENGINE.firstGear;
+    // One fast forward tick banks a full cooldown by upshifting.
+    stepEngine(s, 50, 50, 1, dt);
+    expect(s.gearIndex).toBeGreaterThan(ENGINE.firstGear);
+    expect(s.shiftCooldown).toBe(ENGINE.shiftHoldTicks);
+
+    // Shuttle into reverse and sit there far longer than the cooldown.
+    for (let i = 0; i < ENGINE.shiftHoldTicks * 2; i++) stepEngine(s, -10, 10, -1, dt);
+    expect(s.gearIndex).toBe(ENGINE.reverseGear);
+    expect(s.shiftCooldown).toBe(0);
+
+    // Back to forward: the box must be free to climb out of 1st immediately.
+    const out = stepEngine(s, 50, 50, 1, dt);
+    expect(out.gear).toBe(1);
+    expect(s.shiftCooldown).toBe(0);
+    expect(stepEngine(s, 50, 50, 1, dt).gear).toBe(2);
+  });
+
   it('produces engine braking torque when throttle is released while moving', () => {
     const s = createEngineState();
     s.gearIndex = ENGINE.firstGear + 1; // 2nd

@@ -27,9 +27,7 @@ function speedXZ(v: Physics.VehicleLike): number {
   return Math.hypot(s.linVel.x, s.linVel.z);
 }
 
-function makeRoadWorld(): Physics.World {
-  const n = 32;
-  const size = 200;
+function makeRoadWorld(size = 200, n = 32): Physics.World {
   const heights = new Float32Array(n * n);
   const surfaces = new Uint8Array(n * n);
   surfaces.fill(Physics.Surface.Road);
@@ -97,6 +95,42 @@ describe('reverse acceleration', () => {
       peak,
       `peak reverse speed in 10 s = ${peak.toFixed(2)} m/s; should be > 12 m/s`,
     ).toBeGreaterThan(12);
+    world.dispose();
+  });
+
+  it('manual reverse is rev-limited by road speed, not left to run away', () => {
+    // The engine's view of the wheels used to be zeroed whenever the truck
+    // travelled against the *throttle pedal's* sign. In manual the pedal is
+    // only ever power - the lever supplies direction - so a manual reverse gear
+    // matched that test on every tick it was working correctly. The engine was
+    // therefore told the wheels were stopped for the whole run: the tacho froze
+    // at its throttle target (a flat 3500) and the rev limiter, which lives
+    // downstream of wheel speed, never engaged. Reverse accelerated without
+    // bound past 77 m/s and was still climbing at 25 s.
+    //
+    // Needs a world sized for the whole run: 25 s of reverse covers hundreds of
+    // metres, and a rig that leaves the heightfield measures free fall.
+    const world = makeRoadWorld(3000, 64);
+    const v = world.spawnVehicle('p', { position: { x: 0, y: 1.5, z: 0 } });
+    simSeconds(world, 1);
+    v.setInput({ ...EMPTY_INPUT, seq: 1, throttle: 1, manualGear: -1 });
+    let peak = 0;
+    const rpms: number[] = [];
+    for (let s = 0; s < 25; s++) {
+      simSeconds(world, 1);
+      peak = Math.max(peak, speedXZ(v));
+      rpms.push(v.getState().rpm);
+    }
+    const state = v.getState();
+    expect(state.position.y, 'rig left the heightfield mid-run').toBeGreaterThan(0);
+    expect(
+      peak,
+      `peak manual-reverse speed = ${peak.toFixed(1)} m/s; the -2.5 reverse ratio cannot exceed ~27 m/s at the limiter`,
+    ).toBeLessThan(30);
+    // The tacho has to track road speed, not sit on a constant. Before the fix
+    // every one of these samples read the same number.
+    expect(Math.min(...rpms), 'reverse RPM never came up off idle').toBeLessThan(2000);
+    expect(Math.max(...rpms), 'reverse RPM never reached the top of the range').toBeGreaterThan(5000);
     world.dispose();
   });
 
