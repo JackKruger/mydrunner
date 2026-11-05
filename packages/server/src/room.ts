@@ -237,7 +237,13 @@ export class Room {
     // While leased, the server's authored bay pose is canonical. Ignoring
     // owner uploads prevents a modified client from driving its collision
     // proxy through the workshop while everyone else sees customization.
-    if (p.workshopMode) return;
+    // The upload still proves the leaseholder is present, so it keeps the
+    // lease alive: the timeout exists to free a bay held by a client that
+    // has gone quiet, not to evict someone partway through a build.
+    if (p.workshopMode) {
+      this.renewLease(id);
+      return;
+    }
     p.state = update.vehicle;
     p.stateSeq = update.seq;
     this.applyWinchRuntime(id, update.winch);
@@ -300,6 +306,7 @@ export class Room {
     if (!p.workshopMode || !p.leaseId || p.leaseId !== leaseId) {
       return this.sendWorkshopAck(p, 'apply', false, 'Enter a workshop bay before applying a build.');
     }
+    this.renewLease(id);
     if (issues.length > 0) return this.sendWorkshopAck(p, 'apply', false, issues[0]);
     const result = normalizeVehicleBuildDetailed(build);
     if (result.issues.length > 0) return this.sendWorkshopAck(p, 'apply', false, result.issues[0]);
@@ -450,6 +457,17 @@ export class Room {
     if (p) {
       p.workshopMode = false;
       p.leaseId = null;
+    }
+  }
+
+  /** Push an active lease's idle deadline out by a full lease period. */
+  private renewLease(id: PlayerId): void {
+    const p = this.players.get(id);
+    if (!p?.leaseId) return;
+    for (const lease of this.bayLeases.values()) {
+      if (lease.playerId === id && lease.leaseId === p.leaseId) {
+        lease.expiresAtMs = performance.now() + WORKSHOP_LEASE_MS;
+      }
     }
   }
 
@@ -615,4 +633,7 @@ function isFiniteVehicleState(v: VehicleState): boolean {
 const CHAT_MIN_INTERVAL_MS = 800;
 const SPAWN_SLOTS = Maps.SPAWN_SLOTS;
 const PERF_WINDOW_MS = 5000;
+/** Idle timeout for a workshop bay lease. Renewed by every owner upload and
+ *  build request while leased, so only a client that stops talking (e.g. a
+ *  backgrounded tab whose frame loop is throttled) loses its bay. */
 const WORKSHOP_LEASE_MS = 120_000;

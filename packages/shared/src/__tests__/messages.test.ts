@@ -196,6 +196,17 @@ describe('decodeClient validation', () => {
     expect(() => decodeClient(raw({ t: 'rut-stamp', stamp: { ...stamp, x: NaN } }))).toThrow();
     expect(() => decodeClient(raw({ t: 'rut-stamp', stamp: { ...stamp, ownerSequence: 0 } }))).toThrow();
   });
+
+  it('drops fields a client attaches beyond the validated rut stamp', () => {
+    const stamp = {
+      ownerSequence: 1, x: 2, z: 3, heading: 0.5, radiusLong: 0.5, radiusLat: 0.25, depth: 0.01,
+    };
+    const decoded = decodeClient(raw({
+      t: 'rut-stamp',
+      stamp: { ...stamp, ownerId: 'spoofed', globalSequence: 99, junk: 'x'.repeat(1000) },
+    }));
+    expect(decoded).toEqual({ t: 'rut-stamp', stamp });
+  });
 });
 
 // The per-player snapshot tuple is decoded BY POSITION, so a decoder that
