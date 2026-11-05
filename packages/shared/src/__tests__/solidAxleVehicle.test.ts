@@ -610,6 +610,59 @@ describe('solid-axle vehicle: drivetrain', () => {
   });
 });
 
+describe('solid-axle vehicle: low-range crawl governor', () => {
+  function inLowRange() {
+    const { world, vehicle } = makeWorld();
+    for (let i = 0; i < 120; i++) {
+      vehicle.setInput({ ...EMPTY_INPUT, seq: i + 1, transferCase: '4l' });
+      world.step();
+    }
+    expect(vehicle.drivetrainStatus().transferCase).toBe('4l');
+    return { world, vehicle };
+  }
+
+  it('holds a grounded truck to crawl speed under full throttle', () => {
+    const { world, vehicle } = inLowRange();
+    for (let i = 0; i < 600; i++) {
+      vehicle.setInput({ ...EMPTY_INPUT, seq: 200 + i, throttle: 1, transferCase: '4l' });
+      world.step();
+    }
+    // The governor caps travel along the ground (the chassis plane), so
+    // measure it there: under power the chassis squats and pitches, and
+    // world-horizontal speed reads slightly differently from that.
+    const v = vehicle.body.linvel();
+    const r = vehicle.body.rotation();
+    const up = {
+      x: 2 * (r.x * r.y - r.w * r.z),
+      y: 1 - 2 * (r.x * r.x + r.z * r.z),
+      z: 2 * (r.y * r.z + r.w * r.x),
+    };
+    const normal = v.x * up.x + v.y * up.y + v.z * up.z;
+    const along = Math.hypot(v.x - up.x * normal, v.y - up.y * normal, v.z - up.z * normal);
+    expect(along).toBeGreaterThan(0.5);
+    // The governor runs in postStep against that tick's pre-step up vector,
+    // so allow the few millimetres per second the body rotates in between.
+    expect(along).toBeLessThanOrEqual(TUNING.lowRangeMaxCrawlSpeed + 0.02);
+    world.dispose();
+  });
+
+  it('leaves an airborne truck to ballistics', () => {
+    const { world, vehicle } = inLowRange();
+    vehicle.body.setTranslation({ x: 0, y: 30, z: 0 }, true);
+    vehicle.body.setLinvel({ x: 0, y: 0, z: 6 }, true);
+    for (let i = 0; i < 20; i++) {
+      vehicle.setInput({ ...EMPTY_INPUT, seq: 300 + i, transferCase: '4l' });
+      world.step();
+    }
+    const v = vehicle.getState().linVel;
+    // 20 ticks of free fall: horizontal speed survives, vertical builds
+    // well past the ledge-launch clamp.
+    expect(v.z).toBeGreaterThan(5.5);
+    expect(v.y).toBeLessThan(-3);
+    world.dispose();
+  });
+});
+
 describe('solid-axle vehicle: tyre pressure controls', () => {
   it('supports an immediate debug pressure override within the fitted range', () => {
     const { world, vehicle } = makeWorld();

@@ -62,7 +62,7 @@ import {
   type WaterLoad, type WaterState,
 } from './water.js';
 import {
-  createEngineState, gearedWheelAngularSpeedLimit, stepEngine, stepEngineFlooding,
+  createEngineState, stepEngine, stepEngineFlooding,
   type EngineOutput, type EngineState,
 } from './engine.js';
 // slipRatio / gripFromSlip kept in tire.ts for tests; not used here since
@@ -1934,13 +1934,6 @@ export class SolidAxleVehicle implements VehicleLike {
       sameAxleWideClimb(ledgeContacts[0], ledgeContacts[1])
       || sameAxleWideClimb(ledgeContacts[2], ledgeContacts[3])
     );
-    const drivenWheelSpeedLimit = this.drivetrain.transferCase === '4l'
-      ? gearedWheelAngularSpeedLimit(
-        this.engine,
-        ENGINE.finalDrive * this.geom.spec.finalDriveMult * this.geom.spec.lowRangeRatio,
-        ENGINE.peakTorqueRpm,
-      )
-      : Infinity;
 
     let supportedNormalLoadTotal = 0;
     let brakedNormalLoadTotal = 0;
@@ -2108,9 +2101,6 @@ export class SolidAxleVehicle implements VehicleLike {
         debug.soilDrag = w.bulldozingResistance;
         debug.slipWork = w.slipWork;
         integrateWheelSpin(w, appliedDriveTq, brakeTq, 0, dt, WHEEL.rollingResistance, this.geom.spec.wheelInertiaKgM2);
-        if (driveShare > 0 && Number.isFinite(drivenWheelSpeedLimit)) {
-          w.angVel = clamp(w.angVel, -drivenWheelSpeedLimit, drivenWheelSpeedLimit);
-        }
         debug.angularVelocity = w.angVel;
         continue;
       }
@@ -2427,9 +2417,6 @@ export class SolidAxleVehicle implements VehicleLike {
       const finalGroundTq = -finalLongForce * this.geom.wheelRadius;
       debug.groundTorque = finalGroundTq;
       integrateWheelSpin(w, appliedDriveTq, brakeTq, finalGroundTq, dt, rollingResistance, this.geom.spec.wheelInertiaKgM2);
-      if (driveShare > 0 && Number.isFinite(drivenWheelSpeedLimit)) {
-        w.angVel = clamp(w.angVel, -drivenWheelSpeedLimit, drivenWheelSpeedLimit);
-      }
       debug.angularVelocity = w.angVel;
       if (ledge && ledgeFrame) {
         w.ledgeLongForce = finalLongForce;
@@ -2465,16 +2452,40 @@ export class SolidAxleVehicle implements VehicleLike {
       this.lowRangeLedgeGrace = this.discreteLedgeSupportActive
         ? LOW_RANGE.ledgeVelocityGraceTicks
         : Math.max(0, this.lowRangeLedgeGrace - 1);
+      // The governor stands in for the driveline holding the truck back, so
+      // it only acts while the tyres can: with fewer than two wheels on
+      // anything the truck is airborne or tumbling, and clamping it would
+      // freeze a jump or fall in mid-air.
+      let supportedWheels = 0;
+      for (let i = 0; i < this.wheels.length; i++) {
+        if (hasSuspensionSupport(this.wheels[i]!)) supportedWheels++;
+      }
+      const governed = supportedWheels >= 2;
       const limited = this._scratchProbeVelocity;
       limited.x = lv.x;
-      limited.y = this.lowRangeLedgeGrace > 0
+      limited.y = governed && this.lowRangeLedgeGrace > 0
         ? clamp(lv.y, -LOW_RANGE.maxLedgeVerticalSpeed, LOW_RANGE.maxLedgeVerticalSpeed)
         : lv.y;
       limited.z = lv.z;
-      if (groundSpeed > TUNING.lowRangeMaxCrawlSpeed) {
-        const scale = TUNING.lowRangeMaxCrawlSpeed / groundSpeed;
-        limited.x *= scale;
-        limited.z *= scale;
+      if (governed) {
+        // Cap travel along the ground, not world-horizontal speed. Scaling
+        // only x/z on a grade leaves the full vertical component in place,
+        // which tilts the velocity off the surface: uphill that launched the
+        // truck off the slope it was climbing, downhill it drove it into it.
+        // Chassis up stands in for the ground normal while wheels support it;
+        // the normal component (suspension travel, a landing) is untouched.
+        const up = this._stepContext.up;
+        const normalSpeed = limited.x * up.x + limited.y * up.y + limited.z * up.z;
+        const tangentX = limited.x - up.x * normalSpeed;
+        const tangentY = limited.y - up.y * normalSpeed;
+        const tangentZ = limited.z - up.z * normalSpeed;
+        const tangentSpeed = Math.hypot(tangentX, tangentY, tangentZ);
+        if (tangentSpeed > TUNING.lowRangeMaxCrawlSpeed) {
+          const scale = TUNING.lowRangeMaxCrawlSpeed / tangentSpeed;
+          limited.x = tangentX * scale + up.x * normalSpeed;
+          limited.y = tangentY * scale + up.y * normalSpeed;
+          limited.z = tangentZ * scale + up.z * normalSpeed;
+        }
       }
       if (limited.x !== lv.x || limited.y !== lv.y || limited.z !== lv.z) {
         this.body.setLinvel(limited, true);
@@ -2498,6 +2509,11 @@ export class SolidAxleVehicle implements VehicleLike {
         limitedAngular.z = av.z - up.z * yawRate - fwd.z * rollRate;
         this.body.setAngvel(limitedAngular, true);
       }
+    } else {
+      // Both windows only mean anything in low range. Left running, a shift
+      // out and back in would reapply a clamp earned by an old obstacle.
+      this.lowRangeLedgeGrace = 0;
+      this.symmetricClimbGrace = 0;
     }
     const STATIONARY = 0.3;
     for (let i = 0; i < 4; i++) {

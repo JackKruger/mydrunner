@@ -193,9 +193,12 @@ export const ENGINE = {
   engineBrakeSpeedCoef: 6.0,
 } as const;
 
-/** Transfer-case low-range bounds. Low range is a crawl mode: its geared
- * wheel-speed limit controls sustained slip, while these chassis limits catch
- * one-tick obstacle impulses after the rigid-body solve. */
+/** Transfer-case low-range bounds. Low range is a crawl mode: maxCrawlSpeed
+ * governs chassis speed along the ground while at least two wheels have
+ * support, and the ledge limits catch one-tick obstacle impulses after the
+ * rigid-body solve. Wheel speed itself is not clamped: clamping it after the
+ * drive torque was integrated discarded the torque the tyre was reacting
+ * against, which left a locked crawler unable to hold a 60 % grade. */
 export const LOW_RANGE = {
   maxCrawlSpeed: 1.1,
   maxLedgeVerticalSpeed: 0.75,

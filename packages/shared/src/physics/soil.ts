@@ -97,10 +97,17 @@ export function stepSoftGround(
     1,
     1.5,
   );
+  // The 0.25 floor belongs to the soil model and is applied before the live
+  // multiplier, so the default (1x) reproduces the shipped grip exactly and
+  // a lab multiplier below 1 still scales the floored value down.
   const shearMultiplier = clamp(
-    (0.32 + shearBuild * 0.58 + state.soilCompaction * 0.10)
-      * excessSlipPenalty * footprintGain * TUNING.soilShearGripMult,
-    0.1,
+    clamp(
+      (0.32 + shearBuild * 0.58 + state.soilCompaction * 0.10)
+        * excessSlipPenalty * footprintGain,
+      0.25,
+      1,
+    ) * TUNING.soilShearGripMult,
+    0,
     1,
   );
   const coefficient = kind === 'deep-mud' ? 150_000 : 95_000;
