@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   Net,
   VEHICLE_PART_CATALOGS,
@@ -166,5 +166,54 @@ describe('workshop bay leases', () => {
     const authoritative = latestSnapshot(player).snap.players[0]!;
     expect(authoritative.stateSeq).toBe(3);
     expect(authoritative.vehicle.position.x).not.toBe(999);
+  });
+
+  describe('lease idle timeout', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    function leasedRoom(): { room: Room; player: TestPlayer; leaseId: string; clock: { now: number } } {
+      const clock = { now: 1_000 };
+      vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+      const room = new Room();
+      const player = addPlayer(room, 'owner');
+      parkInBay(room, player);
+      room.requestWorkshopEnter(player.id, 'service-bay-1');
+      const leaseId = latestAck(player).leaseId!;
+      expect(leaseId).toBeTruthy();
+      return { room, player, leaseId, clock };
+    }
+
+    it('keeps the bay while the leaseholder is still uploading state', () => {
+      const { room, player, clock } = leasedRoom();
+      const vehicle = latestSnapshot(player).snap.players[0]!.vehicle;
+      // Well past the 120 s lease, in steps that each stay inside it.
+      for (let seq = 2; seq <= 5; seq++) {
+        clock.now += 100_000;
+        room.applyVehicleState(player.id, { seq, vehicle });
+        room.broadcastSnapshot();
+        expect(latestSnapshot(player).snap.players[0]!.workshopMode).toBe(true);
+      }
+    });
+
+    it('renews the lease on a build request', () => {
+      const { room, player, leaseId, clock } = leasedRoom();
+      clock.now += 100_000;
+      room.requestBuildUpdate(player.id, leaseId, createStockBuild('overlander'));
+      expect(latestAck(player)).toMatchObject({ action: 'apply', ok: true });
+      clock.now += 100_000;
+      room.broadcastSnapshot();
+      expect(latestSnapshot(player).snap.players[0]!.workshopMode).toBe(true);
+    });
+
+    it('frees the bay once the leaseholder goes quiet', () => {
+      const { room, player, clock } = leasedRoom();
+      clock.now += 120_001;
+      room.broadcastSnapshot();
+      expect(latestSnapshot(player).snap.players[0]!.workshopMode).toBe(false);
+      const other = addPlayer(room, 'other');
+      parkInBay(room, other);
+      room.requestWorkshopEnter(other.id, 'service-bay-1');
+      expect(latestAck(other)).toMatchObject({ action: 'enter', ok: true });
+    });
   });
 });

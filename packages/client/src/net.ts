@@ -157,9 +157,12 @@ export class NetClient {
     this.ws.send(Net.encode({ t: 'rut-stamp', stamp }));
   }
 
-  enterWorkshop(bayId: string): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+  /** Returns whether the request was sent. A caller that marks the request
+   *  pending must clear that mark when this is false: no ack will follow. */
+  enterWorkshop(bayId: string): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
     this.ws.send(Net.encode({ t: 'workshop-enter', bayId }));
+    return true;
   }
 
   applyBuild(leaseId: string, build: VehicleBuild): void {

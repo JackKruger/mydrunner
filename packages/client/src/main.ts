@@ -334,6 +334,18 @@ function enterWorld(
   }
 }
 
+/** Drop every piece of client workshop state: the open UI, the lease, the
+ *  owner sim's workshop mode and any entry request still awaiting an ack.
+ *  Used when the server ends the lease (exit ack or expiry) and when the
+ *  connection drops, since the server frees the bay with the player. */
+function leaveWorkshopLocally(): void {
+  workshopEntryPending = false;
+  localSimulation?.exitWorkshop();
+  workshop.close();
+  workshopLeaseId = null;
+  workshopPose = null;
+}
+
 function configureDrivetrainControls(build: VehicleBuild): void {
   const fixedRwd = Physics.geomFor(build).spec.drivetrain === 'fixed-rwd';
   setDrivetrainControlsEnabled(!fixedRwd);
@@ -599,10 +611,7 @@ async function start(): Promise<void> {
         const me = snap.players.find((player) => player.id === localId);
         if (me && workshop.isOpen && !me.workshopMode && workshopLeaseId) {
           workshop.setStatus('Workshop lease expired.', true);
-          workshop.close();
-          localSimulation?.exitWorkshop();
-          workshopLeaseId = null;
-          workshopPose = null;
+          leaveWorkshopLocally();
         }
       }
       // Owner physics is intentionally untouched. The snapshot exists for
@@ -641,6 +650,10 @@ async function start(): Promise<void> {
       connected = false;
       stateUploadReady = false;
       rutSyncReady = false;
+      // The server releases a disconnected player's lease, and an entry
+      // request in flight will never be answered. Without this the pending
+      // flag stays set and the workshop prompt never reappears.
+      leaveWorkshopLocally();
       // A fatal close is one retrying cannot fix (protocol-version
       // mismatch). Leave the reason on screen instead of burying it under
       // a retry countdown that would never succeed.
@@ -711,12 +724,7 @@ async function start(): Promise<void> {
         if (workshopLeaseId) net.exitWorkshop(workshopLeaseId);
         return;
       }
-      if (msg.action === 'exit') {
-        localSimulation?.exitWorkshop();
-        workshop.close();
-        workshopLeaseId = null;
-        workshopPose = null;
-      }
+      if (msg.action === 'exit') leaveWorkshopLocally();
     },
     onWinchAck(msg) {
       winchController.onAck(msg);
@@ -735,7 +743,7 @@ async function start(): Promise<void> {
     workshopEntryPending = true;
     winchController.detach();
     workshopPrompt.classList.remove('visible');
-    net.enterWorkshop(nearbyBayId);
+    if (!net.enterWorkshop(nearbyBayId)) workshopEntryPending = false;
   };
   workshopPrompt.addEventListener('click', requestWorkshop);
   window.addEventListener('keydown', (event) => {

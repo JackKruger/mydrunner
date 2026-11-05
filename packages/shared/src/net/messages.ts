@@ -644,7 +644,20 @@ export function decodeClient(raw: Wire): ClientMessage {
         || stamp.depth <= 0 || stamp.depth > 0.04) {
         throw new Error('rut-stamp: malformed or out of range');
       }
-      return { t: 'rut-stamp', stamp: stamp as unknown as PredictedRutStamp };
+      // Rebuild from the validated fields only. The room spreads this into
+      // the authoritative stamp it re-broadcasts to every peer, so passing
+      // the decoded object through would relay whatever extra keys a
+      // modified client chose to attach.
+      const validated: PredictedRutStamp = {
+        ownerSequence: stamp.ownerSequence as number,
+        x: stamp.x,
+        z: stamp.z,
+        heading: stamp.heading,
+        radiusLong: stamp.radiusLong,
+        radiusLat: stamp.radiusLat,
+        depth: stamp.depth,
+      };
+      return { t: 'rut-stamp', stamp: validated };
     }
     default:
       throw new Error('client message: unknown type');

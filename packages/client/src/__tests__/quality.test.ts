@@ -104,7 +104,7 @@ describe('the quality table', () => {
     // be <= high on the numbers and must not enable anything high disables.
     const budgets: (keyof QualitySettings)[] = [
       'pixelRatioCap', 'terrainOctaves', 'cloudOctaves', 'waterOctaves',
-      'maxParticles', 'particleDensity', 'particleAtlasFrames', 'softParticles',
+      'maxParticles', 'particleDensity', 'particleAtlasFrames',
       'effectDrawDistance', 'trackSegments', 'menuPanoramaHz',
       'groundCoverDensity', 'groundCoverDrawDistance',
     ];
@@ -115,7 +115,7 @@ describe('the quality table', () => {
     const features: (keyof QualitySettings)[] = [
       'antialias', 'shadows', 'terrainSecondaryBlend', 'terrainTriplanarSampling',
       'terrainNormalMaps', 'cloudFineLayer',
-      'waterRippleNormal', 'waterFilaments', 'detailedSuspension',
+      'waterRippleNormal', 'waterFilaments', 'detailedSuspension', 'softParticles',
     ];
     for (const field of features) {
       if (QUALITY.low[field]) expect(QUALITY.high[field], field).toBe(true);
