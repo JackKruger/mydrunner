@@ -57,7 +57,7 @@ describe('LocalSimulation', () => {
     sim.dispose();
     replacement.dispose();
     reconnect.dispose();
-  });
+  }, 20_000); // builds the full procedural map; ~1.4 s alone, >5 s under parallel CI load
 
   it('interpolates between completed fixed steps', () => {
     const { sim } = makeSimulation();
