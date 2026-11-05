@@ -3,7 +3,13 @@ import { expect, test } from '@playwright/test';
 test('renders and operates an attached recovery cable', async ({ page }) => {
   await page.goto('/?auto=1&name=winch-test');
   await expect(page.locator('#hud')).toContainText('connected', { timeout: 20_000 });
-  await expect.poll(() => page.evaluate(() => Boolean((window as any).__localSimulation))).toBe(true);
+  // 'connected' shows when the socket opens; the local simulation only exists
+  // once the welcome has composed the world and built Rapier, which takes
+  // longer than the default 5 s poll on a loaded runner.
+  await expect.poll(
+    () => page.evaluate(() => Boolean((window as any).__localSimulation)),
+    { timeout: 20_000 },
+  ).toBe(true);
 
   await page.evaluate(() => {
     const w = window as any;

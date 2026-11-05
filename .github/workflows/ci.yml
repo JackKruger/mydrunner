@@ -18,21 +18,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm build
-      # TEMPORARY: unit and e2e suites are disabled so the branch can go
-      # live for manual play-testing. 5 tests across 4 files are red as of
-      # this commit - logCrawl, axleRegressions (x2), wheelLedge and
-      # waterPhysics - all of them the outstanding obstacle-contact work
-      # (D1/D2/D4) documented in CLAUDE.md, which is red on purpose. So
-      # this job could never go green and every push reported a failure.
-      #
-      # typecheck + build stay on: they are what stop a compile error from
-      # shipping to Pages, which is the only thing CI here actually guards.
-      #
-      # Re-enable by flipping RUN_TESTS to 'true' (repo Settings ->
-      # Variables -> Actions), or delete the `if:` lines once the obstacle
-      # contact work lands.
+      # Known-red tests are quarantined in the suites themselves (it.fails /
+      # it.skip / test.fixme, each with the reason), not by switching CI off:
+      # while the suites were gated behind RUN_TESTS, three unrelated
+      # physics regressions landed unnoticed.
       - run: pnpm test
-        if: ${{ vars.RUN_TESTS == 'true' }}
+      # e2e stays behind RUN_TESTS until its editor specs are triaged.
       - run: pnpm --filter @mydrunner/e2e exec playwright install chromium
         if: ${{ vars.RUN_TESTS == 'true' }}
       - run: pnpm test:e2e

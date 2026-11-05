@@ -16,7 +16,15 @@ test('client loads, connects, and renders snapshots', async ({ page }) => {
   // HUD switches from "connecting…" to "connected · …" once snapshots arrive.
   const hud = page.locator('#hud');
   await expect(hud).toContainText('connected', { timeout: 10_000 });
-  await expect(hud).toContainText(/tick=\d+/);
+  // The HUD no longer prints the server tick (removed in the deca505 HUD
+  // redesign), so read the snapshot stream itself: at least two buffered
+  // snapshots with an advancing server tick.
+  await expect.poll(() => page.evaluate(() => {
+    const buffer = (window as unknown as {
+      __scene?: { buffer?: Array<{ snap: { tick: number } }> };
+    }).__scene?.buffer ?? [];
+    return buffer.length >= 2 && buffer[buffer.length - 1]!.snap.tick > buffer[0]!.snap.tick;
+  }), { timeout: 15_000 }).toBe(true);
 
   // Canvas should exist and be sized.
   const canvas = page.locator('canvas').first();
@@ -46,7 +54,15 @@ test('the reduced graphics tier compiles and renders', async ({ page }) => {
 
   const hud = page.locator('#hud');
   await expect(hud).toContainText('connected', { timeout: 10_000 });
-  await expect(hud).toContainText(/tick=\d+/);
+  // The HUD no longer prints the server tick (removed in the deca505 HUD
+  // redesign), so read the snapshot stream itself: at least two buffered
+  // snapshots with an advancing server tick.
+  await expect.poll(() => page.evaluate(() => {
+    const buffer = (window as unknown as {
+      __scene?: { buffer?: Array<{ snap: { tick: number } }> };
+    }).__scene?.buffer ?? [];
+    return buffer.length >= 2 && buffer[buffer.length - 1]!.snap.tick > buffer[0]!.snap.tick;
+  }), { timeout: 15_000 }).toBe(true);
   await expect(page.locator('canvas').first()).toBeVisible();
 
   expect(consoleErrors, consoleErrors.join('\n')).toEqual([]);
