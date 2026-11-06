@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const SOURCES = [
   '../physics/axle.ts',
+  '../physics/contactPatch.ts',
   '../physics/differential.ts',
   '../physics/engine.ts',
   '../physics/soil.ts',
@@ -12,7 +13,9 @@ const SOURCES = [
   '../physics/tire.ts',
   '../physics/tireCarcass.ts',
   '../physics/util.ts',
+  '../physics/vehicleKinematics.ts',
   '../physics/wheelContact.ts',
+  '../physics/wheelSupport.ts',
 ] as const;
 
 /** Every method the owner tick runs at 60 Hz, so a rename or a dropped mark
@@ -27,6 +30,8 @@ const REQUIRED_MARKS: Record<string, readonly string[]> = {
     'phaseDriveline',
     'phaseTyreSoil',
   ],
+  '../physics/vehicleKinematics.ts': ['wheelCenterWorldPoseInto', 'axleBeamRotationInto'],
+  '../physics/wheelSupport.ts': ['findTerrainSidewallContactInto'],
 };
 
 const ALLOCATING_ARRAY_METHODS = new Set([
