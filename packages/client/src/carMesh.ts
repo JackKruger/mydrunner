@@ -12,6 +12,7 @@ import {
   normalizeVehicleBuild,
   type CarKind,
   type PaintFinish,
+  type VehicleBaseId,
   type VehicleBuild,
 } from '@mydrunner/shared';
 import {
@@ -692,23 +693,57 @@ function addSharedDetail(
   group.userData.vehicleVisualLayout = layout;
 }
 
-function addBaseCharacter(
-  group: THREE.Group,
-  layout: VehicleVisualLayout,
-  mats: Materials,
-  build: VehicleBuild,
-): void {
-  const ext = layout.extents;
-  const trim = mats.trim;
-  if (build.baseId === 'overlander') {
-    const belt = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 2.04, 0.07, ext.z * 1.55), trim);
+type BodyBuilder = (group: THREE.Group, layout: VehicleVisualLayout, mats: Materials, build: VehicleBuild) => void;
+
+/** The body for each visual style, in the order its parts are added. A
+ *  Record so a new style is a compile error until it has a body. */
+const BODY_BUILDERS: Record<VehicleVisualLayout['style'], BodyBuilder> = {
+  wagon(group, layout, mats, build) {
+    buildLowerBodyAndFlares(group, layout.extents, mats, build);
+    buildWagonBody(group, layout, mats);
+    addSharedDetail(group, layout, mats, build);
+  },
+  utility(group, layout, mats, build) {
+    buildLowerBodyAndFlares(group, layout.extents, mats, build);
+    buildUtilityBody(group, layout, mats);
+    addSharedDetail(group, layout, mats, build);
+  },
+  rally(group, layout, mats, build) {
+    buildRallyBody(group, layout, mats, build);
+    addSharedDetail(group, layout, mats, build);
+  },
+  crawler(group, layout, mats, build) {
+    buildCrawlerBody(group, layout, mats);
+    // addSharedDetail records these for the other styles; the crawler's
+    // tube frame has none of that detail but downstream still reads them.
+    group.userData.vehicleBuild = build;
+    group.userData.vehicleVisualLayout = layout;
+  },
+};
+
+type CharacterBuilder = (group: THREE.Group, layout: VehicleVisualLayout, mats: Materials) => void;
+
+/** Details that set one base apart from others sharing its body style.
+ *  Keyed by every base, null where the style alone suffices, so a new base
+ *  is a compile error until someone decides whether it needs any. */
+const BASE_CHARACTER: Record<VehicleBaseId, CharacterBuilder | null> = {
+  ridgeback: null,
+  'stockman-dual': null,
+  outclaw: null,
+  overlander(group, layout, mats) {
+    const ext = layout.extents;
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 2.04, 0.07, ext.z * 1.55), mats.trim);
     belt.position.set(0, ext.y * 1.1, -ext.z * 0.12);
     group.add(belt);
-  } else if (build.baseId === 'stockman-single') {
+  },
+  'stockman-single'(group, layout, mats) {
+    const ext = layout.extents;
     const headboard = new THREE.Mesh(new THREE.BoxGeometry(ext.x * 1.82, 0.08, 0.08), mats.chrome);
     headboard.position.set(0, ext.y + layout.tray!.wallHeight, layout.tray!.frontZ - 0.05);
     group.add(headboard);
-  } else if (build.baseId === 'longreach') {
+  },
+  longreach(group, layout, mats) {
+    const ext = layout.extents;
     for (const side of [-1, 1]) {
       const cargoWindow = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.50, ext.z * 0.52), mats.glass);
       cargoWindow.position.set(
@@ -718,7 +753,9 @@ function addBaseCharacter(
       );
       group.add(cargoWindow);
     }
-  } else if (build.baseId === 'dustback-rs') {
+  },
+  'dustback-rs'(group, layout, mats) {
+    const ext = layout.extents;
     for (const side of [-1, 1]) {
       const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.035, layout.cabin.sideWindows[0].size.y, 0.07), mats.trim);
       pillar.name = `rally.bPillar.${side}`;
@@ -741,8 +778,8 @@ function addBaseCharacter(
       new THREE.Vector3(ext.x * 0.50, layout.cabin.roofY - 0.05, layout.cabin.rearZ + 0.30),
       0.025, mats.chrome, 'rally.rollCage.right',
     );
-  }
-}
+  },
+};
 
 function addRallyAccessories(
   front: THREE.Group,
@@ -964,27 +1001,10 @@ export function buildCarMesh(value: CarKind | VehicleBuild, _isLocal: boolean, _
   const group = new THREE.Group();
   group.name = `vehicle.${build.baseId}`;
   const layout = createVehicleVisualLayout(build);
-  const ext = layout.extents;
   const mats = makeMaterials(Number.parseInt(build.paintColor.slice(1), 16), build.paintFinish);
 
-  if (layout.style === 'crawler') {
-    buildCrawlerBody(group, layout, mats);
-  } else if (layout.style !== 'rally') {
-    buildLowerBodyAndFlares(group, ext, mats, build);
-  }
-  if (layout.style === 'rally') {
-    buildRallyBody(group, layout, mats, build);
-  } else if (layout.style === 'utility') {
-    buildUtilityBody(group, layout, mats);
-  } else if (layout.style === 'wagon') {
-    buildWagonBody(group, layout, mats);
-  }
-  if (layout.style !== 'crawler') addSharedDetail(group, layout, mats, build);
-  else {
-    group.userData.vehicleBuild = build;
-    group.userData.vehicleVisualLayout = layout;
-  }
-  addBaseCharacter(group, layout, mats, build);
+  BODY_BUILDERS[layout.style](group, layout, mats, build);
+  BASE_CHARACTER[build.baseId]?.(group, layout, mats);
   addAccessories(group, layout, mats, build);
   const { axles, wheels, tires } = buildAxles(group, build, mats.dirt, mats.rubberDetail);
   const suspension = buildSuspensionVisual(group, axles, build);
