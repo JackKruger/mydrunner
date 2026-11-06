@@ -388,6 +388,32 @@ export function steeringLimitForSpeed(
   return Math.min(mechanicalLimit, dynamicLimit);
 }
 
+/** Wheel state the debug record mirrors whether or not the wheel is loaded. */
+function copyWheelStateDebug(debug: WheelDebugTelemetry, w: WheelKinematic): void {
+  debug.suspensionCompression = Math.max(0, w.resolvedDepth);
+  debug.contactZone = w.contactZone;
+  debug.treadFraction = w.treadFraction;
+  debug.suspensionAxisAlignment = w.suspensionAxisAlignment;
+  debug.carcassDeflection = w.tireDeflection;
+  debug.suspensionForce = w.suspensionForce;
+  debug.carcassForce = w.carcassForce;
+  debug.sinkDepth = w.sinkDepth;
+  debug.soilDrag = w.bulldozingResistance;
+  debug.slipWork = w.slipWork;
+}
+
+/** The patch a wheel transmits torque through this tick. Vectors alias the
+ *  contact or frame they came from; nothing here is owned. */
+interface TorquePatchSelection {
+  ledge: SteepWheelContact | null;
+  ledgeFrame: WheelContactFrame | null;
+  point: Vec3;
+  longitudinal: Vec3;
+  lateral: Vec3;
+  surfMult: number;
+  normalLoad: number;
+}
+
 export class SolidAxleVehicle implements VehicleLike {
   private readonly world: World;
   readonly id: string;
@@ -443,6 +469,17 @@ export class SolidAxleVehicle implements VehicleLike {
   /** Preserve low-range obstacle damping across the brief face-to-tread
    *  contact handoff, when neither axle can report both contacts at once. */
   private readonly lowRangeGovernor = createLowRangeGovernor();
+  private readonly _loadTotals = { supported: 0, braked: 0 };
+  private readonly _rollingScratch = { withWater: 0, terrain: 0 };
+  private readonly _patchSelection: TorquePatchSelection = {
+    ledge: null,
+    ledgeFrame: null,
+    point: { x: 0, y: 0, z: 0 },
+    longitudinal: { x: 0, y: 0, z: 1 },
+    lateral: { x: 1, y: 0, z: 0 },
+    surfMult: 0,
+    normalLoad: 0,
+  };
   private readonly _lowRangeInputs: LowRangeGovernorInputs = {
     linearVelocity: { x: 0, y: 0, z: 0 },
     up: { x: 0, y: 1, z: 0 },
@@ -1903,6 +1940,168 @@ export class SolidAxleVehicle implements VehicleLike {
     return limited;
   }
 
+  /** Normal load on every wheel's torque-transmitting patch, summed over
+   *  all four and over the braked ones. Read-only first pass of
+   *  phaseTyreSoil: the hold forces split the chassis mass by these. @hotloop */
+  private sumContactLoads(): { supported: number; braked: number } {
+    const out = this._loadTotals;
+    out.supported = 0;
+    out.braked = 0;
+    for (let wIdx = 0; wIdx < 4; wIdx++) {
+      const isFront = wIdx < 2;
+      const isBraked = this.input.brake > 0
+        || (!isFront && this.input.handbrake > 0);
+
+      const w = this.wheels[wIdx]!;
+      const basis = this._wheelBases[wIdx]!;
+      const ledge = this._ledgeContacts[wIdx];
+      const ledgeFrame = ledge
+        ? contactFrameInto(ledge.normal, basis.axle, basis.forward, this._contactFrames[wIdx]!)
+        : null;
+      let contactLoad = 0;
+      const ledgeTreadFraction = this._ledgeSemantics[wIdx]?.treadFraction ?? 0;
+      if (ledge && ledgeFrame && ledgeTreadFraction > 0) {
+        contactLoad = Math.max(0, w.volumeSupport ? (w.lastForce ?? 0) : this._ledgeLoads[wIdx]!);
+      } else if (w.contact) {
+        contactLoad = Math.max(0, w.lastForce ?? 0);
+      }
+      out.supported += contactLoad;
+      if (isBraked) out.braked += contactLoad;
+    }
+    return out;
+  }
+
+  /** Rolling resistance for one wheel: with wading drag, and terrain-only
+   *  (what the soil's rolling drag force is built from). @hotloop */
+  private rollingResistancesInto(
+    w: WheelKinematic,
+    out: { withWater: number; terrain: number },
+  ): { withWater: number; terrain: number } {
+    // Surface-dependent rolling resistance. Mud and deep mud provide
+    // significantly more drag than hard surfaces.
+    let rollingMult = 1.0;
+    if (w.surface === Surface.Mud) rollingMult = TUNING.rollingResistanceMudMult;
+    else if (w.surface === Surface.DeepMud) rollingMult = TUNING.rollingResistanceDeepMudMult;
+    const terrainRollingMult = rollingMult;
+    // Wading is heavy. Additive on top of the bed's own resistance, so
+    // a submerged mud bog is worse than either alone.
+    if (w.waterDepth > 0) {
+      rollingMult += (WATER.wheelDragMult - 1) * wheelSubmersion(w.waterDepth, this.geom.wheelRadius);
+    }
+    out.withWater = WHEEL.rollingResistance * TUNING.rollingResistanceMult * rollingMult
+      * this.geom.spec.rollingResistanceMult
+      * (surfaceInfo(w.surface).traction.soil === 'none'
+        ? pressureRollingScale(
+          this.tirePressurePsi,
+          this.geom.spec.tireCarcass.nominalPressurePsi,
+        )
+        : 1);
+    out.terrain = WHEEL.rollingResistance
+      * TUNING.rollingResistanceMult * terrainRollingMult
+      * this.geom.spec.rollingResistanceMult
+      // A soft tyre's extra hysteresis is a sealed-surface penalty. In soil
+      // its larger footprint is already represented by pressure-dependent
+      // bearing/sinkage and must not be charged a second opposing torque.
+      * (surfaceInfo(w.surface).traction.soil === 'none'
+        ? pressureRollingScale(
+          this.tirePressurePsi,
+          this.geom.spec.tireCarcass.nominalPressurePsi,
+        )
+        : 1);
+    return out;
+  }
+
+  /** Pick one torque-transmitting patch, or null for a wheel with none.
+   *
+   *  A steep tyre-volume contact takes priority so drive torque acts up its
+   *  tangent; the support ray still supplies suspension force but must not
+   *  transmit the same drive torque a second time. A pure sidewall contact
+   *  has no rolling frame and therefore falls back to the support patch.
+   *  @hotloop */
+  private selectTorquePatch(wIdx: number, out: TorquePatchSelection): TorquePatchSelection | null {
+    const w = this.wheels[wIdx]!;
+    const basis = this._wheelBases[wIdx]!;
+    const ledge = this._ledgeContacts[wIdx] ?? null;
+    const ledgeFrame = ledge
+      ? contactFrameInto(ledge.normal, basis.axle, basis.forward, this._contactFrames[wIdx]!)
+      : null;
+    out.ledge = ledge;
+    out.ledgeFrame = ledgeFrame;
+    const treadFraction = this._ledgeSemantics[wIdx]?.treadFraction ?? 0;
+    if (ledge && ledgeFrame && treadFraction > 0) {
+      const edgeWrapScale = this.tireEdgeWrapPressureScale * TUNING.tireEdgeWrapMult;
+      out.point = ledge.point;
+      // The pair has to be orthogonal or `longV` and `latV` double-count the
+      // same velocity component and the friction ellipse works in a skewed
+      // basis. `ledgeFrame` is an orthonormal triad, so its own longitudinal
+      // and lateral belong together — but the climb direction is a different
+      // vector (hub toward a target above the crest), and pairing it with
+      // `ledgeFrame.lateral` was mixing two bases. `wheelContact` projects the
+      // climb direction perpendicular to the axle, so when it is in use the
+      // axle itself is the exactly-orthogonal lateral, and it is the right
+      // direction anyway: lateral tyre force acts across the tread.
+      if (ledge.climbDirection) {
+        out.longitudinal = ledge.climbDirection;
+        out.lateral = basis.axle;
+      } else {
+        out.longitudinal = ledgeFrame.longitudinal;
+        out.lateral = ledgeFrame.lateral;
+      }
+      out.surfMult = clamp(ledge.friction, 0, 2) * LEDGE_CONTACT.tractionMultiplier
+        * edgeWrapScale * treadFraction;
+      out.normalLoad = Math.max(0, w.volumeSupport ? (w.lastForce ?? 0) : this._ledgeLoads[wIdx]!);
+      return out;
+    }
+    if (w.contact) {
+      const supportFrame = contactFrameInto(
+        w.contactNormal, basis.axle, basis.forward, this._supportFrames[wIdx]!,
+      );
+      out.point = w.contactPoint;
+      out.longitudinal = supportFrame?.longitudinal ?? basis.forward;
+      out.lateral = supportFrame?.lateral ?? basis.axle;
+      out.surfMult = w.supportGrip * w.treadFraction;
+      out.normalLoad = Math.max(0, w.lastForce ?? 0);
+      return out;
+    }
+    return null;
+  }
+
+  /** A wheel with no torque-transmitting patch: soil releases, the debug
+   *  record reads as unloaded, and the wheel spins on drive and brake alone.
+   *  @hotloop */
+  private stepFreeWheel(
+    w: WheelKinematic,
+    debug: WheelDebugTelemetry,
+    driveTq: number,
+    brakeTq: number,
+    dt: number,
+  ): void {
+    stepSoftGround(
+      w, 'none', 0, this.tirePressurePsi,
+      this.geom.wheelWidth, this.geom.wheelRadius, 0, 0, dt,
+      w.soilResult,
+    );
+    debug.driveTorque = 0;
+    debug.contact = false;
+    debug.surface = w.surface;
+    debug.waterDepth = w.waterDepth;
+    debug.normalLoad = 0;
+    debug.gripCoefficient = 0;
+    debug.gripLimit = 0;
+    debug.longitudinalForce = 0;
+    debug.relaxedLongitudinalForce = w.relaxedLongitudinalForce;
+    debug.lateralForce = 0;
+    debug.force.x = 0;
+    debug.force.y = 0;
+    debug.force.z = 0;
+    debug.slipRatio = 0;
+    debug.slipAngle = 0;
+    debug.utilization = 0;
+    copyWheelStateDebug(debug, w);
+    integrateWheelSpin(w, driveTq, brakeTq, 0, dt, WHEEL.rollingResistance, this.geom.spec.wheelInertiaKgM2);
+    debug.angularVelocity = w.angVel;
+  }
+
   /** 6. Per-wheel tyre forces, soil response and spin integration.
    *
    *  A locked wheel is a tangential contact constraint, not merely a wheel
@@ -1922,38 +2121,15 @@ export class SolidAxleVehicle implements VehicleLike {
     const totalDrivelineTorque = ctx.totalDrivelineTorque;
     const frontShare = ctx.frontShare;
     const rearShare = ctx.rearShare;
-    const wheelBases = this._wheelBases;
     const ledgeContacts = this._ledgeContacts;
-    const ledgeSemantics = this._ledgeSemantics;
-    const ledgeLoads = this._ledgeLoads;
     const symmetricLowRangeClimb = this.drivetrain.transferCase === '4l' && (
       sameAxleWideClimb(ledgeContacts[0], ledgeContacts[1])
       || sameAxleWideClimb(ledgeContacts[2], ledgeContacts[3])
     );
 
-    let supportedNormalLoadTotal = 0;
-    let brakedNormalLoadTotal = 0;
-    for (let wIdx = 0; wIdx < 4; wIdx++) {
-      const isFront = wIdx < 2;
-      const isBraked = this.input.brake > 0
-        || (!isFront && this.input.handbrake > 0);
-
-      const w = this.wheels[wIdx]!;
-      const basis = wheelBases[wIdx]!;
-      const ledge = ledgeContacts[wIdx];
-      const ledgeFrame = ledge
-        ? contactFrameInto(ledge.normal, basis.axle, basis.forward, this._contactFrames[wIdx]!)
-        : null;
-      let contactLoad = 0;
-      const ledgeTreadFraction = ledgeSemantics[wIdx]?.treadFraction ?? 0;
-      if (ledge && ledgeFrame && ledgeTreadFraction > 0) {
-        contactLoad = Math.max(0, w.volumeSupport ? (w.lastForce ?? 0) : ledgeLoads[wIdx]!);
-      } else if (w.contact) {
-        contactLoad = Math.max(0, w.lastForce ?? 0);
-      }
-      supportedNormalLoadTotal += contactLoad;
-      if (isBraked) brakedNormalLoadTotal += contactLoad;
-    }
+    const loads = this.sumContactLoads();
+    const supportedNormalLoadTotal = loads.supported;
+    const brakedNormalLoadTotal = loads.braked;
     const vehicleMass = VEHICLE.mass * this.geom.massMult;
     const staticLateralHold = this._scratchStaticLateralHold;
     staticLateralHold.x = 0;
@@ -1968,8 +2144,6 @@ export class SolidAxleVehicle implements VehicleLike {
       const axle = isFront ? this.axles[0]! : this.axles[1]!;
       const ag = axle.geom;
 
-      const basis = wheelBases[wIdx]!;
-
       const driveShare = (isFront ? frontShare : rearShare) * 0.5; // per wheel
       const driveTq = ag.hasDrive ? totalDrivelineTorque * driveShare : 0;
       // The handbrake is rear-only and carries its own force: it has to
@@ -1981,125 +2155,26 @@ export class SolidAxleVehicle implements VehicleLike {
         + (isFront ? 0 : this.input.handbrake * TUNING.handbrakeForce);
       const brakeTq = brakeForceN * this.geom.wheelRadius;
 
-      // Surface-dependent rolling resistance. Mud and deep mud provide
-      // significantly more drag than hard surfaces.
-      let rollingMult = 1.0;
-      if (w.surface === Surface.Mud) rollingMult = TUNING.rollingResistanceMudMult;
-      else if (w.surface === Surface.DeepMud) rollingMult = TUNING.rollingResistanceDeepMudMult;
-      const terrainRollingMult = rollingMult;
-      // Wading is heavy. Additive on top of the bed's own resistance, so
-      // a submerged mud bog is worse than either alone.
-      if (w.waterDepth > 0) {
-        rollingMult += (WATER.wheelDragMult - 1) * wheelSubmersion(w.waterDepth, this.geom.wheelRadius);
-      }
-      const rollingResistance = WHEEL.rollingResistance * TUNING.rollingResistanceMult * rollingMult
-        * this.geom.spec.rollingResistanceMult
-        * (surfaceInfo(w.surface).traction.soil === 'none'
-          ? pressureRollingScale(
-            this.tirePressurePsi,
-            this.geom.spec.tireCarcass.nominalPressurePsi,
-          )
-          : 1);
-      const terrainRollingResistance = WHEEL.rollingResistance
-        * TUNING.rollingResistanceMult * terrainRollingMult
-        * this.geom.spec.rollingResistanceMult
-        // A soft tyre's extra hysteresis is a sealed-surface penalty. In soil
-        // its larger footprint is already represented by pressure-dependent
-        // bearing/sinkage and must not be charged a second opposing torque.
-        * (surfaceInfo(w.surface).traction.soil === 'none'
-          ? pressureRollingScale(
-            this.tirePressurePsi,
-            this.geom.spec.tireCarcass.nominalPressurePsi,
-          )
-          : 1);
+      const rolling = this.rollingResistancesInto(w, this._rollingScratch);
+      const rollingResistance = rolling.withWater;
+      const terrainRollingResistance = rolling.terrain;
 
-      // Pick one torque-transmitting patch. A steep tyre-volume contact
-      // takes priority so drive torque acts up its tangent; the support ray
-      // still supplies suspension force but must not transmit the same drive
-      // torque a second time. A pure sidewall contact has no rolling frame
-      // and therefore falls back to the support patch.
-      let cp: Vec3;
-      let tireLong: Vec3;
-      let tireLat: Vec3;
-      let surfMult: number;
-      let normalLoad: number;
       const appliedDriveTq = driveTq;
       debug.driveTorque = appliedDriveTq;
       debug.brakeTorque = brakeTq;
       debug.groundTorque = 0;
-      const ledge = ledgeContacts[wIdx];
-      const ledgeFrame = ledge
-        ? contactFrameInto(ledge.normal, basis.axle, basis.forward, this._contactFrames[wIdx]!)
-        : null;
-      const treadFraction = ledgeSemantics[wIdx]?.treadFraction ?? 0;
-      if (ledge && ledgeFrame && treadFraction > 0) {
-        const edgeWrapScale = this.tireEdgeWrapPressureScale * TUNING.tireEdgeWrapMult;
-        cp = ledge.point;
-        // The pair has to be orthogonal or `longV` and `latV` double-count the
-        // same velocity component and the friction ellipse works in a skewed
-        // basis. `ledgeFrame` is an orthonormal triad, so its own longitudinal
-        // and lateral belong together — but the climb direction is a different
-        // vector (hub toward a target above the crest), and pairing it with
-        // `ledgeFrame.lateral` was mixing two bases. `wheelContact` projects the
-        // climb direction perpendicular to the axle, so when it is in use the
-        // axle itself is the exactly-orthogonal lateral, and it is the right
-        // direction anyway: lateral tyre force acts across the tread.
-        if (ledge.climbDirection) {
-          tireLong = ledge.climbDirection;
-          tireLat = basis.axle;
-        } else {
-          tireLong = ledgeFrame.longitudinal;
-          tireLat = ledgeFrame.lateral;
-        }
-        surfMult = clamp(ledge.friction, 0, 2) * LEDGE_CONTACT.tractionMultiplier
-          * edgeWrapScale * treadFraction;
-        normalLoad = Math.max(0, w.volumeSupport ? (w.lastForce ?? 0) : ledgeLoads[wIdx]!);
-      } else if (w.contact) {
-        const supportFrame = contactFrameInto(
-          w.contactNormal, basis.axle, basis.forward, this._supportFrames[wIdx]!,
-        );
-        cp = w.contactPoint;
-        tireLong = supportFrame?.longitudinal ?? basis.forward;
-        tireLat = supportFrame?.lateral ?? basis.axle;
-        surfMult = w.supportGrip * w.treadFraction;
-        normalLoad = Math.max(0, w.lastForce ?? 0);
-      } else {
-        // No torque-transmitting patch on a free wheel.
-        stepSoftGround(
-          w, 'none', 0, this.tirePressurePsi,
-          this.geom.wheelWidth, this.geom.wheelRadius, 0, 0, dt,
-          w.soilResult,
-        );
-        debug.driveTorque = 0;
-        debug.contact = false;
-        debug.surface = w.surface;
-        debug.waterDepth = w.waterDepth;
-        debug.normalLoad = 0;
-        debug.gripCoefficient = 0;
-        debug.gripLimit = 0;
-        debug.longitudinalForce = 0;
-        debug.relaxedLongitudinalForce = w.relaxedLongitudinalForce;
-        debug.lateralForce = 0;
-        debug.force.x = 0;
-        debug.force.y = 0;
-        debug.force.z = 0;
-        debug.slipRatio = 0;
-        debug.slipAngle = 0;
-        debug.utilization = 0;
-        debug.suspensionCompression = Math.max(0, w.resolvedDepth);
-        debug.contactZone = w.contactZone;
-        debug.treadFraction = w.treadFraction;
-        debug.suspensionAxisAlignment = w.suspensionAxisAlignment;
-        debug.carcassDeflection = w.tireDeflection;
-        debug.suspensionForce = w.suspensionForce;
-        debug.carcassForce = w.carcassForce;
-        debug.sinkDepth = w.sinkDepth;
-        debug.soilDrag = w.bulldozingResistance;
-        debug.slipWork = w.slipWork;
-        integrateWheelSpin(w, appliedDriveTq, brakeTq, 0, dt, WHEEL.rollingResistance, this.geom.spec.wheelInertiaKgM2);
-        debug.angularVelocity = w.angVel;
+      const sel = this.selectTorquePatch(wIdx, this._patchSelection);
+      if (!sel) {
+        this.stepFreeWheel(w, debug, appliedDriveTq, brakeTq, dt);
         continue;
       }
+      const ledge = sel.ledge;
+      const ledgeFrame = sel.ledgeFrame;
+      const cp = sel.point;
+      const tireLong = sel.longitudinal;
+      const tireLat = sel.lateral;
+      let surfMult = sel.surfMult;
+      const normalLoad = sel.normalLoad;
 
       // Velocity of the chassis at the selected contact point.
       const armX = cp.x - t.x;
@@ -2397,16 +2472,7 @@ export class SolidAxleVehicle implements VehicleLike {
       debug.slipRatio = longSlip;
       debug.slipAngle = alpha;
       debug.utilization = utilization;
-      debug.suspensionCompression = Math.max(0, w.resolvedDepth);
-      debug.contactZone = w.contactZone;
-      debug.treadFraction = w.treadFraction;
-      debug.suspensionAxisAlignment = w.suspensionAxisAlignment;
-      debug.carcassDeflection = w.tireDeflection;
-      debug.suspensionForce = w.suspensionForce;
-      debug.carcassForce = w.carcassForce;
-      debug.sinkDepth = w.sinkDepth;
-      debug.soilDrag = w.bulldozingResistance;
-      debug.slipWork = w.slipWork;
+      copyWheelStateDebug(debug, w);
 
       // Update wheel angular velocity using the force actually transmitted
       // through the contact patch (impulse-clamped integration).
