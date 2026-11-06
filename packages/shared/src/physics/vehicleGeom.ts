@@ -76,9 +76,8 @@ function buildGeom(value: CarKind | VehicleBuild): VehicleGeom {
   const frontMass = spec.massKg * 0.52;
   const rearMass = spec.massKg * 0.48;
   const rollBase = 24_000 + spec.stability * 16_000;
-  const portal = spec.build.axleId.endsWith('.portal-240');
-  const probeScale = portal ? 0.75 : 1;
-  const portalClearance = portal ? 0.08 : 0;
+  const probeScale = spec.axleProbeScale;
+  const portalClearance = spec.portalClearance;
   const common = {
     centerLocalY: -half.y,
     trackHalf: spec.track * 0.5,
@@ -97,7 +96,7 @@ function buildGeom(value: CarKind | VehicleBuild): VehicleGeom {
         z: 0.16 * probeScale,
       },
       verticalOffset: portalClearance,
-      portal,
+      portal: portalClearance > 0,
     },
   };
   return {

@@ -2787,8 +2787,7 @@ export class SolidAxleVehicle implements VehicleLike {
   }
 
   private minimumPressurePsi(): number {
-    const beadlockReduction = this.build.wheelId.endsWith('.beadlock-alloy') ? 4 : 0;
-    return Math.max(4, this.geom.spec.tireCarcass.minPressurePsi - beadlockReduction);
+    return this.geom.spec.minPressurePsi;
   }
 
   private updatePressure(speed: number, dt: number): void {

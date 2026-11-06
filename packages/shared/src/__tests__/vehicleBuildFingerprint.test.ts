@@ -83,13 +83,13 @@ function fingerprint(baseId: VehicleBaseId): string {
 }
 
 const EXPECTED: Record<VehicleBaseId, string> = {
-  ridgeback: 'bbca995800882271',
-  overlander: '3fd6f3e5a37770df',
-  'stockman-single': '92965735d0f9a9ac',
-  'stockman-dual': '32c11b4d51b3bf3e',
-  longreach: '5492115847fc1466',
-  outclaw: '4b8c85972f588b68',
-  'dustback-rs': 'b90a2ef292f76a24',
+  ridgeback: 'e9490fc0312e2751',
+  overlander: 'ff50f6292222107c',
+  'stockman-single': '74f3e8670a1dd5a4',
+  'stockman-dual': '49b0fa7f4b92732e',
+  longreach: '693eba58c0127dfa',
+  outclaw: 'e3a50f64fb5d5801',
+  'dustback-rs': '5093b7b20c22c25f',
 };
 
 describe('vehicle build fingerprint', () => {

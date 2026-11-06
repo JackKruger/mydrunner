@@ -8,7 +8,9 @@ import {
   normalizeVehicleBuildDetailed,
   partCompatibility,
   resolveVehicleSpec,
+  winchReady,
 } from '../vehicleBuild.js';
+import type { VehiclePartOption } from '../vehicleBuild.js';
 import { geomFor } from '../physics/vehicleGeom.js';
 import type { VehicleBuild } from '../types.js';
 
@@ -265,5 +267,32 @@ describe('vehicle builds', () => {
         expect(result.issues[0]).toMatch(/require/);
       });
     }
+  });
+
+  // The requirement lists are the only statement of the compatibility rules,
+  // so a dangling or self-referencing entry would be a rule nobody can meet.
+  it('declares every part requirement against a real part of the same base', () => {
+    for (const catalog of Object.values(VEHICLE_PART_CATALOGS)) {
+      const all = Object.values(catalog).filter(Array.isArray).flat() as VehiclePartOption[];
+      const ids = new Set(all.map((p) => p.id));
+      for (const part of all) {
+        for (const needed of part.requires) {
+          expect(ids.has(needed.id), `${part.id} requires ${needed.id}`).toBe(true);
+          expect(needed.slot).not.toBe(part.slot);
+          expect(needed.requires).toEqual([]);
+        }
+        if (part.requires.length > 0) expect(part.ruleSubject, part.id).toBeDefined();
+        if (part.id.endsWith('.factory') || part.id.endsWith('.none')) expect(part.requires).toEqual([]);
+      }
+    }
+  });
+
+  it('only reports a winch as usable when its bullbar is fitted', () => {
+    const stock = createStockBuild('ridgeback');
+    expect(winchReady(stock)).toBe(false);
+    const bareWinch = { ...stock, winchId: 'ridgeback.winch.fitted' };
+    expect(winchReady(bareWinch)).toBe(false);
+    expect(winchReady({ ...bareWinch, frontBarId: 'ridgeback.frontBar.steel-winch' })).toBe(true);
+    expect(winchReady(createStockBuild('dustback-rs'))).toBe(false);
   });
 });

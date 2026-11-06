@@ -1,4 +1,4 @@
-import { Physics, WINCH, type VehicleBuild, type WinchLinkSnapshot, type WinchMotor } from '@mydrunner/shared';
+import { Physics, WINCH, winchReady, type VehicleBuild, type WinchLinkSnapshot, type WinchMotor } from '@mydrunner/shared';
 import type { WinchAttachTarget } from '@mydrunner/shared/net';
 import type { LocalSimulation } from './localSimulation.js';
 import type { NetClient } from './net.js';
@@ -240,7 +240,7 @@ export class WinchController {
   }
 
   private ownedLink(): WinchLinkSnapshot | undefined { return this.links.find((link) => link.ownerId === this.localId); }
-  private isEquipped(): boolean { return Boolean(this.build?.winchId.endsWith('.fitted') && this.build.frontBarId.endsWith('.steel-winch')); }
+  private isEquipped(): boolean { return this.build !== null && winchReady(this.build); }
   private cancelTargeting(): void {
     this.targeting = false;
     this.targetLabel = '';

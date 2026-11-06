@@ -13,6 +13,7 @@ import {
   UNDAMAGED_VEHICLE,
   createStockBuild,
   normalizeVehicleBuildDetailed,
+  winchReady,
   type PlayerId,
   type PlayerSnapshot,
   type VehicleState,
@@ -344,7 +345,7 @@ export class Room {
     }
     player.lastWinchAttachAtMs = now;
     if (player.workshopMode) return this.sendWinchAck(player, message.seq, false, 'Leave the workshop before using the winch.');
-    if (!player.build.winchId.endsWith('.fitted') || !player.build.frontBarId.endsWith('.steel-winch')) {
+    if (!winchReady(player.build)) {
       return this.sendWinchAck(player, message.seq, false, 'Fit a recovery winch and steel winch bar first.');
     }
     if (this.winches.has(id)) return this.sendWinchAck(player, message.seq, false, 'A cable is already attached.');
