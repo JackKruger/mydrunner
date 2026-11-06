@@ -481,6 +481,13 @@ export class SolidAxleVehicle implements VehicleLike {
    *  rear] order, so the rear axle's contacts do not exist yet when the front
    *  axle solves. A live count would hand the two axles different divisors
    *  within one tick and make the front axle's share depend on solve order. */
+  /** D4, deliberately still one tick stale: the previous tick's count of
+   *  wheels owning a ledge normal constraint, divisor for
+   *  LEDGE_CONTACT.normalMassBudget. Dividing by the current tick's count
+   *  (countable now that discovery is hoisted) is the correct definition but
+   *  regresses the six-log crawl - peak chassis height 1.76 -> 1.94 m, pitch
+   *  0.22 -> 0.32 rad, front wheels lifting - so the ledge tuning depends on
+   *  the stale value and has to be retuned with it, not swapped under it. */
   private ledgeConstraintWheels = 0;
   private ledgeConstraintWheelsPending = 0;
   /** Preserve low-range obstacle damping across the brief face-to-tread
@@ -800,8 +807,14 @@ export class SolidAxleVehicle implements VehicleLike {
    *  refactor. */
   preStep(): void {
     const ctx = this.phaseBegin();
+    // Both axles discover before either responds. Discovery reads only the
+    // captured pose and the static collider set, so this ordering is
+    // bit-identical to interleaving them; it exists so a whole-vehicle count
+    // of this tick's contacts is available before any force is applied
+    // (see D4 at `ledgeConstraintWheels`).
+    this.phaseContactDiscover(ctx, 0);
+    this.phaseContactDiscover(ctx, 1);
     for (let aIdx = 0; aIdx < 2; aIdx++) {
-      this.phaseContactDiscover(ctx, aIdx);
       this.phaseContactRespond(ctx, aIdx);
       this.phaseSuspension(ctx, aIdx);
     }
