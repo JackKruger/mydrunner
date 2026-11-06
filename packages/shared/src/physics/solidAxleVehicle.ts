@@ -26,7 +26,6 @@ import {
   FIXED_DT,
   GRAVITY_Y,
   LEDGE_CONTACT,
-  LOW_RANGE,
   SUSPENSION,
   TIRE_LATERAL,
   TIRE_LONG_FRICTION,
@@ -149,6 +148,10 @@ import {
   type WheelContactFrame,
 } from './wheelContact.js';
 import { applyCollisionDamage, createDamageState, repairDamage } from './damage.js';
+import {
+  applyLowRangeGovernor, createLowRangeGovernor, resetLowRangeGovernor,
+  type LowRangeGovernorInputs,
+} from './lowRangeGovernor.js';
 import { castWheelSupport, findTerrainSidewallContactInto } from './wheelSupport.js';
 import {
   axleBeamRotationInto, pointVelocityDot, wheelCenterWorldPoseInto, worldNormalToLocal,
@@ -439,8 +442,15 @@ export class SolidAxleVehicle implements VehicleLike {
   private ledgeConstraintWheelsPending = 0;
   /** Preserve low-range obstacle damping across the brief face-to-tread
    *  contact handoff, when neither axle can report both contacts at once. */
-  private lowRangeLedgeGrace = 0;
-  private symmetricClimbGrace = 0;
+  private readonly lowRangeGovernor = createLowRangeGovernor();
+  private readonly _lowRangeInputs: LowRangeGovernorInputs = {
+    linearVelocity: { x: 0, y: 0, z: 0 },
+    up: { x: 0, y: 1, z: 0 },
+    fwd: { x: 0, y: 0, z: 1 },
+    supportedWheels: 0,
+    discreteLedgeSupportActive: false,
+    symmetricClimb: false,
+  };
   private discreteLedgeSupportActive = false;
   private readonly debugPreviousLinVel: Vec3 = { x: 0, y: 0, z: 0 };
   private readonly debugAcceleration: Vec3 = { x: 0, y: 0, z: 0 };
@@ -688,8 +698,7 @@ export class SolidAxleVehicle implements VehicleLike {
     this.debugVelocityInitialized = false;
     this.ledgeConstraintWheels = 0;
     this.ledgeConstraintWheelsPending = 0;
-    this.lowRangeLedgeGrace = 0;
-    this.symmetricClimbGrace = 0;
+    resetLowRangeGovernor(this.lowRangeGovernor);
     this.discreteLedgeSupportActive = false;
     this.debugAcceleration.x = 0;
     this.debugAcceleration.y = 0;
@@ -2436,71 +2445,27 @@ export class SolidAxleVehicle implements VehicleLike {
     const lv = this.body.linvel();
     const groundSpeed = Math.hypot(lv.x, lv.z);
     if (this.drivetrain.transferCase === '4l') {
-      this.lowRangeLedgeGrace = this.discreteLedgeSupportActive
-        ? LOW_RANGE.ledgeVelocityGraceTicks
-        : Math.max(0, this.lowRangeLedgeGrace - 1);
-      // The governor stands in for the driveline holding the truck back, so
-      // it only acts while the tyres can: with fewer than two wheels on
-      // anything the truck is airborne or tumbling, and clamping it would
-      // freeze a jump or fall in mid-air.
       let supportedWheels = 0;
       for (let i = 0; i < this.wheels.length; i++) {
         if (hasSuspensionSupport(this.wheels[i]!)) supportedWheels++;
       }
-      const governed = supportedWheels >= 2;
-      const limited = this._scratchProbeVelocity;
-      limited.x = lv.x;
-      limited.y = governed && this.lowRangeLedgeGrace > 0
-        ? clamp(lv.y, -LOW_RANGE.maxLedgeVerticalSpeed, LOW_RANGE.maxLedgeVerticalSpeed)
-        : lv.y;
-      limited.z = lv.z;
-      if (governed) {
-        // Cap travel along the ground, not world-horizontal speed. Scaling
-        // only x/z on a grade leaves the full vertical component in place,
-        // which tilts the velocity off the surface: uphill that launched the
-        // truck off the slope it was climbing, downhill it drove it into it.
-        // Chassis up stands in for the ground normal while wheels support it;
-        // the normal component (suspension travel, a landing) is untouched.
-        const up = this._stepContext.up;
-        const normalSpeed = limited.x * up.x + limited.y * up.y + limited.z * up.z;
-        const tangentX = limited.x - up.x * normalSpeed;
-        const tangentY = limited.y - up.y * normalSpeed;
-        const tangentZ = limited.z - up.z * normalSpeed;
-        const tangentSpeed = Math.hypot(tangentX, tangentY, tangentZ);
-        if (tangentSpeed > TUNING.lowRangeMaxCrawlSpeed) {
-          const scale = TUNING.lowRangeMaxCrawlSpeed / tangentSpeed;
-          limited.x = tangentX * scale + up.x * normalSpeed;
-          limited.y = tangentY * scale + up.y * normalSpeed;
-          limited.z = tangentZ * scale + up.z * normalSpeed;
-        }
-      }
-      if (limited.x !== lv.x || limited.y !== lv.y || limited.z !== lv.z) {
-        this.body.setLinvel(limited, true);
-      }
-      const symmetricClimb = Math.abs(this.input.steer) < 0.05 && (
+      const inputs = this._lowRangeInputs;
+      inputs.linearVelocity = lv;
+      inputs.up = this._stepContext.up;
+      inputs.fwd = this._stepContext.fwd;
+      inputs.supportedWheels = supportedWheels;
+      inputs.discreteLedgeSupportActive = this.discreteLedgeSupportActive;
+      inputs.symmetricClimb = Math.abs(this.input.steer) < 0.05 && (
         sameAxleWideClimb(this._ledgeContacts[0], this._ledgeContacts[1])
         || sameAxleWideClimb(this._ledgeContacts[2], this._ledgeContacts[3])
       );
-      this.symmetricClimbGrace = symmetricClimb
-        ? LEDGE_CONTACT.handoffGraceTicks
-        : Math.max(0, this.symmetricClimbGrace - 1);
-      if (this.symmetricClimbGrace > 0) {
-        const av = this.body.angvel();
-        const up = this._stepContext.up;
-        const fwd = this._stepContext.fwd;
-        const yawRate = av.x * up.x + av.y * up.y + av.z * up.z;
-        const rollRate = av.x * fwd.x + av.y * fwd.y + av.z * fwd.z;
-        const limitedAngular = this._scratchForce;
-        limitedAngular.x = av.x - up.x * yawRate - fwd.x * rollRate;
-        limitedAngular.y = av.y - up.y * yawRate - fwd.y * rollRate;
-        limitedAngular.z = av.z - up.z * yawRate - fwd.z * rollRate;
-        this.body.setAngvel(limitedAngular, true);
-      }
+      applyLowRangeGovernor(
+        this.lowRangeGovernor, this.body, inputs, this._scratchProbeVelocity, this._scratchForce,
+      );
     } else {
       // Both windows only mean anything in low range. Left running, a shift
       // out and back in would reapply a clamp earned by an old obstacle.
-      this.lowRangeLedgeGrace = 0;
-      this.symmetricClimbGrace = 0;
+      resetLowRangeGovernor(this.lowRangeGovernor);
     }
     const STATIONARY = 0.3;
     for (let i = 0; i < 4; i++) {

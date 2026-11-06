@@ -8,6 +8,7 @@ const SOURCES = [
   '../physics/contactPatch.ts',
   '../physics/differential.ts',
   '../physics/engine.ts',
+  '../physics/lowRangeGovernor.ts',
   '../physics/soil.ts',
   '../physics/solidAxleVehicle.ts',
   '../physics/tire.ts',
@@ -32,6 +33,7 @@ const REQUIRED_MARKS: Record<string, readonly string[]> = {
   ],
   '../physics/vehicleKinematics.ts': ['wheelCenterWorldPoseInto', 'axleBeamRotationInto'],
   '../physics/wheelSupport.ts': ['findTerrainSidewallContactInto'],
+  '../physics/lowRangeGovernor.ts': ['applyLowRangeGovernor'],
 };
 
 const ALLOCATING_ARRAY_METHODS = new Set([
