@@ -220,6 +220,17 @@ interface AxleStepScratch {
   tubeCenter: Vec3;
   housingCenter: Vec3;
   wheelCenter: Vec3;
+  /** Per-side wheel centres from discovery, read back by the response. */
+  volumeCenters: [Vec3, Vec3];
+  /** Per side: whether the contacts still need their own normal constraint. */
+  ownsNormalConstraint: [boolean, boolean];
+  /** Per side: whether the contacts came from discrete scenery. */
+  discreteVolumeContact: [boolean, boolean];
+  /** The corrected beam pose discovery settled on. */
+  candidateRide: number;
+  candidateRoll: number;
+  /** Whether the tube and housing probes may run this tick. */
+  probesEnabled: boolean;
   basis: WheelBasis;
   wheelRotation: ContactQuat;
   probeRotation: ContactQuat;
@@ -246,6 +257,12 @@ function createAxleStepScratch(): AxleStepScratch {
     tubeCenter: { x: 0, y: 0, z: 0 },
     housingCenter: { x: 0, y: 0, z: 0 },
     wheelCenter: { x: 0, y: 0, z: 0 },
+    volumeCenters: [{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }],
+    ownsNormalConstraint: [true, true],
+    discreteVolumeContact: [false, false],
+    candidateRide: 0,
+    candidateRoll: 0,
+    probesEnabled: false,
     basis: {
       forward: { x: 0, y: 0, z: 0 },
       axle: { x: 0, y: 0, z: 0 },
@@ -784,7 +801,8 @@ export class SolidAxleVehicle implements VehicleLike {
   preStep(): void {
     const ctx = this.phaseBegin();
     for (let aIdx = 0; aIdx < 2; aIdx++) {
-      this.phaseContact(ctx, aIdx);
+      this.phaseContactDiscover(ctx, aIdx);
+      this.phaseContactRespond(ctx, aIdx);
       this.phaseSuspension(ctx, aIdx);
     }
     this.phaseWater(ctx);
@@ -875,24 +893,23 @@ export class SolidAxleVehicle implements VehicleLike {
     return stepContext;
   }
 
-  /** 3. One axle's contact resolution: exactly two deterministic contact
-   *  iterations, the axle-beam probes, the rut/water/surface reads and the
-   *  volumetric tyre query with its carcass and sidewall response. Both
-   *  iterations solve from the state captured at tick start; only the second
-   *  contact result is committed to the axle integrator. @hotloop */
-  private phaseContact(ctx: VehicleStepContext, aIdx: number): void {
+  /** 3. One axle's contact discovery: exactly two deterministic support
+   *  iterations, the rut/water/surface reads and the volumetric tyre query.
+   *  Both iterations solve from the state captured at tick start; only the
+   *  second contact result is committed to the axle integrator. Applies no
+   *  force: everything it finds is left on the wheels, the ledge contact
+   *  sets and this axle's scratch for phaseContactRespond. @hotloop */
+  private phaseContactDiscover(ctx: VehicleStepContext, aIdx: number): void {
     const dt = ctx.dt;
     const t = ctx.t;
     const r = ctx.r;
     const lv = ctx.lv;
-    const av = ctx.av;
     const up = ctx.up;
     const fwd = ctx.fwd;
     const right = ctx.right;
     const wheelBases = this._wheelBases;
     const ledgeContacts = this._ledgeContacts;
     const ledgeSemantics = this._ledgeSemantics;
-    const ledgeLoads = this._ledgeLoads;
     const scratch = this._axleScratch[aIdx]!;
     const local = scratch.localPoint;
 
@@ -1030,9 +1047,7 @@ export class SolidAxleVehicle implements VehicleLike {
       Math.abs(leftSecondDepth - leftFirstDepth),
       Math.abs(rightSecondDepth - rightFirstDepth),
     );
-    axleDebug.tubeContact = false;
-    axleDebug.housingContact = false;
-    const probeRotation = axleBeamRotationInto(r, candidateRoll, scratch.probeRotation);
+    axleBeamRotationInto(r, candidateRoll, scratch.probeRotation);
     const portalOffset = scratch.portalOffset;
     local.x = 0; local.y = ag.probe.verticalOffset; local.z = 0;
     rotateVecByQuatInto(local, r, portalOffset);
@@ -1045,11 +1060,8 @@ export class SolidAxleVehicle implements VehicleLike {
     const probeSurface = sampleSurface(this.world.terrain, housingCenter.x, housingCenter.z);
     const probeDry = !this.worldHasWater
       || sampleWaterDepth(this.world.terrain, housingCenter.x, housingCenter.z) <= 0;
-    if (up.y > 0.9 && probeDry
-      && surfaceInfo(probeSurface).traction.soil === 'none') {
-      this.applyAxleProbe(aIdx, false, this.axleTubeShapes[aIdx]!, tubeCenter, probeRotation, t, lv, av, dt);
-      this.applyAxleProbe(aIdx, true, this.axleHousingShapes[aIdx]!, housingCenter, probeRotation, t, lv, av, dt);
-    }
+    scratch.probesEnabled = up.y > 0.9 && probeDry
+      && surfaceInfo(probeSurface).traction.soil === 'none';
     const debugLeft = this.wheelDebug[wIdxL]!;
     const debugRight = this.wheelDebug[wIdxR]!;
     setSuspensionDebug(debugLeft, leftSupportWorld, rayDir, maxToi, ag);
@@ -1104,7 +1116,7 @@ export class SolidAxleVehicle implements VehicleLike {
       const wheelIndex = volumeSideIndex === 0 ? wIdxL : wIdxR;
       const w = volumeSideIndex === 0 ? wL : wR;
       const localX = volumeSideIndex === 0 ? -ag.trackHalf : ag.trackHalf;
-      const center = scratch.wheelCenter;
+      const center = scratch.volumeCenters[volumeSideIndex]!;
       wheelCenterWorldPoseInto(t, r, ag, candidateRide, candidateRoll, localX, local, center);
       const debug = this.wheelDebug[wheelIndex]!;
       debug.wheelCenter.x = center.x;
@@ -1217,6 +1229,55 @@ export class SolidAxleVehicle implements VehicleLike {
       w.previousCenter.y = center.y;
       w.previousCenter.z = center.z;
       w.hasPreviousCenter = true;
+
+      scratch.ownsNormalConstraint[volumeSideIndex] = ownsNormalConstraint;
+      scratch.discreteVolumeContact[volumeSideIndex] = discreteVolumeContact;
+    }
+    scratch.candidateRide = candidateRide;
+    scratch.candidateRoll = candidateRoll;
+  }
+
+  /** 3b. One axle's contact response, in the order the forces have always
+   *  reached the chassis: the axle tube and housing probes, then per side
+   *  the carcass/series support and the ledge normal constraint, then the
+   *  shared-depth equalisation for a symmetric climb. Reads only what
+   *  phaseContactDiscover left for it. @hotloop */
+  private phaseContactRespond(ctx: VehicleStepContext, aIdx: number): void {
+    const dt = ctx.dt;
+    const t = ctx.t;
+    const lv = ctx.lv;
+    const av = ctx.av;
+    const ledgeContacts = this._ledgeContacts;
+    const ledgeSemantics = this._ledgeSemantics;
+    const ledgeLoads = this._ledgeLoads;
+    const scratch = this._axleScratch[aIdx]!;
+    const axle = this.axles[aIdx]!;
+    const ag = axle.geom;
+    const at = aIdx === 0 ? TUNING.axleFront : TUNING.axleRear;
+    const wIdxL = aIdx * 2;
+    const wIdxR = aIdx * 2 + 1;
+    const wL = this.wheels[wIdxL]!;
+    const wR = this.wheels[wIdxR]!;
+    const basis = scratch.basis;
+    const rayDir = scratch.rayDir;
+
+    const axleDebug = this.axleDebug[aIdx]!;
+    axleDebug.tubeContact = false;
+    axleDebug.housingContact = false;
+    if (scratch.probesEnabled) {
+      this.applyAxleProbe(aIdx, false, this.axleTubeShapes[aIdx]!, scratch.tubeCenter, scratch.probeRotation, t, lv, av, dt);
+      this.applyAxleProbe(aIdx, true, this.axleHousingShapes[aIdx]!, scratch.housingCenter, scratch.probeRotation, t, lv, av, dt);
+    }
+
+    for (let volumeSideIndex = 0; volumeSideIndex < 2; volumeSideIndex++) {
+      const wheelIndex = volumeSideIndex === 0 ? wIdxL : wIdxR;
+      const w = volumeSideIndex === 0 ? wL : wR;
+      const center = scratch.volumeCenters[volumeSideIndex]!;
+      const contactSet = this._ledgeContactSets[wheelIndex]!;
+      const ownsNormalConstraint = scratch.ownsNormalConstraint[volumeSideIndex]!;
+      const discreteVolumeContact = scratch.discreteVolumeContact[volumeSideIndex]!;
+      const ledge = ledgeContacts[wheelIndex] ?? null;
+      const semantics = ledgeSemantics[wheelIndex] ?? null;
 
       const quarterMass = this.geom.spec.massKg * 0.25;
       const carcass = carcassRatesInto(

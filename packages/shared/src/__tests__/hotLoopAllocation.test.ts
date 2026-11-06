@@ -24,7 +24,8 @@ const SOURCES = [
 const REQUIRED_MARKS: Record<string, readonly string[]> = {
   '../physics/solidAxleVehicle.ts': [
     'phaseBegin',
-    'phaseContact',
+    'phaseContactDiscover',
+    'phaseContactRespond',
     'phaseSuspension',
     'phaseWater',
     'phaseEngine',
