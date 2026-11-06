@@ -8,7 +8,7 @@ import {
   PROTOCOL_VERSION,
   createStockBuild,
   Net,
-} from '@mydrunner/shared';
+} from '@mydrunner/shared/relay';
 import { Room, type PlayerHandle } from './room.js';
 
 async function main(): Promise<void> {

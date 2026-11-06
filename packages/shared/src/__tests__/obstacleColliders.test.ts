@@ -21,9 +21,8 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { initRapier } from '../physics/world.js';
 import { generateTerrain } from '../physics/terrain.js';
-import {
-  generateObstacles, spawnObstacleColliders, type Obstacle,
-} from '../physics/obstacles.js';
+import { generateObstacles, type Obstacle } from '../physics/obstacles.js';
+import { spawnObstacleColliders } from '../physics/staticColliders.js';
 import {
   OBJECT_KINDS, objectInfo, resolveColliders,
 } from '../physics/objectCatalog.js';

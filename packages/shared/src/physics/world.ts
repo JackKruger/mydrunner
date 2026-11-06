@@ -11,8 +11,9 @@ import { createStockBuild } from '../vehicleBuild.js';
 import type { CarKind, VehicleBuild } from '../types.js';
 import type { VehicleLike, VehicleSpawn } from './vehicleTypes.js';
 import { generateTerrain, type TerrainData, type TerrainOptions } from './terrain.js';
-import { generateObstacles, spawnObstacleColliders, type Obstacle } from './obstacles.js';
-import { landmarksFor, spawnLandmarkColliders, type Landmarks } from './landmarks.js';
+import { generateObstacles, type Obstacle } from './obstacles.js';
+import { landmarksFor, type Landmarks } from './landmarks.js';
+import { spawnLandmarkColliders, spawnObstacleColliders } from './staticColliders.js';
 import { COLLISION_GROUP_WORLD } from './collisionGroups.js';
 import { SparseRutField, type RutDepthField } from './ruts.js';
 // Type-only: the map layer composes terrain from physics, so a value

@@ -22,7 +22,7 @@ import {
   type WinchLinkSnapshot,
   type CarKind,
   type VehicleBuild,
-} from '@mydrunner/shared';
+} from '@mydrunner/shared/relay';
 
 export interface PlayerHandle {
   id: PlayerId;

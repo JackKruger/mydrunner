@@ -13,9 +13,8 @@
 // reordering the pushes inside a pass silently re-points every saved
 // deletion in every map — treat push order as part of the format.
 
-import RAPIER from '@dimforge/rapier3d-compat';
 import { TERRAIN } from '../constants.js';
-import { resolveColliders, type Obstacle } from './objectCatalog.js';
+import type { Obstacle } from './objectCatalog.js';
 import {
   Surface, type TerrainData, worldToTerrainIndex, sampleHeightBilinear,
   getHillClimbSegments, pointToSegmentDist, HILL_CLIMB_PATH_HALF_WIDTH,
@@ -471,53 +470,4 @@ function proceduralObstacles(terrain: TerrainData): Obstacle[] {
   }
 
   return out;
-}
-
-/** Spawn the obstacles into a Rapier world as static colliders. Returns
- *  the bodies so they can be cleaned up later.
- *
- *  One fixed body per obstacle, however many collider parts its kind
- *  resolves to — a sign is a post and a panel, and both have to move
- *  together. The one-body-per-obstacle shape is what World's teardown loop
- *  expects, so multi-part kinds did not change it.
- *
- *  The body is left at the origin and each collider carries the full world
- *  transform, rather than the body sitting at the obstacle anchor with
- *  local offsets hung off it. That looks backwards and is deliberate:
- *  Rapier stores both as f32, so anchor-plus-offset rounds twice and moved
- *  a dozen rocks by 0.1 mm against the pre-table behaviour. Sub-millimetre
- *  is physically nothing, but "nothing moved" is the whole claim this
- *  refactor rests on, and it is free to keep it exactly true. Nothing reads
- *  an obstacle body's translation; contact resolution sees the colliders. */
-export function spawnObstacleColliders(
-  world: RAPIER.World,
-  obstacles: Obstacle[],
-): RAPIER.RigidBody[] {
-  const bodies: RAPIER.RigidBody[] = [];
-  for (const o of obstacles) {
-    const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-    for (const c of resolveColliders(o)) {
-      let desc: RAPIER.ColliderDesc;
-      switch (c.shape) {
-        case 'ball':
-          desc = RAPIER.ColliderDesc.ball(c.args[0]!);
-          break;
-        case 'capsule':
-          desc = RAPIER.ColliderDesc.capsule(c.args[0]!, c.args[1]!);
-          break;
-        case 'cuboid':
-          desc = RAPIER.ColliderDesc.cuboid(c.args[0]!, c.args[1]!, c.args[2]!);
-          break;
-        case 'cylinder':
-          desc = RAPIER.ColliderDesc.cylinder(c.args[0]!, c.args[1]!);
-          break;
-      }
-      desc.setFriction(c.friction)
-        .setTranslation(c.pos.x, c.pos.y, c.pos.z)
-        .setRotation(c.rot);
-      world.createCollider(desc, body);
-    }
-    bodies.push(body);
-  }
-  return bodies;
 }
