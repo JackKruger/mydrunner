@@ -229,16 +229,10 @@ if (import.meta.env.DEV) {
 let localId: PlayerId | null = null;
 let connected = false;
 let isDebug = false;
-let lastSpeed = 0;
-let lastRpm = 0;
-let lastGear = 0;
-let lastTransferCase: '2h' | '4h' | '4l' = '4h';
-let lastFrontLocked = false;
-let lastRearLocked = false;
-let lastBodyCondition = 1;
-let lastEngineCondition = 1;
-let lastSteeringCondition = 1;
-let lastStoppedCause: 'none' | 'collision' | 'flooding' = 'none';
+/** The owner simulation's latest telemetry, which every HUD readout is
+ *  drawn from. Kept rather than re-read so the HUD holds its last values
+ *  across a reconnect, when there is briefly no simulation to ask. */
+let lastTelemetry: ReturnType<LocalSimulation['telemetry']> | null = null;
 let drivetrainNotice = '';
 let drivetrainNoticeUntil = 0;
 let lastFrameTimeMs = performance.now();
@@ -417,158 +411,9 @@ function startPreview(params: URLSearchParams, savedBuild: VehicleBuild | undefi
   requestAnimationFrame(frame);
 }
 
-/** Esc closes the tab; Shift+R re-seats the truck upright where it stands.
- *
- *  Plain R already respawns at the start via the reset button, which is
- *  useless when the thing you are testing is 300 m out and you have just
- *  rolled onto the roof beside it. */
-function installPreviewControls(spawn: Maps.SpawnPose, build: VehicleBuild): void {
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'Escape') {
-      // Valid because the editor opened this tab with window.open.
-      window.close();
-      playerUI.setConnectionState({
-        mode: 'preview',
-        message: 'close this tab to return to the editor',
-      });
-      return;
-    }
-    if (e.code === 'KeyR' && e.shiftKey && localSimulation) {
-      e.preventDefault();
-      winchController.detach();
-      const p = scene.localPosition();
-      if (!p || !mapWorld) {
-        localSimulation.resetTo(spawn);
-        return;
-      }
-      const idx = Physics.worldToTerrainIndex(mapWorld.terrain, p.x, p.z);
-      const ground = idx >= 0 ? (mapWorld.terrain.heights[idx] ?? 0) : 0;
-      localSimulation.resetTo({
-        position: { x: p.x, y: ground + Physics.spawnYAboveGround(build), z: p.z },
-        yaw: spawn.yaw,
-      });
-    }
-  });
-}
-
-async function start(): Promise<void> {
-  // Resolve startup UI before compiling Rapier's WASM. This gets the menu on
-  // screen immediately on cold/mobile loads instead of showing a blank HUD
-  // while the physics runtime initialises. ?auto=1 remains the direct path
-  // used by e2e tests.
-  const params = new URLSearchParams(location.search);
-  const saved = loadSavedJoin();
-  const startOptions = loadStartOptions();
-  applyStartOptions(startOptions);
-  engineAudio.setMuted(!startOptions.engineAudio);
-
-  // Previewing a map the editor handed over. Checked before the join
-  // screen and before any NetClient exists: there is no server in this
-  // mode, so there is nothing to join and no name to pick.
-  if (params.get('preview') === '1') {
-    isDebug = params.has('dev');
-    if (isDebug) {
-      initDebugPanel(scene.renderer, scene.view, vehicleTuningTarget);
-      scene.setVehicleDebugEnabled(true);
-    }
-    await Physics.initRapier();
-    startPreview(params, saved?.build);
-    return;
-  }
-
-  const auto = params.get('auto') === '1';
-  let choice: JoinChoice;
-  let activeSaveId: string | null = null;
-  if (auto) {
-    const carParam = params.get('car');
-    choice = {
-      name: params.get('name') || saved?.name || `player-${Math.floor(Math.random() * 1000)}`,
-      build: carParam ? createStockBuild(normalizeVehicleBaseId(carParam)) : (saved?.build ?? createStockBuild()),
-      carKind: carParam ? normalizeVehicleBaseId(carParam) : (saved?.build.baseId ?? 'ridgeback'),
-    };
-  } else {
-    const launchPromise = showStartScreen({
-      saves: loadGameSaves(saved),
-      // Authoring links are normally a development-build feature, but a
-      // deployed build can opt in explicitly with /?dev.
-      development: import.meta.env.DEV || params.has('dev'),
-      options: startOptions,
-      onOptionsChanged(options) {
-        engineAudio.setMuted(!options.engineAudio);
-      },
-    });
-    // Build the real shipped world only after showStartScreen has synchronously
-    // mounted its UI. That preserves the instant first paint on cold/mobile
-    // loads while giving the menu a live terrain, water, foliage and sky view.
-    let menuPanoramaFrame = 0;
-    let menuPanoramaRunning = true;
-    try {
-      const menuDoc = Maps.getMap(Maps.DEFAULT_MAP_ID);
-      if (menuDoc) {
-        stagedMenuWorld = Maps.applyMapDoc(menuDoc);
-        scene.setWorld(stagedMenuWorld);
-        const startedAtMs = performance.now();
-        const animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        // Capped at the low tier. This renders the whole world behind the
-        // start menu, which on a phone means thermal throttling sets in
-        // before the player has pressed anything. It is a slow camera pan
-        // along a spline, so it survives a lower rate with nothing visible
-        // lost. Skipped entirely while the tab is hidden — rAF usually
-        // stops there anyway, but not on every browser.
-        const panoramaIntervalMs = 1000 / activeQuality().menuPanoramaHz;
-        let lastPanoramaMs = 0;
-        const drawMenuPanorama = (nowMs: number): void => {
-          if (!menuPanoramaRunning) return;
-          menuPanoramaFrame = requestAnimationFrame(drawMenuPanorama);
-          if (document.visibilityState === 'hidden') return;
-          if (nowMs - lastPanoramaMs < panoramaIntervalMs) return;
-          lastPanoramaMs = nowMs;
-          scene.renderMenuPanorama(nowMs, startedAtMs, animate);
-        };
-        menuPanoramaFrame = requestAnimationFrame(drawMenuPanorama);
-      }
-    } catch (error) {
-      // The CSS treatment remains a complete fallback if a future authored
-      // map cannot be composed. Startup should still let the player connect
-      // and surface the normal map-handshake error there.
-      console.warn('[mydrunner-client] menu panorama unavailable', error);
-      stagedMenuWorld = null;
-    }
-
-    const launch = await launchPromise;
-    if (launch.type === 'play') {
-      activeSaveId = launch.save.id;
-      const played = touchGameSave(launch.save.id) ?? launch.save;
-      choice = { name: played.name, build: played.build, carKind: played.build.baseId };
-    } else {
-      // A new slot starts with the previous rig as a convenience, but leaves
-      // the driver name blank so it cannot silently overwrite an identity.
-      choice = await showJoinScreen(saved?.build ? { build: saved.build, carKind: saved.build.baseId } : {});
-      const created = createGameSave(choice);
-      activeSaveId = created.id;
-    }
-    menuPanoramaRunning = false;
-    if (menuPanoramaFrame) cancelAnimationFrame(menuPanoramaFrame);
-    saveJoin(choice);
-  }
-
-  // Needed before a LocalSimulation can be constructed by the welcome
-  // handshake. The menu gesture has already happened on the interactive path.
-  await Physics.initRapier();
-  playerUI.setConnectionState({
-    mode: 'connecting',
-    message: 'connecting to trail control…',
-    driverName: choice.name,
-  });
-
-  // `?dev` is the explicit physics-lab switch. Keep the old saved-name
-  // shortcut so existing local tuning saves still behave as before.
-  isDebug = params.has('dev') || isDebugUser(choice.name);
-  if (isDebug) {
-    initDebugPanel(scene.renderer, scene.view, vehicleTuningTarget);
-    scene.setVehicleDebugEnabled(true);
-  }
-
+/** The relay connection for an online session: every server message
+ *  handler, plus reconnect with exponential backoff. The caller connects. */
+function connectToRelay(choice: JoinChoice, activeSaveId: string | null): NetClient {
   // Auto-reconnect with exponential backoff. The welcome handshake
   // rebuilds everything session-scoped (id, terrain, local physics world),
   // so reconnecting is just "connect again": the server treats us as a
@@ -733,10 +578,11 @@ async function start(): Promise<void> {
       winchController.onEvent(msg.linkId, msg.reason);
     },
   });
-  currentNet = net;
-  net.connect();
+  return net;
+}
 
-  wireCameraControls();
+/** Keyboard and touch bindings that act on the live connection. */
+function wireSessionControls(net: NetClient): void {
 
   const requestWorkshop = (): void => {
     if (!nearbyBayId || workshopEntryPending || workshop.isOpen) return;
@@ -764,6 +610,166 @@ async function start(): Promise<void> {
     }
   });
   onTouchEdge('chat', () => chat.open());
+}
+
+/** Esc closes the tab; Shift+R re-seats the truck upright where it stands.
+ *
+ *  Plain R already respawns at the start via the reset button, which is
+ *  useless when the thing you are testing is 300 m out and you have just
+ *  rolled onto the roof beside it. */
+function installPreviewControls(spawn: Maps.SpawnPose, build: VehicleBuild): void {
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Escape') {
+      // Valid because the editor opened this tab with window.open.
+      window.close();
+      playerUI.setConnectionState({
+        mode: 'preview',
+        message: 'close this tab to return to the editor',
+      });
+      return;
+    }
+    if (e.code === 'KeyR' && e.shiftKey && localSimulation) {
+      e.preventDefault();
+      winchController.detach();
+      const p = scene.localPosition();
+      if (!p || !mapWorld) {
+        localSimulation.resetTo(spawn);
+        return;
+      }
+      const idx = Physics.worldToTerrainIndex(mapWorld.terrain, p.x, p.z);
+      const ground = idx >= 0 ? (mapWorld.terrain.heights[idx] ?? 0) : 0;
+      localSimulation.resetTo({
+        position: { x: p.x, y: ground + Physics.spawnYAboveGround(build), z: p.z },
+        yaw: spawn.yaw,
+      });
+    }
+  });
+}
+
+async function start(): Promise<void> {
+  // Resolve startup UI before compiling Rapier's WASM. This gets the menu on
+  // screen immediately on cold/mobile loads instead of showing a blank HUD
+  // while the physics runtime initialises. ?auto=1 remains the direct path
+  // used by e2e tests.
+  const params = new URLSearchParams(location.search);
+  const saved = loadSavedJoin();
+  const startOptions = loadStartOptions();
+  applyStartOptions(startOptions);
+  engineAudio.setMuted(!startOptions.engineAudio);
+
+  // Previewing a map the editor handed over. Checked before the join
+  // screen and before any NetClient exists: there is no server in this
+  // mode, so there is nothing to join and no name to pick.
+  if (params.get('preview') === '1') {
+    isDebug = params.has('dev');
+    if (isDebug) {
+      initDebugPanel(scene.renderer, scene.view, vehicleTuningTarget);
+      scene.setVehicleDebugEnabled(true);
+    }
+    await Physics.initRapier();
+    startPreview(params, saved?.build);
+    return;
+  }
+
+  const auto = params.get('auto') === '1';
+  let choice: JoinChoice;
+  let activeSaveId: string | null = null;
+  if (auto) {
+    const carParam = params.get('car');
+    choice = {
+      name: params.get('name') || saved?.name || `player-${Math.floor(Math.random() * 1000)}`,
+      build: carParam ? createStockBuild(normalizeVehicleBaseId(carParam)) : (saved?.build ?? createStockBuild()),
+      carKind: carParam ? normalizeVehicleBaseId(carParam) : (saved?.build.baseId ?? 'ridgeback'),
+    };
+  } else {
+    const launchPromise = showStartScreen({
+      saves: loadGameSaves(saved),
+      // Authoring links are normally a development-build feature, but a
+      // deployed build can opt in explicitly with /?dev.
+      development: import.meta.env.DEV || params.has('dev'),
+      options: startOptions,
+      onOptionsChanged(options) {
+        engineAudio.setMuted(!options.engineAudio);
+      },
+    });
+    // Build the real shipped world only after showStartScreen has synchronously
+    // mounted its UI. That preserves the instant first paint on cold/mobile
+    // loads while giving the menu a live terrain, water, foliage and sky view.
+    let menuPanoramaFrame = 0;
+    let menuPanoramaRunning = true;
+    try {
+      const menuDoc = Maps.getMap(Maps.DEFAULT_MAP_ID);
+      if (menuDoc) {
+        stagedMenuWorld = Maps.applyMapDoc(menuDoc);
+        scene.setWorld(stagedMenuWorld);
+        const startedAtMs = performance.now();
+        const animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        // Capped at the low tier. This renders the whole world behind the
+        // start menu, which on a phone means thermal throttling sets in
+        // before the player has pressed anything. It is a slow camera pan
+        // along a spline, so it survives a lower rate with nothing visible
+        // lost. Skipped entirely while the tab is hidden — rAF usually
+        // stops there anyway, but not on every browser.
+        const panoramaIntervalMs = 1000 / activeQuality().menuPanoramaHz;
+        let lastPanoramaMs = 0;
+        const drawMenuPanorama = (nowMs: number): void => {
+          if (!menuPanoramaRunning) return;
+          menuPanoramaFrame = requestAnimationFrame(drawMenuPanorama);
+          if (document.visibilityState === 'hidden') return;
+          if (nowMs - lastPanoramaMs < panoramaIntervalMs) return;
+          lastPanoramaMs = nowMs;
+          scene.renderMenuPanorama(nowMs, startedAtMs, animate);
+        };
+        menuPanoramaFrame = requestAnimationFrame(drawMenuPanorama);
+      }
+    } catch (error) {
+      // The CSS treatment remains a complete fallback if a future authored
+      // map cannot be composed. Startup should still let the player connect
+      // and surface the normal map-handshake error there.
+      console.warn('[mydrunner-client] menu panorama unavailable', error);
+      stagedMenuWorld = null;
+    }
+
+    const launch = await launchPromise;
+    if (launch.type === 'play') {
+      activeSaveId = launch.save.id;
+      const played = touchGameSave(launch.save.id) ?? launch.save;
+      choice = { name: played.name, build: played.build, carKind: played.build.baseId };
+    } else {
+      // A new slot starts with the previous rig as a convenience, but leaves
+      // the driver name blank so it cannot silently overwrite an identity.
+      choice = await showJoinScreen(saved?.build ? { build: saved.build, carKind: saved.build.baseId } : {});
+      const created = createGameSave(choice);
+      activeSaveId = created.id;
+    }
+    menuPanoramaRunning = false;
+    if (menuPanoramaFrame) cancelAnimationFrame(menuPanoramaFrame);
+    saveJoin(choice);
+  }
+
+  // Needed before a LocalSimulation can be constructed by the welcome
+  // handshake. The menu gesture has already happened on the interactive path.
+  await Physics.initRapier();
+  playerUI.setConnectionState({
+    mode: 'connecting',
+    message: 'connecting to trail control…',
+    driverName: choice.name,
+  });
+
+  // `?dev` is the explicit physics-lab switch. Keep the old saved-name
+  // shortcut so existing local tuning saves still behave as before.
+  isDebug = params.has('dev') || isDebugUser(choice.name);
+  if (isDebug) {
+    initDebugPanel(scene.renderer, scene.view, vehicleTuningTarget);
+    scene.setVehicleDebugEnabled(true);
+  }
+
+  const net = connectToRelay(choice, activeSaveId);
+  currentNet = net;
+  net.connect();
+
+  wireCameraControls();
+  wireSessionControls(net);
 
   requestAnimationFrame(frame);
 }
@@ -837,16 +843,7 @@ function frame(): void {
         scene.updateVehicleDebug(debugTelemetry);
       }
     }
-    lastSpeed = telemetry.speed;
-    lastRpm = telemetry.rpm;
-    lastGear = telemetry.gear;
-    lastTransferCase = telemetry.drivetrain.transferCase;
-    lastFrontLocked = telemetry.drivetrain.frontLocked;
-    lastRearLocked = telemetry.drivetrain.rearLocked;
-    lastBodyCondition = telemetry.damage.body;
-    lastEngineCondition = telemetry.damage.engine;
-    lastSteeringCondition = telemetry.damage.steering;
-    lastStoppedCause = telemetry.damage.stoppedCause;
+    lastTelemetry = telemetry;
     if (telemetry.notice) {
       drivetrainNotice = telemetry.notice;
       drivetrainNoticeUntil = now + 2600;
@@ -909,53 +906,29 @@ function engineStatusLabel(): string {
   const w = localSimulation?.waterStatus();
   if (!w) return '';
   if (w.drowned) return 'ENGINE FLOODED — HOLD E';
-  if (lastStoppedCause === 'collision') return 'ENGINE STOPPED — COLLISION DAMAGE';
+  if (lastTelemetry?.damage.stoppedCause === 'collision') return 'ENGINE STOPPED — COLLISION DAMAGE';
   if (w.intakeSubmerged) return 'INTAKE UNDER';
   return '';
 }
 
 function updateHud(): void {
   const handbrake = Boolean(isHandbrakeOn() || getTouchState().handbrake);
-  if (previewMode) {
-    // Telemetry comes off the local sim: there are no snapshots to read it
-    // from, and the values the online HUD shows arrive in those.
-    const t = localSimulation?.telemetry();
-    playerUI.updateTelemetry({
-      speedMps: t?.speed ?? 0,
-      rpm: t?.rpm ?? 0,
-      gear: t?.gear ?? 0,
-      surface: surfaceLabel(),
-      handbrake,
-      engineStatus: engineStatusLabel(),
-      fps,
-      transferCase: t?.drivetrain.transferCase ?? '4h',
-      frontLocked: t?.drivetrain.frontLocked ?? false,
-      rearLocked: t?.drivetrain.rearLocked ?? false,
-      fixedRwd: Physics.geomFor(currentBuild).spec.drivetrain === 'fixed-rwd',
-      bodyCondition: t?.damage.body ?? 1,
-      engineCondition: t?.damage.engine ?? 1,
-      steeringCondition: t?.damage.steering ?? 1,
-      drivetrainNotice: performance.now() < drivetrainNoticeUntil ? drivetrainNotice : '',
-      winchStatus: winchController.statusText(),
-      pressure: localSimulation?.pressureStatus(),
-    });
-    return;
-  }
+  const t = lastTelemetry;
   playerUI.updateTelemetry({
-    speedMps: lastSpeed,
-    rpm: lastRpm,
-    gear: lastGear,
+    speedMps: t?.speed ?? 0,
+    rpm: t?.rpm ?? 0,
+    gear: t?.gear ?? 0,
     surface: surfaceLabel(),
     handbrake,
     engineStatus: engineStatusLabel(),
     fps,
-    transferCase: lastTransferCase,
-    frontLocked: lastFrontLocked,
-    rearLocked: lastRearLocked,
+    transferCase: t?.drivetrain.transferCase ?? '4h',
+    frontLocked: t?.drivetrain.frontLocked ?? false,
+    rearLocked: t?.drivetrain.rearLocked ?? false,
     fixedRwd: Physics.geomFor(currentBuild).spec.drivetrain === 'fixed-rwd',
-    bodyCondition: lastBodyCondition,
-    engineCondition: lastEngineCondition,
-    steeringCondition: lastSteeringCondition,
+    bodyCondition: t?.damage.body ?? 1,
+    engineCondition: t?.damage.engine ?? 1,
+    steeringCondition: t?.damage.steering ?? 1,
     drivetrainNotice: performance.now() < drivetrainNoticeUntil ? drivetrainNotice : '',
     winchStatus: winchController.statusText(),
     pressure: localSimulation?.pressureStatus(),
