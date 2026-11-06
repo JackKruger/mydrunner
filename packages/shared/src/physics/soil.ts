@@ -1,6 +1,7 @@
 /** Physical soft-ground helpers for mud and deep mud. */
 
 import { TUNING } from '../tuning.js';
+import { SOIL } from '../constants.js';
 
 export type SoilKind = 'none' | 'mud' | 'deep-mud';
 
@@ -80,10 +81,20 @@ export function stepSoftGround(
   state.slipWork += normalLoad * slipIncrement;
   state.soilCompaction = clamp(state.soilCompaction + slipIncrement * 0.22 - step * 0.015, 0, 1);
 
+  // Both sink terms answer to ground pressure. In deep mud the old span of 4
+  // saturated at ~17 psi, so every realistic pressure sank to the floor and
+  // airing down changed nothing once owner physics stopped chattering. Slip
+  // still digs, but a softer footprint digs a shallower hole.
+  const soil = kind === 'deep-mud' ? SOIL.deepMud : SOIL.mud;
+  const pressureRatio = groundPressure / bearingStrength;
   const equilibrium = maxSink * 0.62
-    * clamp((groundPressure / bearingStrength - 0.25) / 4, 0, 1);
+    * clamp((pressureRatio - 0.25)
+      / soil.sinkPressureSpan, 0, 1);
   const workScale = Math.max(1, normalLoad * (kind === 'deep-mud' ? 1.8 : 2.8));
-  const digging = maxSink * 0.55 * (1 - Math.exp(-state.slipWork / workScale));
+  const digging = maxSink * 0.55 * (1 - Math.exp(-state.slipWork / workScale))
+    * (soil.digReferencePressureRatio > 0
+      ? clamp(pressureRatio / soil.digReferencePressureRatio, soil.digMinPressureScale, 1)
+      : 1);
   const targetSinkDepth = clamp(equilibrium + digging, 0, maxSink);
   state.sinkDepth = moveToward(state.sinkDepth, targetSinkDepth, 0.12 * step);
 
@@ -110,13 +121,18 @@ export function stepSoftGround(
     0,
     1,
   );
+  // The owner applies this as a dissipative constraint (it can stop the
+  // patch, never reverse it), so the speed-independent part is a stiction
+  // wall the tyre has to out-pull before the truck moves at all. Only a
+  // In deep mud only a small fraction of the wedge stands at rest — its full
+  // wedge is ~10x what the tyres can pull — and the rest grows with how
+  // fast the tyre is pushing mud and how hard it is digging.
   const coefficient = kind === 'deep-mud' ? 150_000 : 95_000;
-  const bulldozingForce = tyreWidth * state.sinkDepth * state.sinkDepth
-    * coefficient * (
-      1
-      + Math.abs(longitudinalSpeed) * 0.55
-      + Math.min(3, slipSpeed * 0.35)
-    ) * TUNING.soilBulldozingDragMult;
+  const wedge = tyreWidth * state.sinkDepth * state.sinkDepth * coefficient;
+  const bulldozingForce = wedge * (
+    (soil.bulldozingStaticFraction + Math.min(soil.bulldozingSlipCap, slipSpeed * soil.bulldozingSlipGain))
+    + Math.abs(longitudinalSpeed) * soil.bulldozingSpeedGain
+  ) * TUNING.soilBulldozingDragMult;
   state.bulldozingResistance = bulldozingForce;
 
   out.contactArea = area;

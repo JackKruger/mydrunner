@@ -245,6 +245,7 @@ export function computeWaterLoad(
   pose: { t: Vec3; r: Quat; lv: Vec3; av: Vec3 },
   dt: number,
   out: WaterLoad,
+  substeps = 1,
 ): WaterLoad {
   const ext = geom.chassisHalfExtents;
   const span = WATER.sampleDepthSpan;
@@ -368,7 +369,7 @@ export function computeWaterLoad(
   out.intakeSubmerged = intakeSubmerged;
 
   state.intakeTicks = intakeSubmerged ? state.intakeTicks + 1 : 0;
-  out.drowned = state.intakeTicks >= WATER.drownTicks;
+  out.drowned = state.intakeTicks >= WATER.drownTicks * substeps;
 
   // --- Swamping ------------------------------------------------------
   //

@@ -51,10 +51,11 @@ export function applyLowRangeGovernor(
   inputs: LowRangeGovernorInputs,
   scratchLinear: Vec3,
   scratchAngular: Vec3,
+  substeps = 1,
 ): void {
   const lv = inputs.linearVelocity;
   g.ledgeGrace = inputs.discreteLedgeSupportActive
-    ? LOW_RANGE.ledgeVelocityGraceTicks
+    ? LOW_RANGE.ledgeVelocityGraceTicks * substeps
     : Math.max(0, g.ledgeGrace - 1);
   // The governor stands in for the driveline holding the truck back, so
   // it only acts while the tyres can: with fewer than two wheels on
@@ -91,7 +92,7 @@ export function applyLowRangeGovernor(
     body.setLinvel(limited, true);
   }
   g.symmetricClimbGrace = inputs.symmetricClimb
-    ? LEDGE_CONTACT.handoffGraceTicks
+    ? LEDGE_CONTACT.handoffGraceTicks * substeps
     : Math.max(0, g.symmetricClimbGrace - 1);
   if (g.symmetricClimbGrace > 0) {
     const av = body.angvel();

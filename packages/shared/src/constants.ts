@@ -61,6 +61,12 @@ export const PROTOCOL_VERSION = 18;
 // The client-owned vehicle simulation advances at this fixed cadence.
 export const TICK_RATE = 60;
 export const FIXED_DT = 1 / TICK_RATE;
+// Physics substeps per fixed tick. Input, networking, telemetry and every
+// "...Ticks" constant stay on the 60 Hz tick; only the force evaluation and
+// the Rapier solve run N times inside it. Stiff springs and heavy unsprung
+// axles settle better at a smaller step: a tick-sized step is where most
+// vehicle-sim "pogo" comes from, not the spring rates.
+export const PHYSICS_SUBSTEPS = 2;
 export const SNAPSHOT_RATE = 30;
 export const SNAPSHOT_INTERVAL_MS = 1000 / SNAPSHOT_RATE;
 
@@ -790,3 +796,42 @@ export const TRAIL_FEATURES = {
 // Sparse session rut field depth range. Quantized 0..255 over this range;
 // it never mutates the authored map or the coarse Rapier heightfield.
 export const RUT_MAX_DEPTH = 0.6;
+
+// Soft-ground sinkage and bulldozing, per soil kind (see stepSoftGround).
+// The wedge is tyreWidth * sink^2 * coefficient, applied by the owner as a
+// dissipative constraint: it can bring a contact patch to rest, never push
+// it backwards.
+//
+// - bulldozingStaticFraction / SlipGain / SlipCap / SpeedGain: the wedge's
+//   multiplier is static + min(cap, slip * gain) + speed * speedGain.
+// - sinkPressureSpan: ground-pressure / bearing-strength span over which
+//   sink equilibrium rises to its ceiling.
+// - digReferencePressureRatio: pressure ratio at which slip digs to full
+//   depth (0 = digging ignores pressure), floored at digMinPressureScale.
+//
+// Ordinary mud keeps exactly its shipped shape. Deep mud does not: its
+// wedge reaches ~6.5 kN a wheel against ~760 N of tyre pull, and the
+// shipped all-static shape only let anyone through a bog because explicit
+// sign(v) drag chattered at 60 Hz (1.7 m in 10 s at 60 Hz, 0.14 m at
+// 240 Hz). Once that was a converged constraint, deep mud was a wall and
+// airing down did nothing — its old span of 4 saturated at ~17 psi.
+export const SOIL = {
+  mud: {
+    bulldozingStaticFraction: 1,
+    bulldozingSlipGain: 0.35,
+    bulldozingSlipCap: 3,
+    bulldozingSpeedGain: 0.55,
+    sinkPressureSpan: 4,
+    digReferencePressureRatio: 0,
+    digMinPressureScale: 1,
+  },
+  deepMud: {
+    bulldozingStaticFraction: 0.02,
+    bulldozingSlipGain: 0.01,
+    bulldozingSlipCap: 0.015,
+    bulldozingSpeedGain: 0.55,
+    sinkPressureSpan: 6,
+    digReferencePressureRatio: 8,
+    digMinPressureScale: 0.4,
+  },
+};

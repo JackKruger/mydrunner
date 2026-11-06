@@ -5,7 +5,7 @@
 // a World - Rapier is WASM and needs to load.
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { GRAVITY_Y } from '../constants.js';
+import { FIXED_DT, GRAVITY_Y, PHYSICS_SUBSTEPS } from '../constants.js';
 import { SolidAxleVehicle } from './solidAxleVehicle.js';
 import { createStockBuild } from '../vehicleBuild.js';
 import type { CarKind, VehicleBuild } from '../types.js';
@@ -44,6 +44,9 @@ export interface WorldOptions {
   /** Owner clients install a prediction-aware replica; tests and offline
    * worlds use a plain authoritative field. */
   ruts?: RutDepthField;
+  /** Physics substeps per fixed tick; defaults to PHYSICS_SUBSTEPS. Tests
+   *  pass it explicitly to compare step sizes on the same world. */
+  substeps?: number;
 }
 
 export class World {
@@ -65,12 +68,22 @@ export class World {
    *  Constructing it here keeps the allocation structurally once-per-world
    *  instead of a lazy init the hot-loop guard would have to take on faith. */
   readonly wheelRay: RAPIER.Ray;
+  /** Substeps per `step()`, and the one currently running. Vehicles read
+   *  these to size their dt, to scale tick-denominated counters, and to do
+   *  once-per-tick work (consuming queued loads, scoring damage) on the
+   *  last substep only. */
+  readonly substeps: number;
+  substepIndex = 0;
   private obstacleBodies: RAPIER.RigidBody[] = [];
   private landmarkBodies: RAPIER.RigidBody[] = [];
 
   constructor(opts: WorldOptions = {}) {
     this.rapier = RAPIER;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y, z: 0 });
+    this.substeps = Math.max(1, Math.round(opts.substeps ?? PHYSICS_SUBSTEPS));
+    // Left at Rapier's own 1/60 default for one substep, so a single-step
+    // world is the exact simulation the goldens were cut on.
+    if (this.substeps !== 1) this.world.timestep = FIXED_DT / this.substeps;
     this.terrain = opts.map?.terrain ?? opts.terrain ?? generateTerrain(opts.generate);
     this.ruts = opts.ruts ?? new SparseRutField(this.terrain.size);
     const built = this.buildTerrain(this.terrain);
@@ -133,11 +146,26 @@ export class World {
     this.vehicles.delete(id);
   }
 
-  /** Advance the simulation by exactly one fixed step. */
+  /** Advance the simulation by exactly one fixed tick (FIXED_DT), as
+   *  `substeps` force-evaluation + solve passes. */
   step(): void {
-    for (const v of this.vehicles.values()) v.preStep();
-    this.world.step();
-    for (const v of this.vehicles.values()) v.postStep();
+    for (let i = 0; i < this.substeps; i++) {
+      this.substepIndex = i;
+      for (const v of this.vehicles.values()) v.preStep();
+      this.world.step();
+      for (const v of this.vehicles.values()) v.postStep();
+    }
+    this.substepIndex = 0;
+  }
+
+  /** The dt each substep integrates. */
+  get substepDt(): number {
+    return FIXED_DT / this.substeps;
+  }
+
+  /** True during the last substep of a tick. */
+  get lastSubstep(): boolean {
+    return this.substepIndex === this.substeps - 1;
   }
 
   dispose(): void {

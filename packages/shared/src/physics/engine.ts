@@ -53,6 +53,7 @@ export function stepEngineFlooding(
   intakeSubmerged: boolean,
   drownedNow: boolean,
   starterHeld: boolean,
+  substeps = 1,
 ): boolean {
   if (drownedNow) state.drowned = true;
   if (!state.drowned) {
@@ -68,7 +69,7 @@ export function stepEngineFlooding(
     return false;
   }
   state.crankTicks += 1;
-  if (state.crankTicks >= WATER.crankTicks) {
+  if (state.crankTicks >= WATER.crankTicks * substeps) {
     state.drowned = false;
     state.crankTicks = 0;
     state.rpm = ENGINE.idleRpm;
@@ -149,6 +150,7 @@ export function stepEngine(
   manualGear: ManualGear | null = null,
   finalDrive: number = ENGINE.finalDrive,
   out: EngineOutput = { totalDrivelineTorque: 0, rpm: 0, gear: 0 },
+  substeps = 1,
 ): EngineOutput {
   // A flooded engine makes no torque and winds down to a stop. This has
   // to short-circuit before the RPM block below, which floors targetRpm
@@ -235,10 +237,10 @@ export function stepEngine(
       state.shiftCooldown--;
     } else if (vehicleLockedRpm > TUNING.engineShiftUpRpm && gIdx < ENGINE.gears.length - 1) {
       nextGear = gIdx + 1;
-      state.shiftCooldown = Math.max(0, Math.round(TUNING.engineShiftHoldTicks));
+      state.shiftCooldown = Math.max(0, Math.round(TUNING.engineShiftHoldTicks)) * substeps;
     } else if (vehicleLockedRpm < TUNING.engineShiftDownRpm && gIdx > ENGINE.firstGear) {
       nextGear = gIdx - 1;
-      state.shiftCooldown = Math.max(0, Math.round(TUNING.engineShiftHoldTicks));
+      state.shiftCooldown = Math.max(0, Math.round(TUNING.engineShiftHoldTicks)) * substeps;
     }
   } else if (Math.abs(throttle) < 0.05 && Math.abs(wheelAngVel) < 0.5) {
     nextGear = ENGINE.neutralGear;

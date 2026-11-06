@@ -244,7 +244,9 @@ describe('physics audit: suspension droop', () => {
     const firstAirRideY = state1.axles![0].rideY;
     expect(firstAirRideY).toBeLessThan(restRideY);
 
-    for (let i = 0; i < 30; i++) world.step();
+    // Lifted 2 m, the truck lands ~25 ticks later; sample while it is
+    // still unambiguously airborne.
+    for (let i = 0; i < 18; i++) world.step();
     const airRideY = vehicle.getState().axles![0].rideY;
     expect(airRideY).toBeLessThan(0);
     expect(airRideY).toBeLessThan(firstAirRideY);

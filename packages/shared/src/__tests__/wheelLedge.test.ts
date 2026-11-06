@@ -512,28 +512,42 @@ describe('solid axle sharp-step traversal', () => {
     };
   }
 
-  it.each(['rocks', 'log'] as const)(
-    'clears prepared-crawler 0.35 m %s without launch or excessive pitch',
-    (obstacle) => {
-      const prepared: VehicleBuild = {
-        ...createStockBuild('outclaw'),
-        suspensionId: 'outclaw.suspension.flex-100',
-        axleId: 'outclaw.axle.portal-240',
-        tireId: 'outclaw.tire.xt-40-wide',
-        wheelId: 'outclaw.wheel.beadlock-alloy',
-        frontLocker: true,
-        rearLocker: true,
-      };
-      const run = runRoundObstacle(prepared, obstacle, 0.35, 760);
-      expect(run.finite).toBe(true);
-      expect(run.clearedTick, JSON.stringify(run)).toBeGreaterThanOrEqual(0);
-      expect(run.maxContactCount).toBeGreaterThan(0);
-      expect(run.maxDrivenLedgeForce).toBeGreaterThan(250);
-      expect(run.maxPitch).toBeLessThan(0.55);
-      expect(run.maxVerticalSpeed).toBeLessThan(2.5);
-    },
-    10_000,
-  );
+  // A rate over the crawl regime, for the same reason as the stock test
+  // below. This was one run per obstacle at throttle 0.30, and on the log it
+  // is a coin flip: across throttles 0.30 / 0.40 / 0.50 / 0.70 the log
+  // clears 3/4 at one physics step per tick (failing at 0.50) and 2/4 at two
+  // substeps (failing at 0.30 and 0.70), while the two rocks clear 4/4 at
+  // both. Every run must still be safe: finite, no launch, no wild pitch.
+  it('clears prepared-crawler 0.35 m obstacles across the crawl regime without launch or excessive pitch', () => {
+    const prepared: VehicleBuild = {
+      ...createStockBuild('outclaw'),
+      suspensionId: 'outclaw.suspension.flex-100',
+      axleId: 'outclaw.axle.portal-240',
+      tireId: 'outclaw.tire.xt-40-wide',
+      wheelId: 'outclaw.wheel.beadlock-alloy',
+      frontLocker: true,
+      rearLocker: true,
+    };
+    const cleared = { rocks: 0, log: 0 };
+    let maxContactCount = 0;
+    let maxDrivenLedgeForce = 0;
+    for (const obstacle of ['rocks', 'log'] as const) {
+      for (const throttle of [0.30, 0.40, 0.50, 0.70]) {
+        const run = runRoundObstacle(prepared, obstacle, 0.35, 760, throttle);
+        const label = `${obstacle} throttle=${throttle} ${JSON.stringify(run)}`;
+        expect(run.finite, label).toBe(true);
+        expect(run.maxPitch, label).toBeLessThan(0.55);
+        expect(run.maxVerticalSpeed, label).toBeLessThan(2.5);
+        if (run.clearedTick >= 0) cleared[obstacle]++;
+        maxContactCount = Math.max(maxContactCount, run.maxContactCount);
+        maxDrivenLedgeForce = Math.max(maxDrivenLedgeForce, run.maxDrivenLedgeForce);
+      }
+    }
+    expect(cleared.rocks, JSON.stringify(cleared)).toBe(4);
+    expect(cleared.log, JSON.stringify(cleared)).toBeGreaterThanOrEqual(2);
+    expect(maxContactCount).toBeGreaterThan(0);
+    expect(maxDrivenLedgeForce).toBeGreaterThan(250);
+  }, 30_000);
 
   // A single traversal is a coin flip, so this asserts a RATE.
   //

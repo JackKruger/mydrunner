@@ -43,6 +43,10 @@ function articulationWorld(): Physics.World {
       roads: [],
     },
     obstacles: [],
+    // The disconnect assertion compares one force evaluation on two
+    // identical states. A second substep would already run on states the
+    // first one made different, so this rig steps once per tick.
+    substeps: 1,
   });
 }
 

@@ -169,7 +169,8 @@ type Quat = { x: number; y: number; z: number; w: number };
  *  `captureStepContext`; the scalars are written by the phase named beside
  *  them and are read-only to everything downstream. */
 interface VehicleStepContext {
-  readonly dt: number;
+  /** One substep: FIXED_DT / world.substeps. */
+  dt: number;
   readonly t: Vec3;
   readonly r: Quat;
   readonly lv: Vec3;
@@ -453,6 +454,13 @@ export class SolidAxleVehicle implements VehicleLike {
   private readonly damage: VehicleDamageState = createDamageState();
   private drivetrainNotice: string | null = null;
   private impactSpeed = 0;
+  /** Strongest chassis contact impulse of each substep so far this tick,
+   *  summed: a hit resolved across N substeps is scored as one tick's hit. */
+  private tickImpulse = 0;
+  private readonly tickImpulsePoint = { x: 0, y: 0, z: 0 };
+  /** Each wheel centre's height at the start of the current tick. */
+  private readonly _tickStartWheelY = new Float64Array(4);
+  private tickImpulsePeak = 0;
 
   private readonly axles: [AxleState, AxleState];
   private readonly wheels: [WheelKinematic, WheelKinematic, WheelKinematic, WheelKinematic];
@@ -620,6 +628,7 @@ export class SolidAxleVehicle implements VehicleLike {
     value: VehicleBuild | CarKind = createStockBuild(),
   ) {
     this.world = world;
+    this._stepContext.dt = world.substepDt;
     this.id = id;
     this.build = typeof value === 'string'
       ? createStockBuild(value === 'hilux' ? 'stockman-dual'
@@ -839,7 +848,8 @@ export class SolidAxleVehicle implements VehicleLike {
       const load = this.externalPointLoads[i]!;
       this.body.addForceAtPoint(load.force, load.point, true);
     }
-    this.externalPointLoads.length = 0;
+    // Queued once per tick by the caller, so they must act on every substep.
+    if (this.world.lastSubstep) this.externalPointLoads.length = 0;
 
     // 1. Capture chassis pose ONCE (determinism rule).
     const lv = stepContext.lv;
@@ -1135,8 +1145,14 @@ export class SolidAxleVehicle implements VehicleLike {
       debug.wheelCenter.x = center.x;
       debug.wheelCenter.y = center.y;
       debug.wheelCenter.z = center.z;
+      // Telemetry reads once per tick, so measure over the tick: a per-
+      // substep finite difference would report the same millimetres of
+      // support noise as twice the velocity at twice the substep rate.
+      if (this.world.substepIndex === 0) {
+        this._tickStartWheelY[wheelIndex] = w.previousCenter.y;
+      }
       debug.verticalVelocity = w.hasPreviousCenter
-        ? (center.y - w.previousCenter.y) / dt
+        ? (center.y - this._tickStartWheelY[wheelIndex]!) / (dt * (this.world.substepIndex + 1))
         : 0;
       // Upward terrain support already accounts for the tyre volume. A steep
       // heightfield hit is different: reuse its cast normal and witness, then
@@ -1339,7 +1355,7 @@ export class SolidAxleVehicle implements VehicleLike {
       let bridgeActive = false;
       if (drivenLedgeSupport) {
         w.ledgeHandoff = true;
-        w.ledgeHandoffGrace = LEDGE_CONTACT.handoffGraceTicks;
+        w.ledgeHandoffGrace = LEDGE_CONTACT.handoffGraceTicks * this.world.substeps;
         bridgeActive = true;
       } else if (w.ledgeHandoff) {
         if (w.contact) bridgeActive = true;
@@ -1420,7 +1436,7 @@ export class SolidAxleVehicle implements VehicleLike {
             Math.min(
               LEDGE_CONTACT.maxForce * dt * contactBudgetShare,
               VEHICLE.mass * this.geom.massMult
-                * LEDGE_CONTACT.maxNormalDeltaVPerTick
+                * LEDGE_CONTACT.maxNormalDeltaVPerTick / this.world.substeps
                 / this.wheels.length
                 * contactBudgetShare,
             ),
@@ -1814,7 +1830,7 @@ export class SolidAxleVehicle implements VehicleLike {
       pose.av = ctx.av;
       const wl = computeWaterLoad(
         this.world.terrain, this.geom, this.water,
-        pose, ctx.dt, this.waterLoad,
+        pose, ctx.dt, this.waterLoad, this.world.substeps,
       );
       if (wl.submergedFrac > 0) {
         for (let i = 0; i < wl.samples.length; i++) {
@@ -1849,6 +1865,7 @@ export class SolidAxleVehicle implements VehicleLike {
       this.waterLoad.intakeSubmerged,
       this.waterLoad.drowned,
       (this.input.buttons & BUTTON_STARTER) !== 0,
+      this.world.substeps,
     );
     if (this.engine.drowned) this.damage.stoppedCause = 'flooding';
     else if (this.damage.stoppedCause === 'flooding') this.damage.stoppedCause = 'none';
@@ -1897,6 +1914,7 @@ export class SolidAxleVehicle implements VehicleLike {
       ENGINE.finalDrive * this.geom.spec.finalDriveMult
         * (this.drivetrain.transferCase === '4l' ? this.geom.spec.lowRangeRatio : 1),
       this._engineOut,
+      this.world.substeps,
     );
     if (this.damage.engine <= 0.08) {
       engineOut.totalDrivelineTorque = 0;
@@ -2485,10 +2503,26 @@ export class SolidAxleVehicle implements VehicleLike {
       // Rolling deformation and bulldozing dissipate energy independently
       // of the soil shear budget, so deep mud remains resistive even when
       // the contact patch cannot transmit much tractive force.
-      if (Math.abs(longV) > 1e-4) {
-        const rollingDragForce = terrainRollingResistance * Math.abs(longV)
-          / (this.geom.wheelRadius * this.geom.wheelRadius);
-        resistiveLongForce = -Math.sign(longV) * (rollingDragForce + soil.bulldozingForce);
+      //
+      // It is a dissipative constraint, not a sign(v) force: bulldozing in
+      // deep mud reaches ~8 kN a wheel, which reverses a crawling patch's
+      // velocity inside one 60 Hz step. Applied as -sign(v) * drag it then
+      // chattered forward/back every tick and the asymmetry of that limit
+      // cycle *was* the truck's progress through a bog — 1.7 m in 10 s at
+      // 60 Hz, 0.45 m at 120 Hz, 0.14 m at 240 Hz. Predicting the patch's
+      // velocity under this tick's own tyre force and gravity and letting
+      // drag at most bring it to rest makes the answer converge with dt:
+      // drive harder than the mud resists and you move, otherwise you stop.
+      const resistanceMagnitude = soil.bulldozingForce + (Math.abs(longV) > 1e-4
+        ? terrainRollingResistance * Math.abs(longV)
+          / (this.geom.wheelRadius * this.geom.wheelRadius)
+        : 0);
+      if (resistanceMagnitude > 0 && supportedMass > 1e-6) {
+        const predictedLongV = longV
+          + (finalLongForce / supportedMass + GRAVITY_Y * tireLong.y) * dt;
+        const stopForce = supportedMass * Math.abs(predictedLongV) / dt;
+        resistiveLongForce = -Math.sign(predictedLongV)
+          * Math.min(resistanceMagnitude, stopForce);
       }
 
       // The rest-constraint portion is assembled from per-tyre grip budgets.
@@ -2601,6 +2635,7 @@ export class SolidAxleVehicle implements VehicleLike {
       );
       applyLowRangeGovernor(
         this.lowRangeGovernor, this.body, inputs, this._scratchProbeVelocity, this._scratchForce,
+        this.world.substeps,
       );
     } else {
       // Both windows only mean anything in low range. Left running, a shift
@@ -2611,7 +2646,7 @@ export class SolidAxleVehicle implements VehicleLike {
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i]!;
       if (groundSpeed < STATIONARY && Math.abs(w.angVel) < 1.0) continue;
-      w.spin += w.angVel * FIXED_DT;
+      w.spin += w.angVel * this._stepContext.dt;
     }
     let strongestImpulse = 0;
     let strongestPoint: Vec3 | null = null;
@@ -2630,12 +2665,26 @@ export class SolidAxleVehicle implements VehicleLike {
       });
     });
     if (strongestPoint) {
-      applyCollisionDamage(this.damage, {
-        impulse: strongestImpulse,
-        localPoint: strongestPoint,
-        chassisHalfExtents: this.geom.chassisHalfExtents,
-        approach: Math.min(1, this.impactSpeed / 10),
-      }, this.geom.spec.damageResistance, this.geom.spec.bullbarEngineProtection);
+      this.tickImpulse += strongestImpulse;
+      if (strongestImpulse > this.tickImpulsePeak) {
+        this.tickImpulsePeak = strongestImpulse;
+        const p: Vec3 = strongestPoint;
+        this.tickImpulsePoint.x = p.x;
+        this.tickImpulsePoint.y = p.y;
+        this.tickImpulsePoint.z = p.z;
+      }
+    }
+    if (this.world.lastSubstep) {
+      if (this.tickImpulsePeak > 0) {
+        applyCollisionDamage(this.damage, {
+          impulse: this.tickImpulse,
+          localPoint: { x: this.tickImpulsePoint.x, y: this.tickImpulsePoint.y, z: this.tickImpulsePoint.z },
+          chassisHalfExtents: this.geom.chassisHalfExtents,
+          approach: Math.min(1, this.impactSpeed / 10),
+        }, this.geom.spec.damageResistance, this.geom.spec.bullbarEngineProtection);
+      }
+      this.tickImpulse = 0;
+      this.tickImpulsePeak = 0;
     }
     // Visual axle pose (rideY/rollAngle) is left at the value preStep
     // computed from the pre-integration body pose. The previous

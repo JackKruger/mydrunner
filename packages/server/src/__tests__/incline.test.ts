@@ -149,10 +149,24 @@ describe('incline traction', () => {
     expect(vehicle.drivetrainStatus?.()).toMatchObject({ transferCase: '4l', frontLocked: true, rearLocked: true });
     const start = vehicle.getState().position;
     vehicle.setInput({ ...EMPTY_INPUT, seq: 3, throttle: 0.35 });
-    simSteps(world, 10 * 60);
+    // This used to assert 2 m / 1 m of progress and nothing else, and at one
+    // physics step per tick it passed by backflipping: the crawler reached
+    // 3.8 m, went over on its roof and slid back to finish 3.2 m up the
+    // grade with all four wheels in the air. With substeps it stays on its
+    // wheels and crawls at the traction limit, so the rig now asserts that
+    // it is upright for the whole climb, not just where it ends.
+    let minUpY = 1;
+    for (let i = 0; i < 10 * 60; i++) {
+      world.step();
+      const q = vehicle.getState().rotation;
+      minUpY = Math.min(minUpY, 1 - 2 * (q.x * q.x + q.z * q.z));
+    }
     const end = vehicle.getState().position;
-    expect(end.z - start.z).toBeGreaterThan(2);
-    expect(end.y - start.y).toBeGreaterThan(1);
+    // A 60 % grade tilts the chassis to cos(31 deg) = 0.857 before any
+    // pitch of its own.
+    expect(minUpY).toBeGreaterThan(0.75);
+    expect(end.z - start.z).toBeGreaterThan(0.4);
+    expect(end.y - start.y).toBeGreaterThan(0.2);
     world.dispose();
   });
 });
