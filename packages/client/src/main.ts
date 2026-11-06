@@ -112,6 +112,12 @@ const frameDiag = {
   simulationMsSum: 0,
   simulationMsMax: 0,
 };
+// ?rig=jointed drives the rigid-body-wheel prototype
+// (shared/physics/jointedWheelVehicle.ts) instead of the shipped model. Owner
+// physics only: remote players still see an ordinary truck, because the
+// wire carries the same VehicleState either way.
+const VEHICLE_MODEL: Physics.VehicleModel =
+  new URLSearchParams(window.location.search).get('rig') === 'jointed' ? 'jointed' : 'solid-axle';
 const e2ePhysicsPerf = new URLSearchParams(window.location.search).has('e2ePerf')
   ? { samples: new Float32Array(4096), count: 0 }
   : null;
@@ -318,7 +324,7 @@ function enterWorld(
   // so the local Rapier world integrates against an identical heightmap and
   // obstacle set and starts at the same pose.
   localSimulation?.dispose();
-  localSimulation = new LocalSimulation(mapWorld, spawn, build, id);
+  localSimulation = new LocalSimulation(mapWorld, spawn, build, id, VEHICLE_MODEL);
   winchController.reset(id, build);
   inputAcc = 0;
   stateUploadAcc = 0;

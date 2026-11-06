@@ -1,6 +1,7 @@
 export * from './util.js';
 export * from './world.js';
 export * from './solidAxleVehicle.js';
+export * from './jointedWheelVehicle.js';
 export * from './vehicleTypes.js';
 export * from './vehicleGeom.js';
 export * from './axle.js';

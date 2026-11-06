@@ -188,10 +188,11 @@ export class LocalSimulation {
     spawn: { position: { x: number; y: number; z: number }; yaw?: number },
     build: VehicleBuild = createStockBuild(),
     localPlayerId = 'local',
+    vehicleModel: Physics.VehicleModel = 'solid-axle',
   ) {
     this.localPlayerId = localPlayerId;
     this.rutReplica = new Physics.RutSessionReplica(map.terrain.size, localPlayerId);
-    this.world = new Physics.World({ map, ruts: this.rutReplica });
+    this.world = new Physics.World({ map, ruts: this.rutReplica, vehicleModel });
     this.spawn = { position: { ...spawn.position }, yaw: spawn.yaw ?? 0 };
     this.vehicle = this.world.spawnVehicle('local', this.spawn, build);
     this.vehicle.body.enableCcd(true);

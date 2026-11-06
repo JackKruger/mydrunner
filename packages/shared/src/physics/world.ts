@@ -7,6 +7,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { FIXED_DT, GRAVITY_Y, PHYSICS_SUBSTEPS } from '../constants.js';
 import { SolidAxleVehicle } from './solidAxleVehicle.js';
+import { JointedWheelVehicle } from './jointedWheelVehicle.js';
 import { createStockBuild } from '../vehicleBuild.js';
 import type { CarKind, VehicleBuild } from '../types.js';
 import type { VehicleLike, VehicleSpawn } from './vehicleTypes.js';
@@ -47,7 +48,12 @@ export interface WorldOptions {
   /** Physics substeps per fixed tick; defaults to PHYSICS_SUBSTEPS. Tests
    *  pass it explicitly to compare step sizes on the same world. */
   substeps?: number;
+  /** Which owner vehicle model spawnVehicle builds. 'jointed' is the
+   *  rigid-body-wheel prototype (jointedWheelVehicle.ts). */
+  vehicleModel?: VehicleModel;
 }
+
+export type VehicleModel = 'solid-axle' | 'jointed';
 
 export class World {
   readonly rapier: typeof RAPIER;
@@ -74,6 +80,7 @@ export class World {
    *  last substep only. */
   readonly substeps: number;
   substepIndex = 0;
+  readonly vehicleModel: VehicleModel;
   private obstacleBodies: RAPIER.RigidBody[] = [];
   private landmarkBodies: RAPIER.RigidBody[] = [];
 
@@ -81,6 +88,8 @@ export class World {
     this.rapier = RAPIER;
     this.world = new RAPIER.World({ x: 0, y: GRAVITY_Y, z: 0 });
     this.substeps = Math.max(1, Math.round(opts.substeps ?? PHYSICS_SUBSTEPS));
+    this.vehicleModel = opts.vehicleModel ?? 'solid-axle';
+
     // Left at Rapier's own 1/60 default for one substep, so a single-step
     // world is the exact simulation the goldens were cut on.
     if (this.substeps !== 1) this.world.timestep = FIXED_DT / this.substeps;
@@ -113,11 +122,16 @@ export class World {
         transposed[c * n + r] = t.heights[r * n + c]!;
       }
     }
+    // Wheels that are real bodies roll across triangle seams and catch the
+    // internal edges as ghost bumps. The shipped model never puts a rolling
+    // body on the heightfield, so it keeps the unflagged collider its
+    // goldens were cut on.
     const colliderDesc = RAPIER.ColliderDesc.heightfield(
       n - 1,
       n - 1,
       transposed,
       scale,
+      this.vehicleModel === 'jointed' ? RAPIER.HeightFieldFlags.FIX_INTERNAL_EDGES : undefined,
     ).setFriction(1.0).setCollisionGroups(COLLISION_GROUP_WORLD);
     const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0);
     const body = this.world.createRigidBody(bodyDesc);
@@ -134,7 +148,9 @@ export class World {
   }
 
   spawnVehicle(id: string, spawn: VehicleSpawn, build: VehicleBuild | CarKind = createStockBuild()): VehicleLike {
-    const v: VehicleLike = new SolidAxleVehicle(this, id, spawn, build);
+    const v: VehicleLike = this.vehicleModel === 'jointed'
+      ? new JointedWheelVehicle(this, id, spawn, build)
+      : new SolidAxleVehicle(this, id, spawn, build);
     this.vehicles.set(id, v);
     return v;
   }

@@ -835,3 +835,34 @@ export const SOIL = {
     digMinPressureScale: 0.4,
   },
 };
+
+// PROTOTYPE rigid-body-wheel vehicle (physics/jointedWheelVehicle.ts). The
+// suspension and roll rates come from the build's AxleGeom; these are only
+// the parts that model has and SolidAxleVehicle does not.
+export const JOINTED_VEHICLE = {
+  /** The light bodies between chassis and axle (heave) and axle and wheel
+   *  (steering). Real hardware, not numerical padding: zero-mass links make
+   *  the joint chain singular. */
+  carrierMassKg: 6,
+  knuckleMassKg: 12,
+  /** The sprung hub the wheel spins on; its slider is the tyre carcass. */
+  hubMassKg: 8,
+  /** Bump stop on the carcass slider, as a fraction of wheel radius. */
+  maxCarcassDeflectionRatio: 0.25,
+  /** Round-cylinder edge radius. A sharp cylinder catches its rim on every
+   *  heightfield seam; a fully round one is a ball and has no shoulder. */
+  tyreBorderRadius: 0.08,
+  /** Steering position motor, N*m/rad and N*m*s/rad. */
+  steerStiffness: 1500000,
+  steerDamping: 8_000,
+  /** Scales AxleGeom.rideDamping on the heave motor. */
+  rideDampingMult: 1,
+  /** Share of AxleGeom.rollStiffness (the beam's own roll spring in the
+   *  software model) added on top of the springs' roll rate. */
+  antiRollMult: 0.6,
+  /** Most torque a locker or the part-time centre may move between two
+   *  outputs, N*m. */
+  lockerMaxTorque: 6_000,
+  /** Viscous hub/bearing drag, N*m per rad/s. */
+  hubDrag: 1.5,
+};
