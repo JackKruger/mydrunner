@@ -1,6 +1,6 @@
 name: Deploy Client
 # Railway handles the server (auto-deploys via its GitHub integration when
-# this branch lands). This workflow only ships the client to GitHub Pages.
+# main moves). This workflow only ships the client to GitHub Pages.
 #
 # This is the ONLY workflow allowed to publish to the github-pages
 # environment. A second one (static.yml, the repo-scaffold default that
@@ -13,8 +13,6 @@ on:
   push:
     branches:
       - main
-      # Active dev branch - remove once main is the source of truth.
-      - claude/add-claude-documentation-b6LkY
   workflow_dispatch:
 
 concurrency:
@@ -22,16 +20,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  client:
+  # Build and deploy are separate jobs on purpose. When deploy-pages runs in
+  # the same job straight after upload-pages-artifact, its artifact lookup
+  # can come back empty for an artifact finalised a few hundred ms earlier
+  # ("No artifacts named ... were found", actions/deploy-pages#451). Both
+  # attempts of the 2026-11-25 deploy failed that way. The job boundary puts
+  # seconds between upload and lookup, as GitHub's own Pages starters do.
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      # Named per attempt because artifacts persist across attempts
+      # *within* a run: a plain re-run of a failed deploy leaves two
+      # artifacts called `github-pages`, and deploy-pages refuses to
+      # choose between them ("Multiple artifacts named ... count is 2").
+      # Passed on as an output so "re-run failed jobs", which re-runs only
+      # the deploy job, still looks for the attempt that was uploaded.
+      artifact: ${{ steps.name.outputs.artifact }}
     steps:
+      - id: name
+        run: echo "artifact=github-pages-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         # Need full history so `git rev-list --count` works for the
         # build-version stamp below.
@@ -51,8 +61,8 @@ jobs:
         run: echo "APP_VERSION=$(git rev-list --count HEAD).$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
       - name: Build client
         env:
-          # Set this secret in repo settings to your Railway-provided
-          # public WebSocket URL, e.g. wss://mydrunner-server.up.railway.app
+          # Repo secret: the Railway server's public WebSocket URL,
+          # wss://mydrunner-server-production.up.railway.app
           VITE_SERVER_URL: ${{ secrets.PUBLIC_SERVER_URL }}
           VITE_BASE: /${{ github.event.repository.name }}/
           APP_VERSION: ${{ env.APP_VERSION }}
@@ -60,20 +70,25 @@ jobs:
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          # Named per attempt because artifacts persist across attempts
-          # *within* a run: a plain re-run of a failed deploy leaves two
-          # artifacts called `github-pages`, and deploy-pages refuses to
-          # choose between them ("Multiple artifacts named ... count is 2").
-          # That turned one slow deploy into a run that could not be retried
-          # at all - every further re-run just added another artifact.
-          name: github-pages-${{ github.run_attempt }}
+          name: ${{ steps.name.outputs.artifact }}
           path: packages/client/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v5
         with:
-          artifact_name: github-pages-${{ github.run_attempt }}
+          artifact_name: ${{ needs.build.outputs.artifact }}
           # Pages sat in `deployment_queued` for the full default 10 minutes
           # on 2026-08-06 and the action aborted a build that was ready in
-          # 21 seconds. How long the queue takes is not ours to control; how
-          # long we wait for it is.
-          timeout: 1200000
+          # 21 seconds. 10 minutes is also deploy-pages' ceiling: it clamps
+          # anything larger (the 20 minutes this used to ask for) and warns.
+          timeout: 600000
